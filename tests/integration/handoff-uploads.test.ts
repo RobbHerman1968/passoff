@@ -478,12 +478,350 @@ describe.skipIf(!hasDb)("handoff upload size verification (local adapter)", () =
     });
     expect(second.idempotent).toBe(true);
     expect(second.asset.id).toBe(first.asset.id);
+    expect(second.item).toBeTruthy();
+    expect(second.item!.id).toBe(first.item!.id);
 
     const allForSession = await db
       .select()
       .from(assets)
       .where(eq(assets.uploadSessionId, meta.uploadSessionId));
     expect(allForSession).toHaveLength(1);
+  });
+});
+
+describe.skipIf(!hasDb)("handoff upload atomic completion", () => {
+  const previousBlob = process.env.BLOB_READ_WRITE_TOKEN;
+
+  beforeAll(async () => {
+    await ensureTestMigrations();
+  }, 120_000);
+
+  beforeEach(async () => {
+    delete process.env.BLOB_READ_WRITE_TOKEN;
+    const { resetStorageAdapterForTests } = await import("@/lib/rooms/storage");
+    resetStorageAdapterForTests();
+  });
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    if (previousBlob === undefined) delete process.env.BLOB_READ_WRITE_TOKEN;
+    else process.env.BLOB_READ_WRITE_TOKEN = previousBlob;
+    const { resetStorageAdapterForTests } = await import("@/lib/rooms/storage");
+    resetStorageAdapterForTests();
+  });
+
+  it("A: simultaneous completions share one asset, one item, and keep the object", async () => {
+    const stamp = randomBytes(4).toString("hex");
+    const ctx = await seedRoom(`conc-${stamp}`, "APPROVED");
+    const {
+      prepareHandoffDirectUpload,
+      completeHandoffDirectUpload,
+      addHandoffItem,
+      releaseHandoff,
+      listReleasedHandoffItems,
+    } = await import("@/lib/rooms/service");
+    const { writeAssetBytes, readAssetBytes } = await import("@/lib/rooms/storage");
+    const { db } = await import("@/db");
+    const { assets, handoffItems, projects } = await import("@/db/schema");
+
+    await addHandoffItem({
+      scope: ctx.scope,
+      projectId: ctx.room.id,
+      label: "Existing",
+      category: "note",
+    });
+    await releaseHandoff(ctx.scope, ctx.room.id);
+    expect(await listReleasedHandoffItems(ctx.room.id)).toHaveLength(1);
+
+    const bytes = Buffer.from("PK\u0003\u0004concurrent");
+    const meta = await prepareHandoffDirectUpload({
+      scope: ctx.scope,
+      projectId: ctx.room.id,
+      fileName: "pack.zip",
+      contentType: "application/zip",
+      size: bytes.byteLength,
+    });
+    await writeAssetBytes(meta.pathname, bytes, "application/zip");
+
+    const [a, b] = await Promise.all([
+      completeHandoffDirectUpload({
+        scope: ctx.scope,
+        projectId: ctx.room.id,
+        meta,
+        blobUrl: meta.pathname,
+      }),
+      completeHandoffDirectUpload({
+        scope: ctx.scope,
+        projectId: ctx.room.id,
+        meta,
+        blobUrl: meta.pathname,
+      }),
+    ]);
+
+    expect(a.asset.id).toBe(b.asset.id);
+    expect(a.item).toBeTruthy();
+    expect(b.item).toBeTruthy();
+    expect(a.item!.id).toBe(b.item!.id);
+    expect([a.idempotent, b.idempotent].filter(Boolean).length).toBeLessThanOrEqual(1);
+
+    const assetRows = await db
+      .select()
+      .from(assets)
+      .where(eq(assets.uploadSessionId, meta.uploadSessionId));
+    expect(assetRows).toHaveLength(1);
+
+    const itemRows = await db
+      .select()
+      .from(handoffItems)
+      .where(eq(handoffItems.assetId, a.asset.id));
+    expect(itemRows).toHaveLength(1);
+
+    expect(await readAssetBytes(meta.pathname)).toEqual(bytes);
+    expect(await listReleasedHandoffItems(ctx.room.id)).toEqual([]);
+    const [room] = await db.select().from(projects).where(eq(projects.id, ctx.room.id)).limit(1);
+    expect(room?.handoffReleasedAt).toBeNull();
+  });
+
+  it("B: partial asset-without-item state is repaired; second retry is idempotent", async () => {
+    const stamp = randomBytes(4).toString("hex");
+    const ctx = await seedRoom(`partial-${stamp}`, "APPROVED");
+    const { prepareHandoffDirectUpload, completeHandoffDirectUpload } =
+      await import("@/lib/rooms/service");
+    const { writeAssetBytes, getStorageAdapter } = await import("@/lib/rooms/storage");
+    const { db } = await import("@/db");
+    const { assets, handoffItems } = await import("@/db/schema");
+
+    const bytes = Buffer.from("PK\u0003\u0004partial");
+    const meta = await prepareHandoffDirectUpload({
+      scope: ctx.scope,
+      projectId: ctx.room.id,
+      fileName: "pack.zip",
+      contentType: "application/zip",
+      size: bytes.byteLength,
+    });
+    await writeAssetBytes(meta.pathname, bytes, "application/zip");
+
+    const [orphanAsset] = await db
+      .insert(assets)
+      .values({
+        workspaceId: ctx.scope.workspaceId,
+        projectId: ctx.room.id,
+        kind: "file",
+        label: "Orphan",
+        objectKey: meta.pathname,
+        blobUrl: null,
+        storageProvider: getStorageAdapter().provider,
+        uploadStatus: "ready",
+        uploadSessionId: meta.uploadSessionId,
+        mime: "application/zip",
+        bytes: bytes.byteLength,
+        uploadedByUserId: ctx.scope.userId,
+      })
+      .returning();
+
+    const repaired = await completeHandoffDirectUpload({
+      scope: ctx.scope,
+      projectId: ctx.room.id,
+      meta,
+      blobUrl: meta.pathname,
+    });
+    expect(repaired.idempotent).toBe(false);
+    expect(repaired.asset.id).toBe(orphanAsset.id);
+    expect(repaired.item).toBeTruthy();
+    expect(repaired.item!.assetId).toBe(orphanAsset.id);
+
+    const again = await completeHandoffDirectUpload({
+      scope: ctx.scope,
+      projectId: ctx.room.id,
+      meta,
+      blobUrl: meta.pathname,
+    });
+    expect(again.idempotent).toBe(true);
+    expect(again.asset.id).toBe(orphanAsset.id);
+    expect(again.item!.id).toBe(repaired.item!.id);
+
+    const assetRows = await db
+      .select()
+      .from(assets)
+      .where(eq(assets.uploadSessionId, meta.uploadSessionId));
+    const itemRows = await db
+      .select()
+      .from(handoffItems)
+      .where(eq(handoffItems.assetId, orphanAsset.id));
+    expect(assetRows).toHaveLength(1);
+    expect(itemRows).toHaveLength(1);
+  });
+
+  it("C: malicious caller blobUrl never reaches delete/del; cleanup targets pathname only", async () => {
+    const stamp = randomBytes(4).toString("hex");
+    const ctx = await seedRoom(`evil-${stamp}`, "APPROVED");
+    const storage = await import("@/lib/rooms/storage");
+    const service = await import("@/lib/rooms/service");
+
+    const deleteSpy = vi.spyOn(storage, "deleteAssetBytes").mockResolvedValue(undefined);
+    const queueSpy = vi.spyOn(service, "queueBlobDeletion").mockResolvedValue(undefined);
+
+    const bytes = Buffer.from("PK\u0003\u0004ok");
+    const meta = await service.prepareHandoffDirectUpload({
+      scope: ctx.scope,
+      projectId: ctx.room.id,
+      fileName: "pack.zip",
+      contentType: "application/zip",
+      size: bytes.byteLength,
+    });
+    await storage.writeAssetBytes(meta.pathname, bytes, "application/zip");
+    await storage.writeAssetBytes(
+      `workspaces/${ctx.scope.workspaceId}/rooms/${ctx.room.id}/handoff/unrelated-${stamp}.zip`,
+      Buffer.from("unrelated-secret"),
+      "application/zip",
+    );
+    const unrelatedPath = `workspaces/${ctx.scope.workspaceId}/rooms/${ctx.room.id}/handoff/unrelated-${stamp}.zip`;
+
+    const evilUrl = "https://evil.example/steal-me.zip";
+    await expect(
+      service.completeHandoffDirectUpload({
+        scope: ctx.scope,
+        projectId: ctx.room.id,
+        meta,
+        blobUrl: evilUrl,
+      }),
+    ).rejects.toThrow(/URL mismatch/i);
+
+    // URL mismatch must not delete the authorized object or touch caller URLs.
+    expect(deleteSpy).not.toHaveBeenCalled();
+    expect(queueSpy).not.toHaveBeenCalled();
+    for (const call of deleteSpy.mock.calls) {
+      expect(call[0]).not.toBe(evilUrl);
+    }
+    for (const call of queueSpy.mock.calls) {
+      const arg = call[0] as { objectKey?: string; blobUrl?: string | null };
+      expect(arg.blobUrl).not.toBe(evilUrl);
+      if (arg.objectKey) expect(arg.objectKey).toBe(meta.pathname);
+    }
+
+    expect(await storage.readAssetBytes(unrelatedPath)).toEqual(Buffer.from("unrelated-secret"));
+    expect(await storage.readAssetBytes(meta.pathname)).toEqual(bytes);
+  });
+
+  it("D: uploadSessionId conflict re-reads the winner and does not delete the Blob", async () => {
+    const stamp = randomBytes(4).toString("hex");
+    const ctx = await seedRoom(`race-${stamp}`, "APPROVED");
+    const storage = await import("@/lib/rooms/storage");
+    const service = await import("@/lib/rooms/service");
+    const { db } = await import("@/db");
+    const { assets, handoffItems } = await import("@/db/schema");
+
+    const deleteSpy = vi.spyOn(storage, "deleteAssetBytes");
+    const queueSpy = vi.spyOn(service, "queueBlobDeletion");
+
+    const bytes = Buffer.from("PK\u0003\u0004race");
+    const meta = await service.prepareHandoffDirectUpload({
+      scope: ctx.scope,
+      projectId: ctx.room.id,
+      fileName: "pack.zip",
+      contentType: "application/zip",
+      size: bytes.byteLength,
+    });
+    await storage.writeAssetBytes(meta.pathname, bytes, "application/zip");
+
+    const [winner] = await db
+      .insert(assets)
+      .values({
+        workspaceId: ctx.scope.workspaceId,
+        projectId: ctx.room.id,
+        kind: "file",
+        label: "Winner",
+        objectKey: meta.pathname,
+        blobUrl: null,
+        storageProvider: "local",
+        uploadStatus: "ready",
+        uploadSessionId: meta.uploadSessionId,
+        mime: "application/zip",
+        bytes: bytes.byteLength,
+        uploadedByUserId: ctx.scope.userId,
+      })
+      .returning();
+
+    const result = await service.completeHandoffDirectUpload({
+      scope: ctx.scope,
+      projectId: ctx.room.id,
+      meta,
+      blobUrl: meta.pathname,
+    });
+
+    expect(result.asset.id).toBe(winner.id);
+    expect(result.item).toBeTruthy();
+    expect(deleteSpy).not.toHaveBeenCalled();
+    expect(queueSpy).not.toHaveBeenCalled();
+    expect(await storage.readAssetBytes(meta.pathname)).toEqual(bytes);
+
+    const assetRows = await db
+      .select()
+      .from(assets)
+      .where(eq(assets.uploadSessionId, meta.uploadSessionId));
+    const itemRows = await db.select().from(handoffItems).where(eq(handoffItems.assetId, winner.id));
+    expect(assetRows).toHaveLength(1);
+    expect(itemRows).toHaveLength(1);
+  });
+
+  it("E: transient finalize failure leaves the verified object for a successful retry", async () => {
+    const stamp = randomBytes(4).toString("hex");
+    const ctx = await seedRoom(`retry-${stamp}`, "APPROVED");
+    const storage = await import("@/lib/rooms/storage");
+    const service = await import("@/lib/rooms/service");
+    const { db } = await import("@/db");
+    const { projects } = await import("@/db/schema");
+
+    const deleteSpy = vi.spyOn(storage, "deleteAssetBytes");
+    const queueSpy = vi.spyOn(service, "queueBlobDeletion");
+
+    const bytes = Buffer.from("PK\u0003\u0004retry");
+    const meta = await service.prepareHandoffDirectUpload({
+      scope: ctx.scope,
+      projectId: ctx.room.id,
+      fileName: "pack.zip",
+      contentType: "application/zip",
+      size: bytes.byteLength,
+    });
+    await storage.writeAssetBytes(meta.pathname, bytes, "application/zip");
+
+    await db
+      .update(projects)
+      .set({ status: "ARCHIVED", archivedAt: new Date(), updatedAt: new Date() })
+      .where(eq(projects.id, ctx.room.id));
+
+    await expect(
+      service.completeHandoffDirectUpload({
+        scope: ctx.scope,
+        projectId: ctx.room.id,
+        meta,
+        blobUrl: meta.pathname,
+      }),
+    ).rejects.toThrow(/archived/i);
+
+    // No eager delete of the verified upload.
+    expect(deleteSpy).not.toHaveBeenCalled();
+    const eagerDeletes = queueSpy.mock.calls.filter((call) => {
+      const arg = call[0] as { flush?: boolean; availableAt?: Date };
+      return arg.flush !== false;
+    });
+    expect(eagerDeletes).toHaveLength(0);
+    expect(await storage.readAssetBytes(meta.pathname)).toEqual(bytes);
+
+    await db
+      .update(projects)
+      .set({ status: "APPROVED", archivedAt: null, updatedAt: new Date() })
+      .where(eq(projects.id, ctx.room.id));
+
+    const result = await service.completeHandoffDirectUpload({
+      scope: ctx.scope,
+      projectId: ctx.room.id,
+      meta,
+      blobUrl: meta.pathname,
+    });
+    expect(result.item).toBeTruthy();
+    expect(result.asset.bytes).toBe(bytes.byteLength);
+    expect(await storage.readAssetBytes(meta.pathname)).toEqual(bytes);
   });
 });
 

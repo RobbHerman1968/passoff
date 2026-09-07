@@ -309,6 +309,10 @@ export async function verifyPrivateBlobObject(input: {
   if (streamed.contentType) {
     assertContentTypeMatch(input.expectedContentType, streamed.contentType);
   }
+  // Local identity is the pathname; a divergent caller URL is untrusted.
+  if (input.blobUrl && input.blobUrl !== input.pathname) {
+    throw new Error("Uploaded object URL mismatch.");
+  }
   return {
     pathname: input.pathname,
     // Local adapter has no remote URL; pathname is the stable object identity.

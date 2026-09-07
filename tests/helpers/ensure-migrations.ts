@@ -6,7 +6,7 @@ import pg from "pg";
 
 /**
  * Apply pending drizzle-postgres migrations in journal order.
- * Uses the official drizzle migrator so a fresh test database receives 0000–0007.
+ * Uses the official drizzle migrator so a fresh test database receives 0000–0009.
  */
 export async function ensureTestMigrations() {
   const databaseUrl = process.env.DATABASE_URL;
@@ -24,6 +24,11 @@ export async function ensureTestMigrations() {
   if (!files.includes("0008_reviewer_session_identity.sql")) {
     throw new Error(
       "Missing drizzle-postgres/0008_reviewer_session_identity.sql — reviewer session-identity migration is required.",
+    );
+  }
+  if (!files.includes("0009_handoff_item_asset_unique.sql")) {
+    throw new Error(
+      "Missing drizzle-postgres/0009_handoff_item_asset_unique.sql — handoff asset uniqueness migration is required.",
     );
   }
 

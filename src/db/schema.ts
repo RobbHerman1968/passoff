@@ -310,6 +310,8 @@ export const handoffItems = pgTable("handoff_items", {
   ...timestamps,
 }, (table) => [
   index("handoff_items_project_sort_idx").on(table.projectId, table.sortOrder),
+  // Multiple NULLs are allowed — note/link rows without assets remain valid.
+  uniqueIndex("handoff_items_asset_id_unique").on(table.assetId),
 ]);
 
 export const auditEvents = pgTable("audit_events", {
