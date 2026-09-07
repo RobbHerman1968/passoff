@@ -128,7 +128,8 @@ export function ClientShareRoom({ token }: { token: string }) {
     load().catch((err) => setError(err instanceof Error ? err.message : "Failed to load."));
   }, [load]);
 
-  // Restore HttpOnly reviewer session from remembered identity (never trusts email alone for edits).
+  // Restore HttpOnly reviewer session when a remembered display name exists.
+  // identify uses the cookie when present; email alone never claims another reviewer.
   useEffect(() => {
     const remembered = readRemembered(token);
     if (!remembered || identified) return;
@@ -149,8 +150,8 @@ export function ClientShareRoom({ token }: { token: string }) {
           reviewer?: { id: string; name: string; email: string };
         };
         if (cancelled || !response.ok || !payload.reviewer) return;
-        setName(remembered.name);
-        setEmail(remembered.email);
+        setName(payload.reviewer.name || remembered.name);
+        setEmail(payload.reviewer.email || remembered.email);
         setReviewerId(payload.reviewer.id);
         setIdentified(true);
         setRememberMe(true);
@@ -266,8 +267,15 @@ export function ClientShareRoom({ token }: { token: string }) {
     setHasRemembered(false);
     setRememberMe(false);
     setReviewerId(null);
+    setIdentified(false);
     setName("");
     setEmail("");
+    fetch(`/api/public/${encodeURIComponent(token)}`, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "forget" }),
+    }).catch(() => undefined);
   }
 
   async function submitComment() {
@@ -281,8 +289,6 @@ export function ClientShareRoom({ token }: { token: string }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action: "comment",
-          name,
-          email,
           revisionAssetId: selected.revisionAssetId,
           xPercent: draftPin.x,
           yPercent: draftPin.y,
@@ -341,8 +347,6 @@ export function ClientShareRoom({ token }: { token: string }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action: "decision",
-          name,
-          email,
           decision,
           confirmed,
           acceptanceStatement: data?.approvalStatement,

@@ -1,22 +1,24 @@
+import { handleUpload, type HandleUploadBody } from "@vercel/blob/client";
 import { generateClientTokenFromReadWriteToken } from "@vercel/blob/client";
 import { NextResponse } from "next/server";
 
 import { clientIp, rateLimit } from "@/lib/rooms/rate-limit";
 import {
   addHandoffItem,
+  buildHandoffBlobClientTokenConstraints,
   completeHandoffDirectUpload,
   deleteHandoffItem,
+  prepareHandoffDirectUpload,
   releaseHandoff,
   reopenRoom,
   uploadHandoffFile,
+  type HandoffUploadTokenMeta,
 } from "@/lib/rooms/service";
-import {
-  ALLOWED_HANDOFF_MIME_TYPES,
-  MAX_UPLOAD_BYTES,
-  buildHandoffObjectPath,
-} from "@/lib/rooms/storage";
-import { assertStorageAllowance } from "@/lib/rooms/entitlements";
+import { MAX_UPLOAD_BYTES, isHandoffMultipartAllowed } from "@/lib/rooms/storage";
 import { getDefaultWorkspaceScope } from "@/lib/tenant/context";
+import type { WorkspaceScope } from "@/lib/tenant/scope";
+import { getSiteUrl } from "@/lib/site";
+import { logError } from "@/lib/logging";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -43,6 +45,51 @@ function requireBlobConfigured() {
   return null;
 }
 
+function isBlobCompletionBody(body: unknown): body is HandleUploadBody {
+  return Boolean(
+    body &&
+      typeof body === "object" &&
+      "type" in body &&
+      (body as { type?: string }).type === "blob.upload-completed",
+  );
+}
+
+function scopeFromMeta(meta: HandoffUploadTokenMeta): WorkspaceScope {
+  return {
+    organizationId: meta.organizationId,
+    organizationName: "",
+    workspaceId: meta.workspaceId,
+    workspaceName: "",
+    userId: meta.userId,
+    userName: "",
+    userEmail: "",
+  };
+}
+
+function parseTokenPayload(raw: unknown): HandoffUploadTokenMeta | null {
+  if (typeof raw !== "string" || !raw.trim()) return null;
+  try {
+    const parsed = JSON.parse(raw) as HandoffUploadTokenMeta;
+    if (
+      !parsed ||
+      typeof parsed.workspaceId !== "string" ||
+      typeof parsed.organizationId !== "string" ||
+      typeof parsed.userId !== "string" ||
+      typeof parsed.projectId !== "string" ||
+      typeof parsed.pathname !== "string" ||
+      typeof parsed.uploadSessionId !== "string" ||
+      typeof parsed.contentType !== "string" ||
+      typeof parsed.size !== "number" ||
+      typeof parsed.fileName !== "string"
+    ) {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
 export async function POST(
   request: Request,
   { params }: { params: Promise<{ id: string }> },
@@ -52,11 +99,55 @@ export async function POST(
     if (!uuidPattern.test(id)) {
       return NextResponse.json({ error: "Invalid room id." }, { status: 400 });
     }
-    const scope = await getDefaultWorkspaceScope();
+
     const contentType = request.headers.get("content-type") || "";
 
-    // Local-dev multipart fallback when Blob is unavailable — prefer direct Blob in production.
+    // Vercel Blob completion webhooks have no session cookie — verify via handleUpload only.
+    if (contentType.includes("application/json")) {
+      const peek = await request.clone().json().catch(() => null);
+      if (isBlobCompletionBody(peek)) {
+        const misconfigured = requireBlobConfigured();
+        if (misconfigured) return misconfigured;
+
+        const jsonResponse = await handleUpload({
+          body: peek,
+          request,
+          token: process.env.BLOB_READ_WRITE_TOKEN,
+          onBeforeGenerateToken: async () => {
+            throw new Error("Token generation is not available on the completion callback path.");
+          },
+          onUploadCompleted: async ({ blob, tokenPayload }) => {
+            const meta = parseTokenPayload(tokenPayload);
+            if (!meta) throw new Error("Invalid upload completion payload.");
+            // PutBlobResult has no size — always re-verify via Blob head inside complete.
+            await completeHandoffDirectUpload({
+              scope: scopeFromMeta(meta),
+              projectId: id,
+              meta,
+              pathname: blob.pathname,
+              blobUrl: blob.url,
+              contentType: blob.contentType,
+            });
+          },
+        });
+        return NextResponse.json(jsonResponse);
+      }
+    }
+
+    const scope = await getDefaultWorkspaceScope();
+
+    // Local-dev multipart fallback only — never on production/Vercel or when Blob is configured.
     if (contentType.includes("multipart/form-data")) {
+      if (!isHandoffMultipartAllowed()) {
+        return NextResponse.json(
+          {
+            error:
+              "Multipart handoff uploads are disabled outside local development without Blob.",
+          },
+          { status: 403 },
+        );
+      }
+
       const limited = rateLimit(`handoff-upload:${scope.userId}:${clientIp(request)}`, 20, 60_000);
       if (!limited.ok) {
         return NextResponse.json(
@@ -105,6 +196,7 @@ export async function POST(
       pathname?: unknown;
       blobUrl?: unknown;
       uploadSessionId?: unknown;
+      tokenPayload?: unknown;
     };
 
     if (body.action === "reopen") {
@@ -128,72 +220,62 @@ export async function POST(
       const misconfigured = requireBlobConfigured();
       if (misconfigured) return misconfigured;
 
-      const fileContentType = String(body.contentType || "").toLowerCase();
-      if (!(ALLOWED_HANDOFF_MIME_TYPES as readonly string[]).includes(fileContentType)) {
-        return NextResponse.json(
-          { error: "Handoff uploads support images, PDFs, and ZIP files." },
-          { status: 400 },
-        );
-      }
-      const size = typeof body.size === "number" ? body.size : 0;
-      if (size <= 0 || size > MAX_UPLOAD_BYTES) {
-        return NextResponse.json(
-          { error: "Files must be between 1 byte and 25 MB." },
-          { status: 400 },
-        );
-      }
-      await assertStorageAllowance(scope.organizationId, scope.workspaceId, size);
-      const fileName = typeof body.fileName === "string" ? body.fileName : "handoff.bin";
-      const pathname = buildHandoffObjectPath({
-        workspaceId: scope.workspaceId,
+      const meta = await prepareHandoffDirectUpload({
+        scope,
         projectId: id,
-        filename: fileName,
+        fileName: typeof body.fileName === "string" ? body.fileName : "handoff.bin",
+        contentType: String(body.contentType || ""),
+        size: typeof body.size === "number" ? body.size : 0,
       });
 
+      const tokenPayload = JSON.stringify(meta);
+      const tokenConstraints = buildHandoffBlobClientTokenConstraints(meta);
       const clientToken = await generateClientTokenFromReadWriteToken({
         token: process.env.BLOB_READ_WRITE_TOKEN,
-        pathname,
-        allowedContentTypes: [...ALLOWED_HANDOFF_MIME_TYPES],
-        maximumSizeInBytes: MAX_UPLOAD_BYTES,
-        addRandomSuffix: false,
+        ...tokenConstraints,
+        onUploadCompleted: {
+          callbackUrl: `${getSiteUrl()}/api/projects/${id}/handoff`,
+          tokenPayload,
+        },
       });
 
       return NextResponse.json({
-        pathname,
+        pathname: meta.pathname,
         clientToken,
-        uploadSessionId: pathname,
+        uploadSessionId: meta.uploadSessionId,
+        tokenPayload,
         maxBytes: MAX_UPLOAD_BYTES,
+        authorizedBytes: meta.size,
       });
     }
 
     if (body.action === "complete_upload") {
-      const pathname = typeof body.pathname === "string" ? body.pathname : "";
-      const blobUrl = typeof body.blobUrl === "string" ? body.blobUrl : "";
-      const uploadSessionId =
-        typeof body.uploadSessionId === "string" ? body.uploadSessionId : pathname;
-      const fileContentType = String(body.contentType || "").toLowerCase();
-      const size = typeof body.size === "number" ? body.size : 0;
-      const fileName = typeof body.fileName === "string" ? body.fileName : "handoff.bin";
-      const label = typeof body.label === "string" ? body.label : undefined;
-      const notes = typeof body.notes === "string" ? body.notes : undefined;
-      const externalUrl = typeof body.externalUrl === "string" ? body.externalUrl : undefined;
+      const meta = parseTokenPayload(body.tokenPayload);
+      if (!meta) {
+        return NextResponse.json(
+          { error: "Missing or invalid upload authorization payload." },
+          { status: 400 },
+        );
+      }
 
-      if (!pathname || !blobUrl) {
+      const blobUrl = typeof body.blobUrl === "string" ? body.blobUrl : "";
+      if (!blobUrl) {
         return NextResponse.json({ error: "Missing upload completion fields." }, { status: 400 });
       }
 
       const result = await completeHandoffDirectUpload({
         scope,
         projectId: id,
-        pathname,
+        meta,
+        pathname: typeof body.pathname === "string" ? body.pathname : undefined,
         blobUrl,
-        contentType: fileContentType,
-        size,
-        fileName,
-        uploadSessionId,
-        label,
-        notes,
-        externalUrl,
+        contentType: typeof body.contentType === "string" ? body.contentType : undefined,
+        size: typeof body.size === "number" ? body.size : undefined,
+        uploadSessionId:
+          typeof body.uploadSessionId === "string" ? body.uploadSessionId : undefined,
+        label: typeof body.label === "string" ? body.label : undefined,
+        notes: typeof body.notes === "string" ? body.notes : undefined,
+        externalUrl: typeof body.externalUrl === "string" ? body.externalUrl : undefined,
       });
 
       return NextResponse.json(result, { status: result.idempotent ? 200 : 201 });
@@ -213,6 +295,9 @@ export async function POST(
     });
     return NextResponse.json(result, { status: 201 });
   } catch (error) {
+    logError("handoff.route_failed", {
+      error: error instanceof Error ? error.message : "unknown",
+    });
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Unable to update handoff." },
       { status: 400 },

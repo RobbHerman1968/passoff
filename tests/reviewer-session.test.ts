@@ -74,11 +74,13 @@ describe("reviewer session credentials", () => {
   });
 
   it("knowing an author email alone does not create a valid edit credential", () => {
-    // Email is never embedded in the signed payload — only opaque reviewerId + scope.
+    // Payload never embeds email. API-level coverage that identify-by-email cannot
+    // reclaim another reviewer lives in tests/integration/public-reviewer-identity.test.ts.
     const token = createReviewerSessionToken({ reviewerId, projectId, shareToken });
     expect(token.includes("alex")).toBe(false);
     expect(token.includes("@")).toBe(false);
     const payload = verifyReviewerSessionToken(token, { projectId, shareToken });
     expect(payload).not.toHaveProperty("email");
+    expect(payload.reviewerId).toBe(reviewerId);
   });
 });

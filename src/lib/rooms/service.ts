@@ -41,6 +41,7 @@ import {
   checksumSha256,
   deleteAssetBytes,
   getStorageAdapter,
+  verifyPrivateBlobObject,
   writeAssetBytes,
 } from "@/lib/rooms/storage";
 import {
@@ -727,7 +728,7 @@ export async function recordShareView(linkId: string, projectId: string, workspa
   });
 }
 
-export async function upsertReviewer(input: {
+export async function createReviewer(input: {
   workspaceId: string;
   projectId: string;
   name: string;
@@ -738,23 +739,9 @@ export async function upsertReviewer(input: {
   if (!name) throw new Error("Your name is required.");
   if (!email || !email.includes("@")) throw new Error("A valid email is required.");
 
-  const existing = (
-    await db
-      .select()
-      .from(reviewers)
-      .where(and(eq(reviewers.projectId, input.projectId), eq(reviewers.email, email)))
-      .limit(1)
-  )[0];
-  if (existing) {
-    if (existing.name !== name) {
-      await db
-        .update(reviewers)
-        .set({ name, updatedAt: new Date() })
-        .where(eq(reviewers.id, existing.id));
-    }
-    return { ...existing, name };
-  }
-
+  // Always insert a new reviewer row. Do not merge by email — that would allow
+  // impersonation. Browser session cookies are the only existing-reviewer identity.
+  // Future: OTP/magic-link verification can set verifiedAt for stronger attribution.
   const [created] = await db
     .insert(reviewers)
     .values({
@@ -765,6 +752,74 @@ export async function upsertReviewer(input: {
     })
     .returning();
   return created;
+}
+
+/** @deprecated Prefer createReviewer / getReviewerById — email is not an auth key. */
+export async function upsertReviewer(input: {
+  workspaceId: string;
+  projectId: string;
+  name: string;
+  email: string;
+}) {
+  return createReviewer(input);
+}
+
+export async function getReviewerById(input: {
+  workspaceId: string;
+  projectId: string;
+  reviewerId: string;
+}) {
+  const reviewer = (
+    await db
+      .select()
+      .from(reviewers)
+      .where(
+        and(
+          eq(reviewers.id, input.reviewerId),
+          eq(reviewers.projectId, input.projectId),
+          eq(reviewers.workspaceId, input.workspaceId),
+        ),
+      )
+      .limit(1)
+  )[0];
+  if (!reviewer) {
+    const err = new Error("Reviewer session is no longer valid.");
+    (err as Error & { status?: number }).status = 401;
+    throw err;
+  }
+  return reviewer;
+}
+
+/**
+ * Update display name/email for the reviewer already owned by a validated session.
+ * Does not look up or merge other reviewers by email.
+ */
+export async function updateSessionReviewerProfile(input: {
+  workspaceId: string;
+  projectId: string;
+  reviewerId: string;
+  name: string;
+  email: string;
+}) {
+  const email = input.email.trim().toLowerCase().slice(0, 320);
+  const name = input.name.trim().slice(0, 120);
+  if (!name) throw new Error("Your name is required.");
+  if (!email || !email.includes("@")) throw new Error("A valid email is required.");
+
+  const existing = await getReviewerById({
+    workspaceId: input.workspaceId,
+    projectId: input.projectId,
+    reviewerId: input.reviewerId,
+  });
+
+  if (existing.name === name && existing.email === email) return existing;
+
+  const [updated] = await db
+    .update(reviewers)
+    .set({ name, email, updatedAt: new Date() })
+    .where(eq(reviewers.id, existing.id))
+    .returning();
+  return updated;
 }
 
 export async function createPublicComment(input: {
@@ -1240,18 +1295,37 @@ export async function reopenRoom(scope: WorkspaceScope, projectId: string) {
 /**
  * Any handoff mutation after release clears handoffReleasedAt (option A).
  * Clients return to “preparing” until the owner releases again.
+ * Caller must already hold a row lock on the project.
  */
 async function clearHandoffReleaseInTx(
   tx: { update: typeof db.update },
   projectId: string,
-  previouslyReleased: boolean,
+  currentlyReleased: boolean,
 ) {
-  if (!previouslyReleased) return false;
+  if (!currentlyReleased) return false;
   await tx
     .update(projects)
     .set({ handoffReleasedAt: null, updatedAt: new Date() })
     .where(eq(projects.id, projectId));
   return true;
+}
+
+/** Lock the project row for handoff mutations (tenant-scoped). */
+async function lockProjectForHandoffTx(
+  tx: typeof db,
+  workspaceId: string,
+  projectId: string,
+) {
+  const project = (
+    await tx
+      .select()
+      .from(projects)
+      .where(and(eq(projects.id, projectId), eq(projects.workspaceId, workspaceId)))
+      .for("update")
+      .limit(1)
+  )[0];
+  if (!project) throw new Error("Room not found.");
+  return project;
 }
 
 export async function addHandoffItem(input: {
@@ -1263,11 +1337,6 @@ export async function addHandoffItem(input: {
   externalUrl?: string;
   assetId?: string;
 }) {
-  const project = await getRoomOrThrow(input.scope.workspaceId, input.projectId);
-  if (project.status !== "APPROVED" && project.status !== "ARCHIVED") {
-    throw new Error("Release handoff after the client approves a revision.");
-  }
-
   const externalUrl = input.externalUrl?.trim() || null;
   if (externalUrl && !/^https?:\/\//i.test(externalUrl)) {
     throw new Error("Link must start with http:// or https://");
@@ -1294,10 +1363,21 @@ export async function addHandoffItem(input: {
     input.category ||
     (input.assetId ? "file" : externalUrl ? "link" : "note");
 
-  const wasReleased = Boolean(project.handoffReleasedAt);
-
   return db.transaction(async (tx) => {
-    const releaseCleared = await clearHandoffReleaseInTx(tx, input.projectId, wasReleased);
+    const project = await lockProjectForHandoffTx(
+      tx as unknown as typeof db,
+      input.scope.workspaceId,
+      input.projectId,
+    );
+    if (project.status !== "APPROVED" && project.status !== "ARCHIVED") {
+      throw new Error("Release handoff after the client approves a revision.");
+    }
+
+    const releaseCleared = await clearHandoffReleaseInTx(
+      tx,
+      input.projectId,
+      Boolean(project.handoffReleasedAt),
+    );
 
     const maxSort = (
       await tx
@@ -1364,52 +1444,61 @@ export async function addHandoffItem(input: {
  * Idempotent when already released.
  */
 export async function releaseHandoff(scope: WorkspaceScope, projectId: string) {
-  const project = await getRoomOrThrow(scope.workspaceId, projectId);
-  if (project.status !== "APPROVED" && project.status !== "ARCHIVED") {
-    throw new Error("Release handoff after the client approves a revision.");
-  }
+  return db.transaction(async (tx) => {
+    const project = await lockProjectForHandoffTx(
+      tx as unknown as typeof db,
+      scope.workspaceId,
+      projectId,
+    );
+    if (project.status !== "APPROVED" && project.status !== "ARCHIVED") {
+      throw new Error("Release handoff after the client approves a revision.");
+    }
 
-  if (project.handoffReleasedAt) {
+    if (project.handoffReleasedAt) {
+      return {
+        released: true as const,
+        alreadyReleased: true as const,
+        releasedAt: project.handoffReleasedAt,
+      };
+    }
+
+    const itemCount = (
+      await tx
+        .select({ value: sql<number>`count(*)::int` })
+        .from(handoffItems)
+        .where(eq(handoffItems.projectId, projectId))
+    )[0]?.value;
+
+    if (!itemCount) {
+      throw new Error("Add at least one handoff item before releasing to the client.");
+    }
+
+    const releasedAt = new Date();
+    await tx
+      .update(projects)
+      .set({ handoffReleasedAt: releasedAt, updatedAt: new Date() })
+      .where(eq(projects.id, projectId));
+
+    await writeAuditEvent(
+      {
+        workspaceId: scope.workspaceId,
+        projectId,
+        actorType: "user",
+        actorId: scope.userId,
+        action: "handoff.released",
+        targetType: "project",
+        targetId: projectId,
+        metadata: { itemCount },
+      },
+      tx as unknown as typeof db,
+    );
+
     return {
       released: true as const,
-      alreadyReleased: true as const,
-      releasedAt: project.handoffReleasedAt,
+      alreadyReleased: false as const,
+      releasedAt,
     };
-  }
-
-  const itemCount = (
-    await db
-      .select({ value: sql<number>`count(*)::int` })
-      .from(handoffItems)
-      .where(eq(handoffItems.projectId, projectId))
-  )[0]?.value;
-
-  if (!itemCount) {
-    throw new Error("Add at least one handoff item before releasing to the client.");
-  }
-
-  const releasedAt = new Date();
-  await db
-    .update(projects)
-    .set({ handoffReleasedAt: releasedAt, updatedAt: new Date() })
-    .where(eq(projects.id, projectId));
-
-  await writeAuditEvent({
-    workspaceId: scope.workspaceId,
-    projectId,
-    actorType: "user",
-    actorId: scope.userId,
-    action: "handoff.released",
-    targetType: "project",
-    targetId: projectId,
-    metadata: { itemCount },
   });
-
-  return {
-    released: true as const,
-    alreadyReleased: false as const,
-    releasedAt,
-  };
 }
 
 export async function uploadHandoffFile(input: {
@@ -1502,23 +1591,29 @@ export async function uploadHandoffFile(input: {
   }
 }
 
-/**
- * Finalize a direct-to-Blob handoff upload after the client PUT succeeds.
- * Creates the asset + handoff item; clears release when mutating a released handoff.
- */
-export async function completeHandoffDirectUpload(input: {
-  scope: WorkspaceScope;
+export type HandoffUploadTokenMeta = {
+  workspaceId: string;
+  organizationId: string;
+  userId: string;
   projectId: string;
   pathname: string;
-  blobUrl: string;
   contentType: string;
   size: number;
   fileName: string;
   uploadSessionId: string;
-  label?: string;
-  notes?: string;
-  externalUrl?: string;
-}) {
+};
+
+/**
+ * Authorize a handoff direct upload and return bound token metadata.
+ * Must run before any Blob client token is issued.
+ */
+export async function prepareHandoffDirectUpload(input: {
+  scope: WorkspaceScope;
+  projectId: string;
+  fileName: string;
+  contentType: string;
+  size: number;
+}): Promise<HandoffUploadTokenMeta> {
   const project = await getRoomOrThrow(input.scope.workspaceId, input.projectId);
   if (project.status !== "APPROVED") {
     throw new Error(
@@ -1526,14 +1621,6 @@ export async function completeHandoffDirectUpload(input: {
         ? "Archived rooms cannot accept new handoff files."
         : "Release handoff after the client approves a revision.",
     );
-  }
-
-  const expectedPrefix = `workspaces/${input.scope.workspaceId}/rooms/${input.projectId}/handoff/`;
-  if (!input.pathname.startsWith(expectedPrefix) || input.pathname.includes("..")) {
-    throw new Error("Upload path is not owned by this room.");
-  }
-  if (input.uploadSessionId !== input.pathname) {
-    throw new Error("Upload session mismatch.");
   }
 
   let mime = input.contentType.toLowerCase() || "application/octet-stream";
@@ -1556,11 +1643,124 @@ export async function completeHandoffDirectUpload(input: {
   await assertCanMutate(input.scope.organizationId);
   await assertStorageAllowance(input.scope.organizationId, input.scope.workspaceId, input.size);
 
+  const fileName = input.fileName.trim().slice(0, 200) || "handoff.bin";
+  const pathname = buildHandoffObjectPath({
+    workspaceId: input.scope.workspaceId,
+    projectId: input.projectId,
+    filename: fileName,
+  });
+
+  return {
+    workspaceId: input.scope.workspaceId,
+    organizationId: input.scope.organizationId,
+    userId: input.scope.userId,
+    projectId: input.projectId,
+    pathname,
+    contentType: mime,
+    size: input.size,
+    fileName,
+    uploadSessionId: pathname,
+  };
+}
+
+/**
+ * Client-token constraints bound to a prepared handoff upload.
+ * maximumSizeInBytes is the authorized declaration — never the global ceiling alone.
+ */
+export function buildHandoffBlobClientTokenConstraints(meta: Pick<
+  HandoffUploadTokenMeta,
+  "pathname" | "contentType" | "size"
+>) {
+  return {
+    pathname: meta.pathname,
+    allowedContentTypes: [meta.contentType],
+    maximumSizeInBytes: meta.size,
+    addRandomSuffix: false as const,
+    allowOverwrite: false as const,
+    validUntil: Date.now() + 60 * 60 * 1000,
+  };
+}
+
+/**
+ * Finalize a direct-to-Blob handoff upload after the client PUT succeeds.
+ * Creates the asset + handoff item from verified token metadata + confirmed Blob data.
+ * Upload-completed webhooks prove an event occurred but not object size (PutBlobResult
+ * lacks size) — always re-check authoritative Blob/local metadata before finalizing.
+ */
+export async function completeHandoffDirectUpload(input: {
+  scope: WorkspaceScope;
+  projectId: string;
+  /** Bound authorization metadata — never trust raw client fields alone. */
+  meta: HandoffUploadTokenMeta;
+  pathname?: string;
+  blobUrl?: string;
+  contentType?: string;
+  size?: number;
+  fileName?: string;
+  uploadSessionId?: string;
+  label?: string;
+  notes?: string;
+  externalUrl?: string;
+}) {
+  const meta = input.meta;
+  if (
+    meta.projectId !== input.projectId ||
+    meta.workspaceId !== input.scope.workspaceId ||
+    meta.organizationId !== input.scope.organizationId ||
+    meta.userId !== input.scope.userId
+  ) {
+    throw new Error("Upload authorization does not match this room.");
+  }
+
+  const pathname = meta.pathname;
+  const uploadSessionId = meta.uploadSessionId;
+  const expectedPrefix = `workspaces/${input.scope.workspaceId}/rooms/${input.projectId}/handoff/`;
+  if (!pathname.startsWith(expectedPrefix) || pathname.includes("..")) {
+    throw new Error("Upload path is not owned by this room.");
+  }
+  if (uploadSessionId !== pathname) {
+    throw new Error("Upload session mismatch.");
+  }
+
+  // Reject client attempts to override bound authorization fields.
+  if (input.pathname && input.pathname !== pathname) {
+    throw new Error("Upload path is not owned by this room.");
+  }
+  if (input.uploadSessionId && input.uploadSessionId !== uploadSessionId) {
+    throw new Error("Upload session mismatch.");
+  }
+  if (input.size && input.size !== meta.size) {
+    throw new Error("Upload size mismatch.");
+  }
+  if (input.contentType && input.contentType.toLowerCase() !== meta.contentType.toLowerCase()) {
+    const left = input.contentType.toLowerCase().replace("image/jpg", "image/jpeg");
+    const right = meta.contentType.toLowerCase().replace("image/jpg", "image/jpeg");
+    if (left !== right) throw new Error("Upload content type mismatch.");
+  }
+
+  const project = await getRoomOrThrow(input.scope.workspaceId, input.projectId);
+  if (project.status !== "APPROVED") {
+    throw new Error(
+      project.status === "ARCHIVED"
+        ? "Archived rooms cannot accept new handoff files."
+        : "Release handoff after the client approves a revision.",
+    );
+  }
+
+  if (!(ALLOWED_HANDOFF_MIME_TYPES as readonly string[]).includes(meta.contentType)) {
+    throw new Error("Handoff uploads support images, PDFs, and ZIP files.");
+  }
+  if (meta.size <= 0 || meta.size > MAX_UPLOAD_BYTES) {
+    throw new Error("Files must be between 1 byte and 25 MB.");
+  }
+
+  await assertCanMutate(input.scope.organizationId);
+
   const existing = (
     await db
       .select()
       .from(assets)
-      .where(eq(assets.uploadSessionId, input.uploadSessionId))
+      .where(eq(assets.uploadSessionId, uploadSessionId))
       .limit(1)
   )[0];
   if (existing) {
@@ -1579,10 +1779,45 @@ export async function completeHandoffDirectUpload(input: {
     };
   }
 
-  const fileName = input.fileName.trim().slice(0, 200) || "handoff.bin";
+  let verified: Awaited<ReturnType<typeof verifyPrivateBlobObject>>;
+  try {
+    verified = await verifyPrivateBlobObject({
+      pathname,
+      blobUrl: input.blobUrl,
+      expectedContentType: meta.contentType,
+      expectedSize: meta.size,
+    });
+  } catch (error) {
+    // Mismatched or unexpected objects should not linger against quota/identity.
+    await queueBlobDeletion({
+      workspaceId: input.scope.workspaceId,
+      objectKey: pathname,
+      blobUrl: input.blobUrl || null,
+      reason: "handoff_upload_verification_failed",
+    }).catch(() => undefined);
+    await deleteAssetBytes(input.blobUrl || pathname).catch(() => undefined);
+    throw error;
+  }
+
+  if (verified.pathname !== pathname) {
+    throw new Error("Uploaded object pathname mismatch.");
+  }
+  if (verified.size !== meta.size || verified.size <= 0 || verified.size > MAX_UPLOAD_BYTES) {
+    throw new Error("Uploaded object size mismatch.");
+  }
+
+  await assertStorageAllowance(
+    input.scope.organizationId,
+    input.scope.workspaceId,
+    verified.size,
+  );
+
+  const fileName = meta.fileName.trim().slice(0, 200) || "handoff.bin";
   const label =
     (input.label?.trim() || fileName.replace(/\.[^.]+$/, "") || "Delivery file").slice(0, 200);
   const storage = getStorageAdapter();
+  const mime = verified.contentType || meta.contentType;
+  const verifiedUrl = verified.url;
 
   let asset: typeof assets.$inferSelect;
   try {
@@ -1593,19 +1828,25 @@ export async function completeHandoffDirectUpload(input: {
         projectId: input.projectId,
         kind: mime === "application/pdf" ? "pdf" : mime.includes("zip") ? "file" : "image",
         label,
-        objectKey: input.pathname,
-        blobUrl: input.blobUrl || null,
+        objectKey: verified.pathname,
+        blobUrl: verifiedUrl || null,
         storageProvider: storage.provider,
         uploadStatus: "ready",
-        uploadSessionId: input.uploadSessionId,
+        uploadSessionId,
         mime,
-        bytes: input.size,
+        bytes: verified.size,
         uploadedByUserId: input.scope.userId,
       })
       .returning();
     asset = created;
   } catch (error) {
-    await deleteAssetBytes(input.blobUrl || input.pathname).catch(() => undefined);
+    await queueBlobDeletion({
+      workspaceId: input.scope.workspaceId,
+      objectKey: verified.pathname,
+      blobUrl: verifiedUrl || null,
+      reason: "handoff_upload_asset_insert_failed",
+    }).catch(() => undefined);
+    await deleteAssetBytes(verifiedUrl || verified.pathname).catch(() => undefined);
     throw error;
   }
 
@@ -1622,20 +1863,28 @@ export async function completeHandoffDirectUpload(input: {
     return { asset, item, releaseCleared, idempotent: false as const };
   } catch (error) {
     await db.delete(assets).where(eq(assets.id, asset.id)).catch(() => undefined);
-    await deleteAssetBytes(input.blobUrl || input.pathname).catch(() => undefined);
+    await queueBlobDeletion({
+      workspaceId: input.scope.workspaceId,
+      objectKey: verified.pathname,
+      blobUrl: verifiedUrl || null,
+      reason: "handoff_upload_item_insert_failed",
+    }).catch(() => undefined);
+    await deleteAssetBytes(verifiedUrl || verified.pathname).catch(() => undefined);
     throw error;
   }
 }
 
 export async function deleteHandoffItem(scope: WorkspaceScope, projectId: string, itemId: string) {
-  const project = await getRoomOrThrow(scope.workspaceId, projectId);
-  if (project.status === "ARCHIVED") {
-    throw new Error("Archived rooms cannot change handoff.");
-  }
-
-  const wasReleased = Boolean(project.handoffReleasedAt);
-
   return db.transaction(async (tx) => {
+    const project = await lockProjectForHandoffTx(
+      tx as unknown as typeof db,
+      scope.workspaceId,
+      projectId,
+    );
+    if (project.status === "ARCHIVED") {
+      throw new Error("Archived rooms cannot change handoff.");
+    }
+
     const item = (
       await tx
         .select()
@@ -1651,7 +1900,11 @@ export async function deleteHandoffItem(scope: WorkspaceScope, projectId: string
     )[0];
     if (!item) throw new Error("Handoff item not found.");
 
-    const releaseCleared = await clearHandoffReleaseInTx(tx, projectId, wasReleased);
+    const releaseCleared = await clearHandoffReleaseInTx(
+      tx,
+      projectId,
+      Boolean(project.handoffReleasedAt),
+    );
     await tx.delete(handoffItems).where(eq(handoffItems.id, itemId));
 
     await writeAuditEvent(

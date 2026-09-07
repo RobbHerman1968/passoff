@@ -21,6 +21,11 @@ export async function ensureTestMigrations() {
       "Missing drizzle-postgres/0007_first_release_hardening.sql — migration discovery is misconfigured (drizzle.config out dir must be drizzle-postgres).",
     );
   }
+  if (!files.includes("0008_reviewer_session_identity.sql")) {
+    throw new Error(
+      "Missing drizzle-postgres/0008_reviewer_session_identity.sql — reviewer session-identity migration is required.",
+    );
+  }
 
   const pool = new pg.Pool({ connectionString: databaseUrl });
   try {

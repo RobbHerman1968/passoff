@@ -241,7 +241,9 @@ await audit(workspace.id, project.id, "user", user.id, "project.created", "proje
 });
 
 const screenshotById = Object.fromEntries(
-  DEMO_SCREENSHOT_SPECS.map((spec) => [spec.id, generateDemoScreenshotPng(spec)]),
+  await Promise.all(
+    DEMO_SCREENSHOT_SPECS.map(async (spec) => [spec.id, await generateDemoScreenshotPng(spec)]),
+  ),
 );
 
 async function insertImageAsset({ label, specId, objectKey }) {
@@ -455,7 +457,7 @@ await audit(
 // Handoff fixtures
 const pdfBytes = tinyPdf("Harbor & Co. Launch Spec");
 const zipBytes = tinyZip();
-const ogShot = generateDemoScreenshotPng({
+const ogShot = await generateDemoScreenshotPng({
   id: "og",
   label: "Open Graph",
   width: 1200,
@@ -463,6 +465,7 @@ const ogShot = generateDemoScreenshotPng({
   bg: [246, 241, 234],
   accent: [99, 84, 212],
   layout: "hero",
+  revision: 2,
 });
 const handoffPdfKey = `workspaces/${workspace.id}/rooms/${project.id}/handoff/launch-spec.pdf`;
 const handoffZipKey = `workspaces/${workspace.id}/rooms/${project.id}/handoff/final-exports.zip`;

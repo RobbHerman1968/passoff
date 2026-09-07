@@ -250,7 +250,9 @@ export const reviewers = pgTable("reviewers", {
   verifiedAt: timestamp("verified_at", { withTimezone: true }),
   ...timestamps,
 }, (table) => [
-  uniqueIndex("reviewers_project_email_unique").on(table.projectId, table.email),
+  // Email is display/contact only — identity is the signed reviewer session, not email uniqueness.
+  // Future verified attribution can use OTP/magic-link and set verifiedAt.
+  index("reviewers_project_email_idx").on(table.projectId, table.email),
   index("reviewers_project_idx").on(table.projectId),
 ]);
 

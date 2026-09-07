@@ -462,7 +462,6 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
     if (!fileList?.length) return;
     await run(async () => {
       for (const file of Array.from(fileList)) {
-        try {
           const prepare = await fetch(`/api/projects/${encodeURIComponent(roomId)}/uploads`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -481,8 +480,16 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
             error?: string;
             fallback?: string;
           };
-          if (prepare.status === 501 || prepared.fallback === "multipart") {
-            throw new Error(prepared.error || "blob_unavailable");
+          if (prepare.status === 501 && prepared.fallback === "multipart") {
+            const form = new FormData();
+            form.set("file", file);
+            const response = await fetch(`/api/projects/${encodeURIComponent(roomId)}/assets`, {
+              method: "POST",
+              body: form,
+            });
+            const payload = (await response.json()) as { error?: string };
+            if (!response.ok) throw new Error(payload.error || "Upload failed.");
+            continue;
           }
           if (!prepare.ok || !prepared.pathname || !prepared.clientToken || !prepared.revisionId) {
             throw new Error(prepared.error || "Upload authorization failed.");
@@ -510,26 +517,6 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
           });
           const completed = (await complete.json()) as { error?: string };
           if (!complete.ok) throw new Error(completed.error || "Could not save uploaded file.");
-        } catch (err) {
-          // Only fall back to multipart when Blob prepare/put is unavailable — not when complete fails.
-          const message = err instanceof Error ? err.message : "";
-          const shouldFallback =
-            message.includes("blob_unavailable") ||
-            message.includes("BLOB_READ_WRITE_TOKEN") ||
-            message.includes("Upload authorization failed");
-          if (!shouldFallback && message && !message.includes("fetch")) {
-            // If put succeeded but complete failed, or prepare returned a hard error, surface it.
-            if (!message.includes("blob_unavailable")) throw err;
-          }
-          const form = new FormData();
-          form.set("file", file);
-          const response = await fetch(`/api/projects/${encodeURIComponent(roomId)}/assets`, {
-            method: "POST",
-            body: form,
-          });
-          const payload = (await response.json()) as { error?: string };
-          if (!response.ok) throw new Error(payload.error || "Upload failed.");
-        }
       }
       toast.success(fileList.length > 1 ? "Files uploaded." : "File uploaded.");
     }, "Uploading…");
@@ -1628,72 +1615,30 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
                       run(async () => {
                         let releaseCleared = false;
                         if (file) {
-                          try {
-                            const prepare = await fetch(
-                              `/api/projects/${encodeURIComponent(roomId)}/handoff`,
-                              {
-                                method: "POST",
-                                headers: { "Content-Type": "application/json" },
-                                body: JSON.stringify({
-                                  action: "prepare_upload",
-                                  fileName: file.name,
-                                  contentType: file.type || "application/octet-stream",
-                                  size: file.size,
-                                }),
-                              },
-                            );
-                            const prepared = (await prepare.json()) as {
-                              error?: string;
-                              fallback?: string;
-                              pathname?: string;
-                              clientToken?: string;
-                              uploadSessionId?: string;
-                            };
-                            if (prepare.status === 501 || prepared.fallback === "multipart") {
-                              throw new Error(prepared.error || "blob_unavailable");
-                            }
-                            if (!prepare.ok || !prepared.pathname || !prepared.clientToken) {
-                              throw new Error(prepared.error || "Upload authorization failed.");
-                            }
-                            const blob = await put(prepared.pathname, file, {
-                              access: "private",
-                              token: prepared.clientToken,
-                              multipart: true,
-                            });
-                            const complete = await fetch(
-                              `/api/projects/${encodeURIComponent(roomId)}/handoff`,
-                              {
-                                method: "POST",
-                                headers: { "Content-Type": "application/json" },
-                                body: JSON.stringify({
-                                  action: "complete_upload",
-                                  pathname: blob.pathname || prepared.pathname,
-                                  blobUrl: blob.url,
-                                  contentType: file.type || "application/octet-stream",
-                                  size: file.size,
-                                  fileName: file.name,
-                                  uploadSessionId: prepared.uploadSessionId || prepared.pathname,
-                                  label: label || undefined,
-                                  notes: handoffNotes.trim() || undefined,
-                                  externalUrl: handoffUrl.trim() || undefined,
-                                }),
-                              },
-                            );
-                            const completed = (await complete.json()) as {
-                              error?: string;
-                              releaseCleared?: boolean;
-                            };
-                            if (!complete.ok) {
-                              throw new Error(completed.error || "Could not save handoff file.");
-                            }
-                            releaseCleared = Boolean(completed.releaseCleared);
-                          } catch (err) {
-                            const message = err instanceof Error ? err.message : "";
-                            if (!/blob_unavailable|BLOB_READ_WRITE_TOKEN|501/i.test(message)) {
-                              throw err instanceof Error
-                                ? err
-                                : new Error("Handoff upload failed.");
-                            }
+                          const prepare = await fetch(
+                            `/api/projects/${encodeURIComponent(roomId)}/handoff`,
+                            {
+                              method: "POST",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({
+                                action: "prepare_upload",
+                                fileName: file.name,
+                                contentType: file.type || "application/octet-stream",
+                                size: file.size,
+                              }),
+                            },
+                          );
+                          const prepared = (await prepare.json()) as {
+                            error?: string;
+                            fallback?: string;
+                            pathname?: string;
+                            clientToken?: string;
+                            uploadSessionId?: string;
+                            tokenPayload?: string;
+                          };
+
+                          // Fallback only when the server explicitly offers local-dev multipart.
+                          if (prepare.status === 501 && prepared.fallback === "multipart") {
                             const form = new FormData();
                             form.set("file", file);
                             if (label) form.set("label", label);
@@ -1709,6 +1654,49 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
                             };
                             if (!response.ok) throw new Error(payload.error || "Handoff failed.");
                             releaseCleared = Boolean(payload.releaseCleared);
+                          } else {
+                            if (
+                              !prepare.ok ||
+                              !prepared.pathname ||
+                              !prepared.clientToken ||
+                              !prepared.tokenPayload
+                            ) {
+                              throw new Error(prepared.error || "Upload authorization failed.");
+                            }
+                            const blob = await put(prepared.pathname, file, {
+                              access: "private",
+                              token: prepared.clientToken,
+                              multipart: file.size > 5 * 1024 * 1024,
+                            });
+                            const complete = await fetch(
+                              `/api/projects/${encodeURIComponent(roomId)}/handoff`,
+                              {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({
+                                  action: "complete_upload",
+                                  tokenPayload: prepared.tokenPayload,
+                                  pathname: blob.pathname || prepared.pathname,
+                                  blobUrl: blob.url,
+                                  contentType: prepared.tokenPayload
+                                    ? undefined
+                                    : file.type || "application/octet-stream",
+                                  size: file.size,
+                                  uploadSessionId: prepared.uploadSessionId || prepared.pathname,
+                                  label: label || undefined,
+                                  notes: handoffNotes.trim() || undefined,
+                                  externalUrl: handoffUrl.trim() || undefined,
+                                }),
+                              },
+                            );
+                            const completed = (await complete.json()) as {
+                              error?: string;
+                              releaseCleared?: boolean;
+                            };
+                            if (!complete.ok) {
+                              throw new Error(completed.error || "Could not save handoff file.");
+                            }
+                            releaseCleared = Boolean(completed.releaseCleared);
                           }
                         } else {
                           if (!label) throw new Error("A title is required.");

@@ -4,6 +4,8 @@ import { getWorkspaceNotificationEmail } from "@/lib/auth/tenant-membership";
 import { clientIp, rateLimit } from "@/lib/rooms/rate-limit";
 import {
   createPublicComment,
+  createReviewer,
+  getReviewerById,
   listApprovalReceiptsForProject,
   listPublishedComments,
   listReleasedHandoffItems,
@@ -11,7 +13,7 @@ import {
   resolveShareToken,
   submitPublicDecision,
   updatePublicComment,
-  upsertReviewer,
+  updateSessionReviewerProfile,
 } from "@/lib/rooms/service";
 import {
   REVIEWER_SESSION_COOKIE,
@@ -73,6 +75,14 @@ function attachReviewerSession(
   return response;
 }
 
+function clearReviewerSession(response: NextResponse, shareToken: string) {
+  response.cookies.set(REVIEWER_SESSION_COOKIE, "", {
+    ...reviewerSessionCookieOptions(shareToken),
+    maxAge: 0,
+  });
+  return response;
+}
+
 function statusFromError(error: unknown, fallback = 400) {
   if (error instanceof ReviewerSessionError) return error.status;
   if (error && typeof error === "object" && "status" in error) {
@@ -80,6 +90,17 @@ function statusFromError(error: unknown, fallback = 400) {
     if (typeof status === "number") return status;
   }
   return fallback;
+}
+
+function requireReviewerSession(
+  request: Request,
+  input: { projectId: string; shareToken: string },
+) {
+  const sessionToken = readReviewerSessionCookie(request.headers.get("cookie"));
+  return verifyReviewerSessionToken(sessionToken, {
+    projectId: input.projectId,
+    shareToken: input.shareToken,
+  });
 }
 
 export async function GET(
@@ -167,43 +188,92 @@ export async function POST(
       return NextResponse.json({ ok: true });
     }
 
-    if (action === "edit_comment") {
+    if (action === "forget") {
+      const response = NextResponse.json({ ok: true });
+      return clearReviewerSession(response, token);
+    }
+
+    if (action === "identify") {
+      // Session cookie is the only way to resume an existing reviewer.
+      // Name/email never look up or claim another reviewer's identity.
       const sessionToken = readReviewerSessionCookie(request.headers.get("cookie"));
-      const session = verifyReviewerSessionToken(sessionToken, {
-        projectId: resolved.project.id,
-        shareToken: token,
+      let reviewer;
+      let sessionReviewerId: string | null = null;
+      if (sessionToken) {
+        try {
+          const session = verifyReviewerSessionToken(sessionToken, {
+            projectId: resolved.project.id,
+            shareToken: token,
+          });
+          sessionReviewerId = session.reviewerId;
+        } catch {
+          sessionReviewerId = null;
+        }
+      }
+
+      if (sessionReviewerId) {
+        const name = typeof body.name === "string" ? body.name : "";
+        const email = typeof body.email === "string" ? body.email : "";
+        if (name.trim() && email.trim()) {
+          reviewer = await updateSessionReviewerProfile({
+            workspaceId: resolved.link.workspaceId,
+            projectId: resolved.project.id,
+            reviewerId: sessionReviewerId,
+            name,
+            email,
+          });
+        } else {
+          reviewer = await getReviewerById({
+            workspaceId: resolved.link.workspaceId,
+            projectId: resolved.project.id,
+            reviewerId: sessionReviewerId,
+          });
+        }
+      } else {
+        reviewer = await createReviewer({
+          workspaceId: resolved.link.workspaceId,
+          projectId: resolved.project.id,
+          name: typeof body.name === "string" ? body.name : "",
+          email: typeof body.email === "string" ? body.email : "",
+        });
+      }
+
+      const response = NextResponse.json({
+        reviewer: { id: reviewer.id, name: reviewer.name, email: reviewer.email },
+        // Browser/session identity only — email is not verified.
+        identity: "session",
       });
-      const comment = await updatePublicComment({
-        workspaceId: resolved.link.workspaceId,
-        projectId: resolved.project.id,
-        revisionId: resolved.revision.id,
-        commentId: typeof body.commentId === "string" ? body.commentId : "",
-        reviewerId: session.reviewerId,
-        body: typeof body.body === "string" ? body.body : "",
-      });
-      const response = NextResponse.json({ comment });
       return attachReviewerSession(response, {
         shareToken: token,
-        reviewerId: session.reviewerId,
+        reviewerId: reviewer.id,
         projectId: resolved.project.id,
       });
     }
 
-    if (action === "identify" || action === "comment" || action === "decision") {
-      const reviewer = await upsertReviewer({
+    if (action === "edit_comment" || action === "comment" || action === "decision") {
+      const session = requireReviewerSession(request, {
+        projectId: resolved.project.id,
+        shareToken: token,
+      });
+      const reviewer = await getReviewerById({
         workspaceId: resolved.link.workspaceId,
         projectId: resolved.project.id,
-        name: typeof body.name === "string" ? body.name : "",
-        email: typeof body.email === "string" ? body.email : "",
+        reviewerId: session.reviewerId,
       });
 
-      if (action === "identify") {
-        const response = NextResponse.json({
-          reviewer: { id: reviewer.id, name: reviewer.name, email: reviewer.email },
+      if (action === "edit_comment") {
+        const comment = await updatePublicComment({
+          workspaceId: resolved.link.workspaceId,
+          projectId: resolved.project.id,
+          revisionId: resolved.revision.id,
+          commentId: typeof body.commentId === "string" ? body.commentId : "",
+          reviewerId: session.reviewerId,
+          body: typeof body.body === "string" ? body.body : "",
         });
+        const response = NextResponse.json({ comment });
         return attachReviewerSession(response, {
           shareToken: token,
-          reviewerId: reviewer.id,
+          reviewerId: session.reviewerId,
           projectId: resolved.project.id,
         });
       }
@@ -214,7 +284,7 @@ export async function POST(
           projectId: resolved.project.id,
           revisionId: resolved.revision.id,
           revisionAssetId: typeof body.revisionAssetId === "string" ? body.revisionAssetId : "",
-          reviewerId: reviewer.id,
+          reviewerId: session.reviewerId,
           xPercent: typeof body.xPercent === "number" ? body.xPercent : Number(body.xPercent),
           yPercent: typeof body.yPercent === "number" ? body.yPercent : Number(body.yPercent),
           body: typeof body.body === "string" ? body.body : "",
@@ -234,7 +304,7 @@ export async function POST(
         );
         return attachReviewerSession(response, {
           shareToken: token,
-          reviewerId: reviewer.id,
+          reviewerId: session.reviewerId,
           projectId: resolved.project.id,
         });
       }
@@ -254,7 +324,7 @@ export async function POST(
           workspaceId: resolved.link.workspaceId,
           projectId: resolved.project.id,
           revisionId: resolved.revision.id,
-          reviewerId: reviewer.id,
+          reviewerId: session.reviewerId,
           decision,
           acceptanceStatement:
             typeof body.acceptanceStatement === "string" ? body.acceptanceStatement : undefined,
@@ -270,7 +340,7 @@ export async function POST(
         });
         return attachReviewerSession(response, {
           shareToken: token,
-          reviewerId: reviewer.id,
+          reviewerId: session.reviewerId,
           projectId: resolved.project.id,
         });
       }

@@ -9,10 +9,10 @@ import {
 } from "../scripts/demo-screenshots.mjs";
 
 describe("demo screenshot fixtures", () => {
-  it("generates PNGs whose IHDR dimensions match recorded width/height", () => {
+  it("generates PNGs whose IHDR dimensions match recorded width/height", async () => {
     expect(DEMO_SCREENSHOT_SPECS.length).toBeGreaterThanOrEqual(3);
     for (const spec of DEMO_SCREENSHOT_SPECS) {
-      const { bytes, width, height } = generateDemoScreenshotPng(spec);
+      const { bytes, width, height } = await generateDemoScreenshotPng(spec);
       expect(width).toBe(spec.width);
       expect(height).toBe(spec.height);
       const dims = readPngDimensions(bytes);
@@ -23,16 +23,18 @@ describe("demo screenshot fixtures", () => {
     }
   });
 
-  it("produces visibly distinct revision layouts (different bytes)", () => {
-    const hero = generateDemoScreenshotPng(DEMO_SCREENSHOT_SPECS.find((s) => s.id === "rev2-hero")!);
-    const mobile = generateDemoScreenshotPng(
+  it("produces visibly distinct revision layouts (different bytes)", async () => {
+    const hero = await generateDemoScreenshotPng(DEMO_SCREENSHOT_SPECS.find((s) => s.id === "rev2-hero")!);
+    const mobile = await generateDemoScreenshotPng(
       DEMO_SCREENSHOT_SPECS.find((s) => s.id === "rev2-mobile")!,
     );
-    const contact = generateDemoScreenshotPng(
+    const contact = await generateDemoScreenshotPng(
       DEMO_SCREENSHOT_SPECS.find((s) => s.id === "rev2-contact")!,
     );
+    const rev1 = await generateDemoScreenshotPng(DEMO_SCREENSHOT_SPECS.find((s) => s.id === "rev1-hero")!);
     expect(hero.bytes.equals(mobile.bytes)).toBe(false);
     expect(hero.bytes.equals(contact.bytes)).toBe(false);
+    expect(hero.bytes.equals(rev1.bytes)).toBe(false);
     expect(mobile.width).toBe(390);
     expect(mobile.height).toBe(844);
   });

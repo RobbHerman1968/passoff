@@ -221,12 +221,116 @@ export async function deleteAssetBytes(objectKeyOrUrl: string) {
   return getStorageAdapter().delete(objectKeyOrUrl);
 }
 
+/** Normalize deliberate MIME aliases before comparing upload content types. */
+export function normalizeUploadContentType(contentType: string) {
+  return contentType.toLowerCase().replace("image/jpg", "image/jpeg");
+}
+
+function assertContentTypeMatch(expected: string, actual: string | null | undefined) {
+  if (!actual) {
+    throw new Error("Uploaded object content type mismatch.");
+  }
+  if (normalizeUploadContentType(expected) !== normalizeUploadContentType(actual)) {
+    throw new Error("Uploaded object content type mismatch.");
+  }
+}
+
+/**
+ * Confirm a private Blob (or local adapter object) exists before DB finalization.
+ * Uses trusted storage metadata only — never treats caller-declared size/MIME/URL as authoritative.
+ */
+export async function verifyPrivateBlobObject(input: {
+  pathname: string;
+  blobUrl?: string | null;
+  expectedContentType: string;
+  expectedSize: number;
+}) {
+  if (input.pathname.includes("..")) {
+    throw new Error("Upload path is invalid.");
+  }
+  if (input.expectedSize <= 0) {
+    throw new Error("Uploaded object size mismatch.");
+  }
+
+  const token = process.env.BLOB_READ_WRITE_TOKEN;
+  if (token) {
+    const { head } = await import("@vercel/blob");
+    try {
+      // Prefer the authorized pathname so a caller-supplied URL cannot select a different object.
+      let meta;
+      try {
+        meta = await head(input.pathname, { token });
+      } catch (pathnameError) {
+        if (!input.blobUrl) throw pathnameError;
+        meta = await head(input.blobUrl, { token });
+      }
+      if (meta.pathname !== input.pathname) {
+        throw new Error("Uploaded object pathname mismatch.");
+      }
+      if (typeof meta.size !== "number" || meta.size !== input.expectedSize) {
+        throw new Error("Uploaded object size mismatch.");
+      }
+      assertContentTypeMatch(input.expectedContentType, meta.contentType);
+      if (
+        input.blobUrl &&
+        meta.url &&
+        input.blobUrl !== meta.url &&
+        input.blobUrl !== meta.downloadUrl
+      ) {
+        throw new Error("Uploaded object URL mismatch.");
+      }
+      return {
+        pathname: meta.pathname,
+        url: meta.url,
+        contentType: meta.contentType,
+        size: meta.size,
+      };
+    } catch (error) {
+      if (error instanceof Error && /mismatch/i.test(error.message)) throw error;
+      throw new Error("Uploaded object was not found in Blob storage.");
+    }
+  }
+
+  const streamed = await getStorageAdapter().getStream(input.pathname);
+  if (!streamed) {
+    throw new Error("Uploaded object was not found.");
+  }
+  // Drain stream so local adapters do not leak handles.
+  const reader = streamed.stream.getReader();
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (value) size += value.byteLength;
+  }
+  if (size !== input.expectedSize) {
+    throw new Error("Uploaded object size mismatch.");
+  }
+  if (streamed.contentType) {
+    assertContentTypeMatch(input.expectedContentType, streamed.contentType);
+  }
+  return {
+    pathname: input.pathname,
+    // Local adapter has no remote URL; pathname is the stable object identity.
+    url: input.pathname,
+    contentType: streamed.contentType || input.expectedContentType,
+    size,
+  };
+}
+
 export function checksumSha256(bytes: Buffer) {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
 export function assetPublicUrl(assetId: string) {
   return `/api/assets/${encodeURIComponent(assetId)}`;
+}
+
+export function isHandoffMultipartAllowed() {
+  // Multipart handoff is local-dev only (no Blob). Never on production or Vercel.
+  if (process.env.NODE_ENV === "production" || process.env.VERCEL === "1") return false;
+  if (process.env.BLOB_READ_WRITE_TOKEN) return false;
+  return true;
 }
 
 export const ALLOWED_UPLOAD_MIME_TYPES = [
