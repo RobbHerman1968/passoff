@@ -158,7 +158,7 @@ export const designApprovalChecklist: ResourcePageContent = {
       title: "Send script (optional)",
       kind: "template",
       intro: "Paste into your review email after the checklist passes.",
-      copyLabel: "Copy send script",
+      copyLabel: "Copy Send Script",
       body: `Subject: Ready for design approval — [Project], Revision [N]
 
 Hi [Name],
@@ -253,7 +253,7 @@ export const clientSignOffTemplate: ResourcePageContent = {
       title: "Copyable design sign-off statement",
       kind: "template",
       intro: "Clients can paste this into email, or you can mirror the language in your review flow.",
-      copyLabel: "Copy sign-off statement",
+      copyLabel: "Copy Sign-Off Statement",
       body: `I, [Full Name], [Title] at [Company], approve Revision [N] of [Project Name] as reviewed at [link or file list].
 
 This approval covers: [pages/screens/deliverables].
@@ -269,7 +269,7 @@ Signature / typed name: [Full Name]`,
       title: "Acceptance criteria block",
       kind: "template",
       intro: "Attach this to the review request so “approve” has a shared meaning.",
-      copyLabel: "Copy acceptance criteria",
+      copyLabel: "Copy Acceptance Criteria",
       body: `Acceptance criteria for Revision [N]
 - Visual design for listed screens is accepted for [development / print / trafficking].
 - Copy marked as final is accepted; placeholders remain open if labeled.
@@ -281,7 +281,7 @@ Signature / typed name: [Full Name]`,
       id: "email",
       title: "Sign-off request email",
       kind: "template",
-      copyLabel: "Copy email template",
+      copyLabel: "Copy Email Template",
       body: `Subject: Design sign-off requested — [Project] Revision [N]
 
 Hi [Name],

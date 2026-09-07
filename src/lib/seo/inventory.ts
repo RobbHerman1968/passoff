@@ -2,7 +2,7 @@ import { commercialPageList } from "@/lib/seo/commercial";
 import { resourcePageList } from "@/lib/seo/resources";
 
 export const SEO_PRIMARY_CTA = {
-  label: "Start free trial" as const,
+  label: "Start Free Trial" as const,
   href: "/login?mode=signup",
 };
 

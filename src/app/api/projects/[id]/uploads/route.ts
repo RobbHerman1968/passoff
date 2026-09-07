@@ -16,6 +16,7 @@ import {
   MAX_UPLOAD_BYTES,
   buildTenantObjectPath,
 } from "@/lib/rooms/storage";
+import type { WorkspaceScope } from "@/lib/tenant/context";
 import { getSiteUrl } from "@/lib/site";
 import { logError } from "@/lib/logging";
 
@@ -23,6 +24,19 @@ export const runtime = "nodejs";
 export const maxDuration = 60;
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+type UploadTokenMeta = {
+  workspaceId: string;
+  organizationId: string;
+  userId: string;
+  projectId: string;
+  revisionId: string;
+  pathname: string;
+  contentType: string;
+  size: number;
+  fileName: string;
+  uploadSessionId: string;
+};
 
 function requireBlobConfigured() {
   if (!process.env.BLOB_READ_WRITE_TOKEN) {
@@ -44,10 +58,78 @@ function requireBlobConfigured() {
   return null;
 }
 
+function isBlobCompletionBody(body: unknown): body is HandleUploadBody {
+  return Boolean(
+    body &&
+      typeof body === "object" &&
+      "type" in body &&
+      (body as { type?: string }).type === "blob.upload-completed",
+  );
+}
+
+function assertOwnedPathname(pathname: string, workspaceId: string, projectId: string) {
+  const prefix = `workspaces/${workspaceId}/rooms/${projectId}/revisions/`;
+  if (!pathname.startsWith(prefix) || pathname.includes("..")) {
+    throw new Error("Upload path is not owned by this room.");
+  }
+}
+
+function scopeFromMeta(meta: UploadTokenMeta): WorkspaceScope {
+  return {
+    organizationId: meta.organizationId,
+    organizationName: "",
+    workspaceId: meta.workspaceId,
+    workspaceName: "",
+    userId: meta.userId,
+    userName: "",
+    userEmail: "",
+  };
+}
+
+async function finalizeCompletedUpload(input: {
+  projectId: string;
+  meta: UploadTokenMeta;
+  pathname: string;
+  blobUrl: string;
+  contentType?: string | null;
+}) {
+  if (input.meta.projectId !== input.projectId) {
+    throw new Error("Invalid upload completion payload.");
+  }
+
+  const draft = (
+    await db
+      .select()
+      .from(revisions)
+      .where(
+        and(
+          eq(revisions.id, input.meta.revisionId),
+          eq(revisions.status, "DRAFT"),
+          eq(revisions.projectId, input.projectId),
+        ),
+      )
+      .limit(1)
+  )[0];
+  if (!draft) throw new Error("Draft revision missing.");
+
+  return completeDirectUpload({
+    scope: scopeFromMeta(input.meta),
+    projectId: input.projectId,
+    revisionId: input.meta.revisionId,
+    uploadSessionId: input.meta.uploadSessionId,
+    pathname: input.pathname || input.meta.pathname,
+    blobUrl: input.blobUrl,
+    contentType: input.contentType || input.meta.contentType,
+    size: input.meta.size,
+    label: (input.meta.fileName || "Untitled").replace(/\.[^.]+$/, ""),
+  });
+}
+
 /**
  * Direct client uploads.
  * - `{ action: "prepare" }` returns a tenant-scoped pathname + client token
- * - handleUpload body continues to support completion callbacks
+ * - `{ action: "complete" }` registers the Blob object in the DB (works on localhost)
+ * - handleUpload body continues to support completion callbacks (production webhook)
  */
 export async function POST(
   request: Request,
@@ -62,13 +144,42 @@ export async function POST(
     const misconfigured = requireBlobConfigured();
     if (misconfigured) return misconfigured;
 
-    const scope = await requireActiveWorkspaceMembership();
     const body = (await request.json()) as HandleUploadBody | {
       action?: string;
       fileName?: string;
       contentType?: string;
       size?: number;
+      pathname?: string;
+      blobUrl?: string;
+      revisionId?: string;
+      uploadSessionId?: string;
     };
+
+    // Vercel Blob completion webhooks have no session cookie — verify via handleUpload only.
+    if (isBlobCompletionBody(body)) {
+      const jsonResponse = await handleUpload({
+        body,
+        request,
+        token: process.env.BLOB_READ_WRITE_TOKEN,
+        onBeforeGenerateToken: async () => {
+          throw new Error("Token generation is not available on the completion callback path.");
+        },
+        onUploadCompleted: async ({ blob, tokenPayload }) => {
+          const meta = tokenPayload ? (JSON.parse(tokenPayload) as UploadTokenMeta) : null;
+          if (!meta) throw new Error("Invalid upload completion payload.");
+          await finalizeCompletedUpload({
+            projectId,
+            meta,
+            pathname: blob.pathname || meta.pathname,
+            blobUrl: blob.url,
+            contentType: blob.contentType || meta.contentType,
+          });
+        },
+      });
+      return NextResponse.json(jsonResponse);
+    }
+
+    const scope = await requireActiveWorkspaceMembership();
 
     if ("action" in body && body.action === "prepare") {
       const contentType = String(body.contentType || "").toLowerCase();
@@ -89,6 +200,19 @@ export async function POST(
         filename: fileName,
       });
 
+      const tokenPayload = JSON.stringify({
+        workspaceId: scope.workspaceId,
+        organizationId: scope.organizationId,
+        userId: scope.userId,
+        projectId,
+        revisionId: draft.id,
+        pathname,
+        contentType,
+        size,
+        fileName,
+        uploadSessionId: pathname,
+      } satisfies UploadTokenMeta);
+
       const clientToken = await generateClientTokenFromReadWriteToken({
         token: process.env.BLOB_READ_WRITE_TOKEN,
         pathname,
@@ -97,18 +221,7 @@ export async function POST(
         addRandomSuffix: false,
         onUploadCompleted: {
           callbackUrl: `${getSiteUrl()}/api/projects/${projectId}/uploads`,
-          tokenPayload: JSON.stringify({
-            workspaceId: scope.workspaceId,
-            organizationId: scope.organizationId,
-            userId: scope.userId,
-            projectId,
-            revisionId: draft.id,
-            pathname,
-            contentType,
-            size,
-            fileName,
-            uploadSessionId: pathname,
-          }),
+          tokenPayload,
         },
       });
 
@@ -117,6 +230,60 @@ export async function POST(
         clientToken,
         revisionId: draft.id,
         uploadSessionId: pathname,
+        tokenPayload,
+      });
+    }
+
+    // Client-side finalize — required on localhost where Vercel cannot reach the webhook.
+    if ("action" in body && body.action === "complete") {
+      const pathname = typeof body.pathname === "string" ? body.pathname : "";
+      const blobUrl = typeof body.blobUrl === "string" ? body.blobUrl : "";
+      const revisionId = typeof body.revisionId === "string" ? body.revisionId : "";
+      const uploadSessionId =
+        typeof body.uploadSessionId === "string" ? body.uploadSessionId : pathname;
+      const contentType = String(body.contentType || "").toLowerCase();
+      const size = typeof body.size === "number" ? body.size : 0;
+      const fileName = typeof body.fileName === "string" ? body.fileName : "upload.bin";
+
+      if (!pathname || !blobUrl || !revisionId) {
+        return NextResponse.json({ error: "Missing upload completion fields." }, { status: 400 });
+      }
+      assertOwnedPathname(pathname, scope.workspaceId, projectId);
+      if (uploadSessionId !== pathname) {
+        return NextResponse.json({ error: "Upload session mismatch." }, { status: 400 });
+      }
+      if (!(ALLOWED_UPLOAD_MIME_TYPES as readonly string[]).includes(contentType)) {
+        return NextResponse.json({ error: "Only images and PDFs are supported." }, { status: 400 });
+      }
+      if (size <= 0 || size > MAX_UPLOAD_BYTES) {
+        return NextResponse.json({ error: "Files must be between 1 byte and 25 MB." }, { status: 400 });
+      }
+
+      const result = await finalizeCompletedUpload({
+        projectId,
+        meta: {
+          workspaceId: scope.workspaceId,
+          organizationId: scope.organizationId,
+          userId: scope.userId,
+          projectId,
+          revisionId,
+          pathname,
+          contentType,
+          size,
+          fileName,
+          uploadSessionId,
+        },
+        pathname,
+        blobUrl,
+        contentType,
+      });
+
+      return NextResponse.json({
+        ok: true,
+        assetId: result.asset.id,
+        revisionAssetId: result.revisionAssetId,
+        revisionId: result.revisionId,
+        idempotent: result.idempotent,
       });
     }
 
@@ -168,62 +335,19 @@ export async function POST(
             size,
             fileName,
             uploadSessionId: pathname,
-          }),
+          } satisfies UploadTokenMeta),
           callbackUrl: `${getSiteUrl()}/api/projects/${projectId}/uploads`,
         };
       },
       onUploadCompleted: async ({ blob, tokenPayload }) => {
-        const meta = tokenPayload
-          ? (JSON.parse(tokenPayload) as {
-              workspaceId: string;
-              organizationId: string;
-              userId: string;
-              projectId: string;
-              revisionId: string;
-              pathname: string;
-              contentType: string;
-              size: number;
-              fileName: string;
-              uploadSessionId: string;
-            })
-          : null;
-        if (!meta || meta.projectId !== projectId) {
-          throw new Error("Invalid upload completion payload.");
-        }
-
-        const draft = (
-          await db
-            .select()
-            .from(revisions)
-            .where(
-              and(
-                eq(revisions.id, meta.revisionId),
-                eq(revisions.status, "DRAFT"),
-                eq(revisions.projectId, projectId),
-              ),
-            )
-            .limit(1)
-        )[0];
-        if (!draft) throw new Error("Draft revision missing.");
-
-        await completeDirectUpload({
-          scope: {
-            organizationId: meta.organizationId,
-            organizationName: "",
-            workspaceId: meta.workspaceId,
-            workspaceName: "",
-            userId: meta.userId,
-            userName: "",
-            userEmail: "",
-          },
+        const meta = tokenPayload ? (JSON.parse(tokenPayload) as UploadTokenMeta) : null;
+        if (!meta) throw new Error("Invalid upload completion payload.");
+        await finalizeCompletedUpload({
           projectId,
-          revisionId: meta.revisionId,
-          uploadSessionId: meta.uploadSessionId,
+          meta,
           pathname: blob.pathname || meta.pathname,
           blobUrl: blob.url,
           contentType: blob.contentType || meta.contentType,
-          size: meta.size,
-          label: (meta.fileName || "Untitled").replace(/\.[^.]+$/, ""),
         });
       },
     });

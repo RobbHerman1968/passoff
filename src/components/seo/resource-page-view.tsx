@@ -276,7 +276,7 @@ export function ResourcePageView({ page }: { page: ResourcePageContent }) {
         </article>
 
         <RelatedContent
-          heading="Continue reading"
+          heading="Continue Reading"
           links={[
             {
               href: page.commercialLink.href,

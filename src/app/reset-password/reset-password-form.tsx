@@ -36,7 +36,7 @@ function PasswordInput({
       <button
         type="button"
         onClick={() => setVisible((v) => !v)}
-        aria-label={visible ? "Hide password" : "Show password"}
+        aria-label={visible ? "Hide Password" : "Show Password"}
         aria-pressed={visible}
         className="absolute top-1/2 right-2.5 -translate-y-1/2 rounded-lg p-1.5 text-white/40 transition hover:bg-white/5 hover:text-white/70"
       >
@@ -59,7 +59,7 @@ export function ResetPasswordForm({ token }: { token: string }) {
           href="/login"
           className="flex w-full items-center justify-center rounded-xl bg-[#7c6cf0] px-4 py-3 text-sm font-semibold text-white transition hover:-translate-y-0.5 hover:bg-[#6354d4]"
         >
-          Sign in
+          Sign In
         </Link>
       </div>
     );
@@ -97,14 +97,14 @@ export function ResetPasswordForm({ token }: { token: string }) {
             disabled={pending}
             className="flex w-full items-center justify-center rounded-xl bg-[#7c6cf0] px-4 py-3 text-sm font-semibold text-white transition enabled:hover:-translate-y-0.5 enabled:hover:bg-[#6354d4] disabled:opacity-50"
           >
-            {pending ? "Updating…" : "Update password"}
+            {pending ? "Updating…" : "Update Password"}
           </button>
         </form>
       )}
 
       <p className="text-center text-sm text-white/45">
         <Link href="/forgot-password" className="font-semibold text-[var(--brand)] hover:text-[var(--brand-glow)]">
-          Request a new link
+          Request a New Link
         </Link>
       </p>
     </div>

@@ -9,7 +9,7 @@ export function SignOutButton({ className }: { className?: string }) {
       }}
     >
       <button type="submit" className={className}>
-        Sign out
+        Sign Out
       </button>
     </form>
   );

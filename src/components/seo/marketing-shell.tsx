@@ -10,7 +10,7 @@ const footerLinks = [
   { href: "/support", label: "Support" },
   { href: "/privacy", label: "Privacy" },
   { href: "/terms", label: "Terms" },
-  { href: "/login", label: "Sign in" },
+  { href: "/login", label: "Sign In" },
 ] as const;
 
 export function MarketingFooter() {

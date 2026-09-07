@@ -20,7 +20,7 @@ export type AnalyticsEventPayloads = {
   };
   primary_cta_click: {
     path: string;
-    cta: "Start free trial";
+    cta: "Start Free Trial";
     placement: "header" | "hero" | "mid" | "footer" | "inline";
   };
   signup_start: {

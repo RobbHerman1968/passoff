@@ -21,7 +21,7 @@ export default function DashboardError({
           Dashboard unavailable
         </h1>
         <p className="mt-3 text-sm leading-6 text-black/50">
-          Something went wrong loading your approval rooms. Try again, or return home.
+          Something went wrong loading your approval rooms. Try Again, or return home.
         </p>
         <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
           <button
@@ -29,7 +29,7 @@ export default function DashboardError({
             onClick={() => retry()}
             className="inline-flex h-10 items-center rounded-xl bg-[var(--brand)] px-4 text-sm font-semibold text-white"
           >
-            Try again
+            Try Again
           </button>
           <Link
             href="/"

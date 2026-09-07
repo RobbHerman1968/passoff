@@ -436,8 +436,8 @@ export function ProjectDesigns({
     <main className="min-h-screen bg-[#f1f2ed] text-[#17221f]">
       <div className="sticky top-0 z-40 border-b border-black/8 bg-[#faf8ff]/95 backdrop-blur-md">
         <header>
-          <div className="mx-auto flex h-14 max-w-7xl items-center gap-4 px-5 lg:px-8">
-            <Link href={`/projects/${encodeURIComponent(projectKey)}`} aria-label="Back to projects" className="flex size-9 items-center justify-center rounded-xl border border-black/10 bg-white text-black/55 transition hover:bg-black/5">
+          <div className="flex h-14 items-center gap-4 px-4 lg:px-5">
+            <Link href={`/projects/${encodeURIComponent(projectKey)}`} aria-label="Back to Projects" className="flex size-9 items-center justify-center rounded-xl border border-black/10 bg-white text-black/55 transition hover:bg-black/5">
               <ArrowLeft className="size-4" />
             </Link>
             <div className="min-w-0 flex-1">
@@ -483,7 +483,7 @@ export function ProjectDesigns({
                   className="flex items-center gap-2 rounded-xl border border-black/10 bg-white px-3 py-2 text-[10px] font-semibold text-black/60 transition hover:bg-black/[0.03] disabled:opacity-40"
                 >
                   {busy ? <LoaderCircle className="size-3.5 animate-spin" /> : <ImagePlus className="size-3.5" />}
-                  Upload images
+                  Upload Images
                 </button>
               </>
             )}
@@ -495,14 +495,14 @@ export function ProjectDesigns({
                 className="flex items-center gap-2 rounded-xl bg-[#6354d4] px-3 py-2 text-[10px] font-semibold text-[#e4dffc] disabled:opacity-40"
               >
                 <Layers2 className="size-3.5" />
-                Combine breakpoints ({selected.size})
+                Combine Breakpoints ({selected.size})
               </button>
             )}
           </div>
         </header>
 
         {!loading && !screenParam && designs.length > 0 && (
-          <div className="mx-auto flex max-w-7xl flex-col gap-2 px-5 pb-3 pt-1 lg:px-8">
+          <div className="flex flex-col gap-2 px-4 pb-3 pt-1 lg:px-5">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <label className="relative block min-w-0 flex-1 sm:max-w-sm">
                 <Search className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-black/30" />
@@ -515,7 +515,7 @@ export function ProjectDesigns({
                 {query && (
                   <button
                     type="button"
-                    aria-label="Clear filter"
+                    aria-label="Clear Filter"
                     onClick={() => setQuery("")}
                     className="absolute right-2 top-1/2 flex size-6 -translate-y-1/2 items-center justify-center rounded-md text-black/35 transition hover:bg-black/[0.05] hover:text-black/60"
                   >
@@ -584,7 +584,7 @@ export function ProjectDesigns({
             <p className="mt-1 text-xs text-black/35">
               {designs.length
                 ? "Try another search or clear filters."
-                : "Upload images or import frames from Figma to see them here."}
+                : "Upload Images or import frames from Figma to see them here."}
             </p>
             {!designs.length && (
               <button
@@ -594,7 +594,7 @@ export function ProjectDesigns({
                 className="mt-5 inline-flex items-center gap-2 rounded-xl bg-[#6354d4] px-4 py-2.5 text-[10px] font-semibold text-[#e4dffc] disabled:opacity-40"
               >
                 {busy ? <LoaderCircle className="size-3.5 animate-spin" /> : <Upload className="size-3.5" />}
-                Upload images
+                Upload Images
               </button>
             )}
           </div>
@@ -602,7 +602,7 @@ export function ProjectDesigns({
       </div>
 
       {combineOpen && selectedScreens.length >= 2 && (
-        <div role="dialog" aria-modal="true" aria-label="Combine breakpoints" className="fixed inset-0 z-50 flex items-center justify-center bg-[#0c1412]/75 p-4 backdrop-blur-sm" onClick={() => setCombineOpen(false)}>
+        <div role="dialog" aria-modal="true" aria-label="Combine Breakpoints" className="fixed inset-0 z-50 flex items-center justify-center bg-[#0c1412]/75 p-4 backdrop-blur-sm" onClick={() => setCombineOpen(false)}>
           <div className="w-full max-w-md overflow-hidden rounded-[22px] border border-white/10 bg-[#f4f5f1] shadow-2xl" onClick={(event) => event.stopPropagation()}>
             <div className="border-b border-black/8 bg-white px-4 py-3">
               <h2 className="text-sm font-semibold">Combine as one design</h2>
@@ -807,7 +807,7 @@ function DesignGroupCard({
             className="flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-black/8 bg-black/[0.02] px-2 py-1.5 text-[9px] font-semibold text-black/55 transition hover:bg-black/[0.04] disabled:opacity-40"
           >
             {busy ? <LoaderCircle className="size-3 animate-spin" /> : <Star className={`size-3 ${group.cover.isMain ? "fill-current text-[#7c6cf0]" : ""}`} />}
-            {group.cover.isMain ? "Project main" : "Set project main"}
+            {group.cover.isMain ? "Project Main" : "Set Project Main"}
           </button>
           <button
             type="button"

@@ -2,7 +2,7 @@ import "dotenv/config";
 import { neon } from "@neondatabase/serverless";
 
 const sql = neon(process.env.DATABASE_URL);
-const ownerEmail = process.env.PASSOFF_DEFAULT_USER_EMAIL || "rob.herman@toolsbydesign.com";
+const ownerEmail = process.env.PASSOFF_DEFAULT_USER_EMAIL || "owner@example.com";
 const organizationSlug = process.env.PASSOFF_DEFAULT_ORGANIZATION_SLUG || "passoff";
 const workspaceSlug = process.env.PASSOFF_DEFAULT_WORKSPACE_SLUG || "main";
 const projectSlug = process.env.PASSOFF_DEFAULT_PROJECT_SLUG || "agent-website";

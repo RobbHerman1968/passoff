@@ -7,12 +7,16 @@ import { auth } from "@/auth";
 import { BrandMark } from "@/components/brand-mark";
 import { SignOutButton } from "@/components/sign-out-button";
 import { db } from "@/db";
-import { workspaces } from "@/db/schema";
+import { users, workspaces } from "@/db/schema";
 import { requireActiveWorkspaceMembership } from "@/lib/auth/authorization";
-import { getOrganizationEntitlements } from "@/lib/rooms/entitlements";
 import { getWorkspaceNotificationEmail } from "@/lib/auth/tenant-membership";
+import {
+  formatStorageBytes,
+  getOrganizationEntitlements,
+  getWorkspaceUsageSummary,
+} from "@/lib/rooms/entitlements";
 
-import { AccountProfileForm, NotificationEmailForm } from "./account-forms";
+import { AccountPasswordForm, AccountProfileForm, NotificationEmailForm } from "./account-forms";
 
 export const metadata: Metadata = {
   title: "Account",
@@ -27,16 +31,18 @@ export default async function AccountPage() {
 
   const scope = await requireActiveWorkspaceMembership();
   const entitlements = await getOrganizationEntitlements(scope.organizationId);
+  const usage = await getWorkspaceUsageSummary(scope.organizationId, scope.workspaceId);
   const workspace = (
     await db.select().from(workspaces).where(eq(workspaces.id, scope.workspaceId)).limit(1)
   )[0];
+  const user = (await db.select().from(users).where(eq(users.id, scope.userId)).limit(1))[0];
   const notificationEmail =
     (await getWorkspaceNotificationEmail(scope.workspaceId)) || scope.userEmail;
 
   return (
     <main className="min-h-screen bg-[#f3f0ff] text-[var(--brand-deep)]">
       <header className="border-b border-[#a594f5]/25 bg-[#faf8ff]">
-        <div className="mx-auto flex h-16 max-w-3xl items-center justify-between px-5">
+        <div className="flex h-16 items-center justify-between px-4 lg:px-5">
           <Link href="/dashboard" className="flex items-center gap-2.5 text-lg font-semibold tracking-[-0.04em]">
             <BrandMark size={28} />
             Pass-Off
@@ -60,6 +66,29 @@ export default async function AccountPage() {
         </p>
 
         <section className="mt-10 space-y-8">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="rounded-2xl border border-[#a594f5]/25 bg-white p-5">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-black/35">
+                Active rooms
+              </p>
+              <p className="mt-2 text-2xl font-semibold tabular-nums tracking-[-0.03em]">
+                {usage.roomCount}
+                <span className="text-base font-medium text-black/35"> / {usage.maxActiveRooms}</span>
+              </p>
+            </div>
+            <div className="rounded-2xl border border-[#a594f5]/25 bg-white p-5">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-black/35">
+                Storage used
+              </p>
+              <p className="mt-2 text-2xl font-semibold tabular-nums tracking-[-0.03em]">
+                {formatStorageBytes(usage.usedBytes)}
+              </p>
+              <p className="mt-1 text-sm text-black/40">
+                of {formatStorageBytes(usage.maxStorageBytes)}
+              </p>
+            </div>
+          </div>
+
           <div className="rounded-2xl border border-[#a594f5]/25 bg-white p-6">
             <h2 className="text-lg font-semibold tracking-[-0.03em]">Profile</h2>
             <p className="mt-1 text-sm text-black/45">{scope.userEmail}</p>
@@ -67,6 +96,18 @@ export default async function AccountPage() {
               <AccountProfileForm defaultName={scope.userName} />
             </div>
           </div>
+
+          {user?.passwordHash ? (
+            <div className="rounded-2xl border border-[#a594f5]/25 bg-white p-6">
+              <h2 className="text-lg font-semibold tracking-[-0.03em]">Password</h2>
+              <p className="mt-1 text-sm text-black/45">
+                Change the password you use to sign in to Pass-Off.
+              </p>
+              <div className="mt-5">
+                <AccountPasswordForm />
+              </div>
+            </div>
+          ) : null}
 
           <div className="rounded-2xl border border-[#a594f5]/25 bg-white p-6">
             <h2 className="text-lg font-semibold tracking-[-0.03em]">Notifications</h2>
@@ -95,7 +136,7 @@ export default async function AccountPage() {
               href="/pricing"
               className="mt-4 inline-flex text-sm font-semibold text-[var(--brand-ink)] hover:underline"
             >
-              View pricing and plans
+              View Pricing and Plans
             </Link>
           </div>
 

@@ -1,7 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Check, LoaderCircle, MessageSquare, Package } from "lucide-react";
+import { Check, ExternalLink, LoaderCircle, MessageSquare, Package } from "lucide-react";
+
+import { ApprovalReceipt } from "@/components/approval-receipt";
+import type { ApprovalReceiptView } from "@/lib/rooms/approval-receipt";
 
 type ShareAsset = {
   revisionAssetId: string;
@@ -16,6 +19,7 @@ type ShareAsset = {
 type ShareComment = {
   id: string;
   revisionAssetId: string;
+  reviewerId: string | null;
   xPercent: number;
   yPercent: number;
   body: string;
@@ -28,6 +32,7 @@ type ShareHandoff = {
   category: string;
   notes: string | null;
   externalUrl: string | null;
+  downloadUrl?: string | null;
 };
 
 type SharePayload = {
@@ -37,6 +42,7 @@ type SharePayload = {
   comments: ShareComment[];
   handoff?: ShareHandoff[];
   approvalStatement: string;
+  approvalReceipt?: ApprovalReceiptView | null;
   error?: string;
 };
 
@@ -83,8 +89,10 @@ export function ClientShareRoom({ token }: { token: string }) {
   const [rememberMe, setRememberMe] = useState(false);
   const [hasRemembered, setHasRemembered] = useState(false);
   const [identified, setIdentified] = useState(false);
+  const [reviewerId, setReviewerId] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [draftPin, setDraftPin] = useState<{ x: number; y: number } | null>(null);
+  const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
   const [commentBody, setCommentBody] = useState("");
   const [busy, setBusy] = useState(false);
   const [confirmApprove, setConfirmApprove] = useState(false);
@@ -103,7 +111,10 @@ export function ClientShareRoom({ token }: { token: string }) {
   }, [token]);
 
   const load = useCallback(async () => {
-    const response = await fetch(`/api/public/${encodeURIComponent(token)}`, { cache: "no-store" });
+    const response = await fetch(`/api/public/${encodeURIComponent(token)}`, {
+      cache: "no-store",
+      credentials: "same-origin",
+    });
     const payload = (await response.json()) as SharePayload;
     if (!response.ok) throw new Error(payload.error || "This link is unavailable.");
     setData(payload);
@@ -117,6 +128,42 @@ export function ClientShareRoom({ token }: { token: string }) {
     load().catch((err) => setError(err instanceof Error ? err.message : "Failed to load."));
   }, [load]);
 
+  // Restore HttpOnly reviewer session from remembered identity (never trusts email alone for edits).
+  useEffect(() => {
+    const remembered = readRemembered(token);
+    if (!remembered || identified) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const response = await fetch(`/api/public/${encodeURIComponent(token)}`, {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "identify",
+            name: remembered.name,
+            email: remembered.email,
+          }),
+        });
+        const payload = (await response.json()) as {
+          reviewer?: { id: string; name: string; email: string };
+        };
+        if (cancelled || !response.ok || !payload.reviewer) return;
+        setName(remembered.name);
+        setEmail(remembered.email);
+        setReviewerId(payload.reviewer.id);
+        setIdentified(true);
+        setRememberMe(true);
+        setHasRemembered(true);
+      } catch {
+        /* ignore — user can identify manually */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [token, identified]);
+
   useEffect(() => {
     if (!data || viewed.current) return;
     viewed.current = true;
@@ -128,9 +175,9 @@ export function ClientShareRoom({ token }: { token: string }) {
   }, [data, token]);
 
   useEffect(() => {
-    if (!draftPin) return;
+    if (!draftPin && !editingCommentId) return;
     commentRef.current?.focus();
-  }, [draftPin]);
+  }, [draftPin, editingCommentId]);
 
   const selected = useMemo(
     () => data?.assets.find((a) => a.revisionAssetId === selectedId) || data?.assets[0],
@@ -151,6 +198,31 @@ export function ClientShareRoom({ token }: { token: string }) {
   const isArchived = data?.project.status === "ARCHIVED";
   const handoffReleased = Boolean(data?.project.handoffReleasedAt);
   const canDecide = !isApproved && !isChangesRequested && !isArchived;
+  const canComment = !isApproved && !isArchived;
+  const editingComment = pins.find((pin) => pin.id === editingCommentId) ?? null;
+  const isComposing = canComment && (Boolean(draftPin) || Boolean(editingComment));
+
+  useEffect(() => {
+    if (canComment) return;
+    setDraftPin(null);
+    setEditingCommentId(null);
+    setCommentBody("");
+  }, [canComment]);
+
+  function clearCommentDraft() {
+    setDraftPin(null);
+    setEditingCommentId(null);
+    setCommentBody("");
+  }
+
+  function beginEditComment(pin: ShareComment) {
+    if (!canComment || !reviewerId || pin.reviewerId !== reviewerId || pin.status !== "OPEN") return;
+    setDraftPin(null);
+    setConfirmApprove(false);
+    setEditingCommentId(pin.id);
+    setCommentBody(pin.body);
+    setError(null);
+  }
 
   async function identify() {
     if (!name.trim() || !email.trim()) {
@@ -162,10 +234,14 @@ export function ClientShareRoom({ token }: { token: string }) {
     try {
       const response = await fetch(`/api/public/${encodeURIComponent(token)}`, {
         method: "POST",
+        credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "identify", name: name.trim(), email: email.trim() }),
       });
-      const payload = (await response.json()) as { error?: string };
+      const payload = (await response.json()) as {
+        error?: string;
+        reviewer?: { id: string; name: string; email: string };
+      };
       if (!response.ok) throw new Error(payload.error || "Unable to continue.");
 
       if (rememberMe) {
@@ -176,6 +252,7 @@ export function ClientShareRoom({ token }: { token: string }) {
         setHasRemembered(false);
       }
 
+      setReviewerId(payload.reviewer?.id ?? null);
       setIdentified(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to continue.");
@@ -188,17 +265,19 @@ export function ClientShareRoom({ token }: { token: string }) {
     clearRemembered(token);
     setHasRemembered(false);
     setRememberMe(false);
+    setReviewerId(null);
     setName("");
     setEmail("");
   }
 
   async function submitComment() {
-    if (!draftPin || !selected || !commentBody.trim()) return;
+    if (!canComment || !draftPin || !selected || !commentBody.trim()) return;
     setBusy(true);
     setError(null);
     try {
       const response = await fetch(`/api/public/${encodeURIComponent(token)}`, {
         method: "POST",
+        credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action: "comment",
@@ -212,11 +291,41 @@ export function ClientShareRoom({ token }: { token: string }) {
       });
       const payload = (await response.json()) as { error?: string };
       if (!response.ok) throw new Error(payload.error || "Comment failed.");
-      setDraftPin(null);
-      setCommentBody("");
+      clearCommentDraft();
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Comment failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveEditedComment() {
+    if (!canComment || !editingCommentId || !commentBody.trim()) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const response = await fetch(`/api/public/${encodeURIComponent(token)}`, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "edit_comment",
+          commentId: editingCommentId,
+          body: commentBody,
+        }),
+      });
+      const payload = (await response.json()) as { error?: string };
+      if (response.status === 401 || response.status === 403) {
+        setIdentified(false);
+        setReviewerId(null);
+        throw new Error(payload.error || "Please identify again to edit your comment.");
+      }
+      if (!response.ok) throw new Error(payload.error || "Update failed.");
+      clearCommentDraft();
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Update failed.");
     } finally {
       setBusy(false);
     }
@@ -228,6 +337,7 @@ export function ClientShareRoom({ token }: { token: string }) {
     try {
       const response = await fetch(`/api/public/${encodeURIComponent(token)}`, {
         method: "POST",
+        credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action: "decision",
@@ -303,7 +413,7 @@ export function ClientShareRoom({ token }: { token: string }) {
             <p className="mt-3 rounded-xl bg-[#f0ebe3] px-3 py-2 text-xs text-black/55">
               We filled these in from this device. Confirm they&apos;re still you, or{" "}
               <button type="button" onClick={forgetMe} className="font-semibold underline">
-                forget me
+                Forget Me
               </button>
               .
             </p>
@@ -345,15 +455,18 @@ export function ClientShareRoom({ token }: { token: string }) {
               onClick={identify}
               className="w-full rounded-xl bg-[#1c1917] px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-60"
             >
-              {busy ? "Continuing…" : "Continue to review"}
+              {busy ? "Continuing…" : "Continue to Review"}
             </button>
           </div>
         </div>
       ) : (
         <div className="mx-auto max-w-6xl px-5 py-8">
           <p className="mb-6 max-w-2xl text-sm leading-6 text-black/55">
-            Review revision {data.revision.number}. Click the image to leave feedback, then approve or
-            request changes.
+            {isApproved
+              ? `Revision ${data.revision.number} is approved. Feedback is locked; delivery appears here when ready.`
+              : isArchived
+                ? `Revision ${data.revision.number} is archived and view-only.`
+                : `Review revision ${data.revision.number}. Click the image to leave feedback, then approve or request changes.`}
           </p>
 
           <div className="grid gap-6 lg:grid-cols-[200px_minmax(0,1fr)_260px]">
@@ -364,8 +477,7 @@ export function ClientShareRoom({ token }: { token: string }) {
                   type="button"
                   onClick={() => {
                     setSelectedId(asset.revisionAssetId);
-                    setDraftPin(null);
-                    setCommentBody("");
+                    clearCommentDraft();
                   }}
                   className={`w-full rounded-xl px-3 py-2 text-left text-xs ${
                     selected?.revisionAssetId === asset.revisionAssetId
@@ -387,7 +499,7 @@ export function ClientShareRoom({ token }: { token: string }) {
                     rel="noreferrer"
                     className="underline"
                   >
-                    Open review URL
+                    Open Review URL
                   </a>
                 </div>
               ) : selected?.mime === "application/pdf" ? (
@@ -397,60 +509,106 @@ export function ClientShareRoom({ token }: { token: string }) {
                   className="h-[70vh] w-full rounded-2xl bg-white"
                 />
               ) : (
-                <button
-                  type="button"
-                  aria-label="Add feedback pin"
-                  className="relative block w-full overflow-hidden rounded-2xl border border-black/8 bg-[#111] text-left"
-                  onClick={(event) => {
-                    const rect = event.currentTarget.getBoundingClientRect();
-                    const x = (event.clientX - rect.left) / rect.width;
-                    const y = (event.clientY - rect.top) / rect.height;
-                    setDraftPin({ x, y });
-                    setConfirmApprove(false);
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.key !== "Enter" && event.key !== " ") return;
-                    event.preventDefault();
-                    setDraftPin({ x: 0.5, y: 0.5 });
-                    setConfirmApprove(false);
-                  }}
-                >
-                  { }
-                  <img
-                    src={selected?.url || ""}
-                    alt={selected?.label || "Review asset"}
-                    className="w-full"
-                  />
-                  {pins.map((pin, index) => (
-                    <span
-                      key={pin.id}
-                      className="absolute flex size-6 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-[#c2410c] text-[10px] font-bold text-white"
-                      style={{
-                        left: `${Number(pin.xPercent) * 100}%`,
-                        top: `${Number(pin.yPercent) * 100}%`,
+                <div className="relative overflow-hidden rounded-2xl border border-black/8 bg-[#111]">
+                  {canComment ? (
+                    <button
+                      type="button"
+                      aria-label="Add Feedback Pin"
+                      className="block w-full text-left"
+                      onClick={(event) => {
+                        const rect = event.currentTarget.getBoundingClientRect();
+                        const x = (event.clientX - rect.left) / rect.width;
+                        const y = (event.clientY - rect.top) / rect.height;
+                        setEditingCommentId(null);
+                        setDraftPin({ x, y });
+                        setCommentBody("");
+                        setConfirmApprove(false);
                       }}
-                      title={pin.body}
+                      onKeyDown={(event) => {
+                        if (event.key !== "Enter" && event.key !== " ") return;
+                        event.preventDefault();
+                        setEditingCommentId(null);
+                        setDraftPin({ x: 0.5, y: 0.5 });
+                        setCommentBody("");
+                        setConfirmApprove(false);
+                      }}
                     >
-                      {index + 1}
-                    </span>
-                  ))}
+                      <img
+                        src={selected?.url || ""}
+                        alt={selected?.label || "Review asset"}
+                        className="w-full"
+                      />
+                    </button>
+                  ) : (
+                    <img
+                      src={selected?.url || ""}
+                      alt={selected?.label || "Review asset"}
+                      className="block w-full"
+                    />
+                  )}
+                  {pins.map((pin, index) => {
+                    const canEdit =
+                      canComment &&
+                      Boolean(reviewerId) &&
+                      pin.reviewerId === reviewerId &&
+                      pin.status === "OPEN";
+                    const isSelected = pin.id === editingCommentId;
+                    const pinClass = `absolute flex size-6 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full text-[10px] font-bold ${
+                      isSelected
+                        ? "bg-white text-black ring-2 ring-[#c2410c]"
+                        : "bg-[#c2410c] text-white"
+                    }`;
+                    const pinStyle = {
+                      left: `${Number(pin.xPercent) * 100}%`,
+                      top: `${Number(pin.yPercent) * 100}%`,
+                    } as const;
+                    if (!canEdit) {
+                      return (
+                        <span
+                          key={pin.id}
+                          className={`${pinClass} pointer-events-none`}
+                          style={pinStyle}
+                          title={pin.body}
+                        >
+                          {index + 1}
+                        </span>
+                      );
+                    }
+                    return (
+                      <button
+                        key={pin.id}
+                        type="button"
+                        aria-label={`Edit comment ${index + 1}`}
+                        className={pinClass}
+                        style={pinStyle}
+                        title={pin.body}
+                        onClick={() => beginEditComment(pin)}
+                      >
+                        {index + 1}
+                      </button>
+                    );
+                  })}
                   {draftPin ? (
                     <span
-                      className="absolute flex size-6 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-white text-[10px] font-bold text-black"
+                      className="pointer-events-none absolute flex size-6 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-white text-[10px] font-bold text-black"
                       style={{ left: `${draftPin.x * 100}%`, top: `${draftPin.y * 100}%` }}
                     >
                       +
                     </span>
                   ) : null}
-                  {!draftPin && pins.length === 0 ? (
+                  {!draftPin && !editingCommentId && pins.length === 0 && canComment ? (
                     <span className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 to-transparent px-4 py-5 text-center text-xs font-medium text-white/90">
                       Click anywhere on the design to leave feedback
                     </span>
                   ) : null}
-                </button>
+                </div>
               )}
               <p className="mt-3 text-xs text-black/40">
-                Click the image to drop a pin. Keyboard: focus the image and press Enter to pin at center.
+                {canComment
+                  ? "Click the image to drop a pin. Keyboard: focus the image and press Enter to pin at center."
+                  : isApproved
+                    ? "Feedback is locked on this approved revision."
+                    : "This room is archived and view-only."}
               </p>
             </section>
 
@@ -467,7 +625,7 @@ export function ClientShareRoom({ token }: { token: string }) {
                 <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-black/35">
                   <MessageSquare className="size-3.5" /> Feedback
                 </div>
-                {draftPin ? (
+                {canComment && draftPin ? (
                   <div className="mt-3 space-y-2">
                     <p className="text-xs text-black/50">Pin placed — describe what should change.</p>
                     <textarea
@@ -485,14 +643,40 @@ export function ClientShareRoom({ token }: { token: string }) {
                         onClick={submitComment}
                         className="flex-1 rounded-xl bg-[#1c1917] px-3 py-2 text-[11px] font-semibold text-white disabled:opacity-60"
                       >
-                        {busy ? "Submitting…" : "Submit comment"}
+                        {busy ? "Submitting…" : "Submit Comment"}
                       </button>
                       <button
                         type="button"
-                        onClick={() => {
-                          setDraftPin(null);
-                          setCommentBody("");
-                        }}
+                        onClick={clearCommentDraft}
+                        className="rounded-xl px-3 py-2 text-[11px] font-semibold text-black/45"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : canComment && editingComment ? (
+                  <div className="mt-3 space-y-2">
+                    <p className="text-xs text-black/50">Editing your comment — update the text below.</p>
+                    <textarea
+                      ref={commentRef}
+                      value={commentBody}
+                      onChange={(e) => setCommentBody(e.target.value)}
+                      rows={3}
+                      placeholder="What should change?"
+                      className="w-full rounded-xl border border-black/10 px-3 py-2 text-sm outline-none focus:border-black/30"
+                    />
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        disabled={busy || !commentBody.trim() || commentBody.trim() === editingComment.body}
+                        onClick={saveEditedComment}
+                        className="flex-1 rounded-xl bg-[#1c1917] px-3 py-2 text-[11px] font-semibold text-white disabled:opacity-60"
+                      >
+                        {busy ? "Saving…" : "Save Changes"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={clearCommentDraft}
                         className="rounded-xl px-3 py-2 text-[11px] font-semibold text-black/45"
                       >
                         Cancel
@@ -500,29 +684,78 @@ export function ClientShareRoom({ token }: { token: string }) {
                     </div>
                   </div>
                 ) : (
-                  <p className="mt-2 text-xs text-black/45">Click anywhere on the design to place a pin.</p>
+                  <p className="mt-2 text-xs text-black/45">
+                    {canComment
+                      ? "Click the design to place a pin, or select one of your comments to edit it."
+                      : isApproved
+                        ? "Feedback on this revision is locked."
+                        : "This room is archived and view-only."}
+                  </p>
                 )}
                 <ul className="mt-4 max-h-48 space-y-2 overflow-auto">
                   {pins.length === 0 ? (
                     <li className="text-xs text-black/35">No comments on this asset yet.</li>
                   ) : (
-                    pins.map((pin) => (
-                      <li key={pin.id} className="rounded-xl bg-[#f5f2ec] px-3 py-2 text-xs text-black/70">
-                        {pin.body}
-                      </li>
-                    ))
+                    pins.map((pin, index) => {
+                      const canEdit =
+                        canComment &&
+                        Boolean(reviewerId) &&
+                        pin.reviewerId === reviewerId &&
+                        pin.status === "OPEN";
+                      const isSelected = pin.id === editingCommentId;
+                      return (
+                        <li key={pin.id}>
+                          <button
+                            type="button"
+                            disabled={!canEdit}
+                            onClick={() => beginEditComment(pin)}
+                            className={`flex w-full gap-2.5 rounded-xl px-3 py-2 text-left text-xs text-black/70 transition ${
+                              isSelected
+                                ? "bg-[#1c1917] text-white"
+                                : canEdit
+                                  ? "bg-[#f5f2ec] hover:bg-[#ebe6dc]"
+                                  : "cursor-default bg-[#f5f2ec]"
+                            }`}
+                          >
+                            <span
+                              className={`flex size-5 shrink-0 items-center justify-center rounded-full text-[10px] font-bold ${
+                                isSelected
+                                  ? "bg-white text-[#c2410c]"
+                                  : "bg-[#c2410c] text-white"
+                              }`}
+                            >
+                              {index + 1}
+                            </span>
+                            <span className="min-w-0 pt-0.5">
+                              {pin.body}
+                              {canEdit && !isSelected ? (
+                                <span className="mt-1 block text-[10px] font-medium text-black/35">
+                                  Tap to edit
+                                </span>
+                              ) : null}
+                            </span>
+                          </button>
+                        </li>
+                      );
+                    })
                   )}
                 </ul>
               </div>
 
-              {!draftPin ? (
+              {!isComposing ? (
                 <>
                   {isApproved ? (
-                    <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900">
-                      <p className="font-semibold">This revision is approved.</p>
-                      <p className="mt-1 text-xs leading-5 text-emerald-800/80">
-                        Thanks — no further action needed on the review.
-                      </p>
+                    <div className="space-y-3">
+                      {data.approvalReceipt ? (
+                        <ApprovalReceipt receipt={data.approvalReceipt} />
+                      ) : (
+                        <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900">
+                          <p className="font-semibold">This revision is approved.</p>
+                          <p className="mt-1 text-xs leading-5 text-emerald-800/80">
+                            Feedback is locked on this frozen revision.
+                          </p>
+                        </div>
+                      )}
                     </div>
                   ) : isChangesRequested ? (
                     <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950">
@@ -549,7 +782,7 @@ export function ClientShareRoom({ token }: { token: string }) {
                             onClick={() => decide("request_changes")}
                             className="w-full rounded-xl border border-black/10 px-3 py-2 text-[11px] font-semibold"
                           >
-                            Request changes
+                            Request Changes
                           </button>
                           <button
                             type="button"
@@ -557,7 +790,7 @@ export function ClientShareRoom({ token }: { token: string }) {
                             onClick={() => decide("approve", false)}
                             className="w-full rounded-xl bg-[#1c1917] px-3 py-2 text-[11px] font-semibold text-white"
                           >
-                            Approve this revision
+                            Approve This Revision
                           </button>
                         </div>
                       ) : (
@@ -572,7 +805,7 @@ export function ClientShareRoom({ token }: { token: string }) {
                             onClick={() => decide("approve", true)}
                             className="w-full rounded-xl bg-emerald-700 px-3 py-2 text-[11px] font-semibold text-white"
                           >
-                            Confirm approval
+                            Confirm Approval
                           </button>
                           <button
                             type="button"
@@ -591,31 +824,56 @@ export function ClientShareRoom({ token }: { token: string }) {
               {isApproved ? (
                 <div className="rounded-2xl border border-black/8 bg-white p-4">
                   <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-black/35">
-                    <Package className="size-3.5" /> Delivery
+                    <Package className="size-3.5" /> Final deliverables
                   </div>
                   {handoffReleased && handoff.length > 0 ? (
-                    <ul className="mt-3 space-y-2">
-                      {handoff.map((item) => (
-                        <li key={item.id} className="rounded-xl bg-[#f5f2ec] px-3 py-2 text-xs">
-                          <p className="font-semibold text-black/80">{item.label}</p>
-                          {item.notes ? <p className="mt-1 text-black/50">{item.notes}</p> : null}
-                          {item.externalUrl ? (
-                            <a
-                              href={item.externalUrl}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="mt-1 inline-block font-semibold text-black/70 underline"
-                            >
-                              Open link
-                            </a>
-                          ) : null}
-                        </li>
-                      ))}
-                    </ul>
+                    <>
+                      <p className="mt-2 text-xs leading-5 text-black/50">
+                        Your approval is recorded. Final files are available from this same link.
+                      </p>
+                      <ul className="mt-3 space-y-2">
+                        {handoff.map((item) => (
+                          <li key={item.id} className="rounded-xl bg-[#f5f2ec] px-3 py-2.5 text-xs">
+                            <div className="flex items-start justify-between gap-2">
+                              <p className="font-semibold text-black/80">{item.label}</p>
+                              <span className="shrink-0 rounded-md bg-black/5 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.1em] text-black/40">
+                                {item.category}
+                              </span>
+                            </div>
+                            {item.notes ? <p className="mt-1 text-black/50">{item.notes}</p> : null}
+                            <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1">
+                              {item.externalUrl ? (
+                                <a
+                                  href={item.externalUrl}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="inline-flex items-center gap-1 font-semibold text-[#6354d4] underline"
+                                >
+                                  <ExternalLink className="size-3" />
+                                  Open Link
+                                </a>
+                              ) : null}
+                              {item.downloadUrl ? (
+                                <a
+                                  href={item.downloadUrl}
+                                  className="inline-block font-semibold text-[#6354d4] underline"
+                                >
+                                  Download File
+                                </a>
+                              ) : null}
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    </>
                   ) : (
-                    <p className="mt-2 text-xs leading-5 text-black/45">
-                      Your agency is preparing final files. Check back on this link when they&apos;re ready.
-                    </p>
+                    <div className="mt-3 rounded-xl border border-dashed border-black/10 bg-[#faf8ff] px-3 py-3">
+                      <p className="text-xs font-semibold text-black/70">Approval recorded</p>
+                      <p className="mt-1 text-xs leading-5 text-black/45">
+                        Final files are being prepared. Keep this link—deliverables will appear here
+                        when they are released.
+                      </p>
+                    </div>
                   )}
                 </div>
               ) : null}

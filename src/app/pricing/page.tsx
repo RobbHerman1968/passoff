@@ -181,7 +181,7 @@ export default function PricingPage() {
               href="/login?mode=signup"
               className="inline-flex h-12 shrink-0 items-center gap-2 self-start rounded-xl bg-[var(--brand)] px-5 text-sm font-semibold text-white transition hover:-translate-y-0.5 hover:bg-[var(--brand-strong)]"
             >
-              Start free trial
+              Start Free Trial
               <ArrowRight className="size-4" />
             </Link>
           </div>

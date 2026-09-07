@@ -31,8 +31,8 @@ type RailTab = "inspect" | "comments" | "ask" | "assets" | "behavior";
 
 const viewItems: { id: View; label: string; icon: typeof Play }[] = [
   { id: "prototype", label: "Prototype", icon: Play },
-  { id: "map", label: "Process map", icon: GitBranch },
-  { id: "spec", label: "Screen spec", icon: Layers3 },
+  { id: "map", label: "Process Map", icon: GitBranch },
+  { id: "spec", label: "Screen Spec", icon: Layers3 },
   { id: "contract", label: "Contract", icon: Code2 },
 ];
 
@@ -205,7 +205,7 @@ export function HandoffWorkspace({
         >
           <ExternalLink className="size-3.5" />Figma
         </a>
-        <button type="button" onClick={onClose} aria-label="Close handoff" className="flex size-9 items-center justify-center rounded-xl border border-black/10 bg-white text-black/55">
+        <button type="button" onClick={onClose} aria-label="Close Handoff" className="flex size-9 items-center justify-center rounded-xl border border-black/10 bg-white text-black/55">
           <X className="size-4" />
         </button>
       </header>

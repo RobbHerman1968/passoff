@@ -14,6 +14,10 @@ import {
   workspaces,
 } from "@/db/schema";
 import { AuthzError, requireActiveWorkspaceMembership } from "@/lib/auth/authorization";
+import type { WorkspaceScope } from "@/lib/tenant/scope";
+
+export type { WorkspaceScope } from "@/lib/tenant/scope";
+export { allocateUniqueProjectSlug, slugifyProjectName } from "@/lib/tenant/scope";
 
 export type TenantContext = {
   organizationId: string;
@@ -24,16 +28,6 @@ export type TenantContext = {
   organizationName: string;
   workspaceName: string;
   projectName: string;
-  userName: string;
-  userEmail: string;
-};
-
-export type WorkspaceScope = {
-  organizationId: string;
-  organizationName: string;
-  workspaceId: string;
-  workspaceName: string;
-  userId: string;
   userName: string;
   userEmail: string;
 };
@@ -56,7 +50,7 @@ function defaultSlugs() {
     workspaceSlug: process.env.PASSOFF_DEFAULT_WORKSPACE_SLUG || "main",
     projectSlug: process.env.PASSOFF_DEFAULT_PROJECT_SLUG || "agent-website",
     /** Used only by plugin/service routes that authenticate without a browser session. */
-    serviceUserEmail: process.env.PASSOFF_DEFAULT_USER_EMAIL || "rob.herman@toolsbydesign.com",
+    serviceUserEmail: process.env.PASSOFF_DEFAULT_USER_EMAIL || "owner@example.com",
   };
 }
 
@@ -86,19 +80,6 @@ async function requireServiceUser() {
     throw new Error("The default Pass-Off owner has not been seeded.");
   }
   return user;
-}
-
-/** Kebab-case slug from a display name; falls back to `project` when empty. */
-export function slugifyProjectName(name: string): string {
-  const slug = name
-    .trim()
-    .toLowerCase()
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 80);
-  return slug || "project";
 }
 
 /** Accept a project UUID, slug, or `/projects/<id>` URL fragment from the plugin / dashboard. */
@@ -271,20 +252,4 @@ export async function resolveTenantContext(projectKeyInput?: unknown): Promise<T
 export async function resolveTenantFromRequest(request: Request, bodyProjectKey?: unknown): Promise<TenantContext> {
   const urlKey = new URL(request.url).searchParams.get("projectKey");
   return resolveTenantContext(bodyProjectKey ?? urlKey);
-}
-
-export async function allocateUniqueProjectSlug(workspaceId: string, name: string): Promise<string> {
-  const base = slugifyProjectName(name).slice(0, 72);
-  for (let attempt = 0; attempt < 50; attempt += 1) {
-    const candidate = attempt === 0 ? base : `${base}-${attempt + 1}`;
-    const existing = (
-      await db
-        .select({ id: projects.id })
-        .from(projects)
-        .where(and(eq(projects.workspaceId, workspaceId), eq(projects.slug, candidate)))
-        .limit(1)
-    )[0];
-    if (!existing) return candidate;
-  }
-  throw new Error("Unable to allocate a unique project slug.");
 }

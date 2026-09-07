@@ -56,14 +56,14 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
               href="/"
               className="inline-flex h-10 items-center gap-2 rounded-full bg-[color-mix(in_srgb,var(--brand)_72%,transparent)] px-4 text-sm font-semibold text-white backdrop-blur-sm transition hover:bg-[var(--brand)]"
             >
-              Back to website
+              Back to Website
               <ArrowRight className="size-4" />
             </Link>
           </div>
 
           <div className="absolute inset-x-0 bottom-0 p-8">
             <p className="max-w-sm font-[family-name:var(--font-display)] text-3xl font-semibold leading-tight tracking-[-0.04em] text-white">
-              {siteConfig.tagline}.
+              {siteConfig.tagline}
             </p>
             <p className="mt-3 max-w-sm text-sm leading-6 text-white/70">
               {siteConfig.description}
@@ -81,7 +81,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
           </Link>
 
           <h1 className="font-[family-name:var(--font-display)] text-3xl font-semibold tracking-[-0.05em] sm:text-4xl">
-            {initialMode === "signup" ? "Create an account" : "Sign in"}
+            {initialMode === "signup" ? "Create an Account" : "Sign In"}
           </h1>
           <p className="mt-3 text-sm leading-6 text-white/55">
             {initialMode === "signup" ? (
@@ -101,7 +101,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
                   href={`/login?mode=signup&callbackUrl=${encodeURIComponent(callbackUrl)}`}
                   className="font-semibold text-[var(--brand)] transition hover:text-[var(--brand-glow)]"
                 >
-                  Create an account
+                  Create an Account
                 </Link>
               </>
             )}

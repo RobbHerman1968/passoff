@@ -115,7 +115,7 @@ export function PricingPlans() {
                   )}
                   {comingLater && (
                     <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[color-mix(in_srgb,var(--brand-deep)_45%,transparent)]">
-                      Coming later
+                      Coming Later
                     </span>
                   )}
                 </div>
@@ -154,7 +154,7 @@ export function PricingPlans() {
               <div className="lg:pt-1">
                 {comingLater ? (
                   <span className="inline-flex h-11 items-center rounded-xl border border-[color-mix(in_srgb,var(--brand-ink)_16%,transparent)] px-4 text-sm font-semibold text-[color-mix(in_srgb,var(--brand-deep)_45%,transparent)]">
-                    Coming later
+                    Coming Later
                   </span>
                 ) : plan.id === "trial" ? (
                   <Link

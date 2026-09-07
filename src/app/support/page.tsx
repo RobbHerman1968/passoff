@@ -40,7 +40,7 @@ export default function SupportPage() {
             <p>
               Looking for plans?{" "}
               <Link href="/pricing" className="font-semibold text-[var(--brand-ink)] hover:underline">
-                View pricing
+                View Pricing
               </Link>
               .
             </p>
@@ -50,7 +50,7 @@ export default function SupportPage() {
                 href="/login?mode=signup"
                 className="font-semibold text-[var(--brand-ink)] hover:underline"
               >
-                Start free trial
+                Start Free Trial
               </Link>
               .
             </p>

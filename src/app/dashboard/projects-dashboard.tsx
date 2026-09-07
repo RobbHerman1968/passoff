@@ -120,7 +120,7 @@ export function ProjectsDashboard({ projects: initialProjects }: ProjectsDashboa
           className="inline-flex items-center gap-2 rounded-xl bg-[#6354d4] px-4 py-2.5 text-[10px] font-semibold text-[#e4dffc] transition hover:bg-[#5b4cc4]"
         >
           <Plus className="size-3.5" />
-          Create project
+          Create Project
         </button>
       </div>
 
@@ -139,7 +139,7 @@ export function ProjectsDashboard({ projects: initialProjects }: ProjectsDashboa
               <Plus className="size-5" />
             </div>
             <div>
-              <p className="text-sm font-semibold tracking-[-0.02em]">Create your first project</p>
+              <p className="text-sm font-semibold tracking-[-0.02em]">Create Your First Project</p>
               <p className="mt-1 text-xs text-black/40">Projects hold Figma files and handoffs.</p>
             </div>
           </button>
@@ -204,7 +204,7 @@ export function ProjectsDashboard({ projects: initialProjects }: ProjectsDashboa
                 </div>
                 <div>
                   <h2 id={createTitleId} className="text-lg font-semibold">
-                    Create project
+                    Create Project
                   </h2>
                   <p className="mt-1 text-xs leading-5 text-white/45">
                     Add a project to this workspace for Figma files and handoffs.
@@ -257,7 +257,7 @@ export function ProjectsDashboard({ projects: initialProjects }: ProjectsDashboa
                   className="flex items-center gap-2 rounded-xl bg-[#6354d4] px-4 py-2.5 text-[10px] font-semibold text-[#e4dffc] disabled:opacity-40"
                 >
                   {busy ? <LoaderCircle className="size-3.5 animate-spin" /> : <Plus className="size-3.5" />}
-                  Create project
+                  Create Project
                 </button>
               </div>
             </form>
@@ -279,7 +279,7 @@ export function ProjectsDashboard({ projects: initialProjects }: ProjectsDashboa
             <AlertDialogMedia className="bg-[#fff1eb] text-[#a14428]">
               <Trash2 />
             </AlertDialogMedia>
-            <AlertDialogTitle>Delete project?</AlertDialogTitle>
+            <AlertDialogTitle>Delete Project?</AlertDialogTitle>
             <AlertDialogDescription>
               {deleteTarget
                 ? `This permanently deletes “${deleteTarget.name}” and all of its Figma files, designs, and previews. This cannot be undone.`
@@ -301,7 +301,7 @@ export function ProjectsDashboard({ projects: initialProjects }: ProjectsDashboa
               }}
             >
               {busy ? <LoaderCircle className="size-3.5 animate-spin" /> : null}
-              Delete project
+              Delete Project
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

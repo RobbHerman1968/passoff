@@ -31,8 +31,20 @@ cp .env.example .env
 npm install
 npm run db:migrate
 npm run db:seed-owner   # optional — seeded owner workspace for prototypes
+npm run db:seed-demo    # optional — fictional Harbor & Co. Webflow closeout demo (dev/staging)
 npm run dev
 ```
+
+### Fictional demo room (development / staging)
+
+`npm run db:seed-demo` creates an idempotent **Harbor & Co. Website** approval room in the seeded owner workspace:
+
+- Revision 1 with visual comments and a request-changes decision
+- Revision 2 approved with a realistic approval record
+- Released handoff (PDF, ZIP, image fixtures, staging URL, notes)
+- Audit events matching the real workflow
+
+The script prints `ownerRoomUrl` and `clientShareUrl`. It **refuses production** unless `PASSOFF_ALLOW_DEMO_SEED=1`. Re-running replaces the previous demo for the same slug (`PASSOFF_DEMO_PROJECT_SLUG`, default `harbor-website-demo`).
 
 Without `BLOB_READ_WRITE_TOKEN`, local development uses the filesystem adapter under `.data/`. Production **never** falls back to local storage.
 

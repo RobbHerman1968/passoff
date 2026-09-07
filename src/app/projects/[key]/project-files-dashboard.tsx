@@ -603,11 +603,11 @@ export function ProjectFilesDashboard({
   }
 
   const modalTitle = modalMode === "choose"
-    ? "Add a project file"
+    ? "Add a Project File"
     : modalMode === "import"
       ? "Import a Figma design"
       : modalMode === "upload"
-        ? "Import images"
+        ? "Import Images"
         : "Create a blank file";
   const modalDescription = modalMode === "choose"
     ? "Bring in a Figma file, upload screen images, or start from scratch."
@@ -629,7 +629,7 @@ export function ProjectFilesDashboard({
   return (
     <main className="min-h-screen bg-[#f3f0ff] text-[#17221f]">
       <header className="sticky top-0 z-40 border-b border-[#a594f5]/25 bg-[#faf8ff]/95 backdrop-blur-md">
-        <div className="mx-auto flex h-16 max-w-7xl items-center justify-between gap-3 px-5 lg:px-8">
+        <div className="flex h-16 items-center justify-between gap-3 px-4 lg:px-5">
           <Link href="/dashboard" className="flex items-center gap-2.5 text-lg font-semibold tracking-[-0.04em]">
             <BrandMark size={28} />
             Pass-Off
@@ -644,7 +644,7 @@ export function ProjectFilesDashboard({
                   className="flex items-center gap-2 rounded-xl border border-[#e6a44c]/40 bg-white px-3 py-2 text-[10px] font-semibold text-[#a14428] disabled:opacity-40"
                 >
                   <Trash2 className="size-3.5" />
-                  <span className="hidden sm:inline">Delete selected</span>
+                  <span className="hidden sm:inline">Delete Selected</span>
                   <span>({selectedDesigns.length})</span>
                 </button>
                 <button
@@ -655,7 +655,7 @@ export function ProjectFilesDashboard({
                   className="flex items-center gap-2 rounded-xl bg-[#6354d4] px-3 py-2 text-[10px] font-semibold text-[#e4dffc] disabled:opacity-40"
                 >
                   <Layers2 className="size-3.5" />
-                  <span className="hidden sm:inline">Combine breakpoints</span>
+                  <span className="hidden sm:inline">Combine Breakpoints</span>
                   <span>({selectedBreakpoints.length})</span>
                 </button>
                 <button
@@ -699,11 +699,11 @@ export function ProjectFilesDashboard({
                 onClick={() => setDeleteAllOpen(true)}
                 className="flex items-center gap-2 rounded-xl border border-[#e6a44c]/40 bg-white px-3 py-2 text-[10px] font-semibold text-[#a14428] disabled:opacity-40"
               >
-                <Trash2 className="size-3.5" />Delete all
+                <Trash2 className="size-3.5" />Delete All
               </button>
             )}
             <button type="button" onClick={openModal} className="flex items-center gap-2 rounded-xl bg-[#6354d4] px-4 py-2 text-[10px] font-semibold text-[#e4dffc]">
-              <Plus className="size-3.5" />Add file
+              <Plus className="size-3.5" />Add File
             </button>
           </div>
         </div>
@@ -734,7 +734,7 @@ export function ProjectFilesDashboard({
               {query && (
                 <button
                   type="button"
-                  aria-label="Clear filter"
+                  aria-label="Clear Filter"
                   onClick={() => setQuery("")}
                   className="absolute right-2 top-1/2 flex size-6 -translate-y-1/2 items-center justify-center rounded-md text-black/35 transition hover:bg-black/[0.05] hover:text-black/60"
                 >
@@ -775,8 +775,8 @@ export function ProjectFilesDashboard({
                     const ids = designScreenIds(design);
                     return ids.length > 0 && ids.every((id) => selected.has(id));
                   })
-                    ? "Deselect shown"
-                    : "Select shown"}
+                    ? "Deselect Shown"
+                    : "Select Shown"}
                 </button>
               )}
             </div>
@@ -792,7 +792,7 @@ export function ProjectFilesDashboard({
               <p className="mt-4 text-sm font-semibold text-black/55">No files yet</p>
               <p className="mt-1 text-xs text-black/35">Import from Figma to add designs to this project.</p>
               <button type="button" onClick={openModal} className="mt-5 inline-flex items-center gap-2 rounded-xl bg-[#6354d4] px-4 py-2.5 text-[10px] font-semibold text-[#e4dffc]">
-                <Plus className="size-3.5" />Add file
+                <Plus className="size-3.5" />Add File
               </button>
             </div>
           ) : !filteredDesigns.length ? (
@@ -805,7 +805,7 @@ export function ProjectFilesDashboard({
                 onClick={() => { setQuery(""); setFilter("all"); }}
                 className="mt-5 inline-flex items-center gap-2 rounded-xl border border-black/10 bg-white px-4 py-2.5 text-[10px] font-semibold text-black/55"
               >
-                Clear filters
+                Clear Filters
               </button>
             </div>
           ) : (
@@ -826,7 +826,7 @@ export function ProjectFilesDashboard({
                       href={projectFilePath(projectKey, group.fileKey)}
                       className="inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-black/8 bg-white px-3 py-2 text-[10px] font-semibold text-black/50 transition hover:border-[#a594f5]/50 hover:text-[#6354d4]"
                     >
-                      Open file <ArrowRight className="size-3.5" />
+                      Open File <ArrowRight className="size-3.5" />
                     </Link>
                   </div>
                   <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
@@ -852,7 +852,7 @@ export function ProjectFilesDashboard({
         <div
           role="dialog"
           aria-modal="true"
-          aria-label="Combine breakpoints"
+          aria-label="Combine Breakpoints"
           className="fixed inset-0 z-50 flex items-center justify-center bg-[#0c1412]/75 p-4 backdrop-blur-sm"
           onClick={() => { if (!busy) setCombineOpen(false); }}
         >
@@ -961,7 +961,7 @@ export function ProjectFilesDashboard({
                     className="rounded-2xl border border-white/10 bg-white/5 p-4 text-left transition hover:border-[#a594f5]/40 hover:bg-white/8"
                   >
                     <ImagePlus className="size-4 text-[#a594f5]" />
-                    <p className="mt-3 text-sm font-semibold">Import images</p>
+                    <p className="mt-3 text-sm font-semibold">Import Images</p>
                     <p className="mt-1 text-[10px] leading-4 text-white/45">Upload screenshots or exports when you don’t have a Figma file.</p>
                   </button>
                   <button
@@ -1026,7 +1026,7 @@ export function ProjectFilesDashboard({
                       <button type="button" disabled={busy} onClick={() => setModalMode("choose")} className="rounded-xl border border-white/10 px-4 py-2.5 text-[10px] font-semibold text-white/55 disabled:opacity-40">Back</button>
                       <button type="submit" disabled={busy || !fileUrl.trim()} className="flex items-center gap-2 rounded-xl bg-[#6354d4] px-4 py-2.5 text-[10px] font-semibold text-[#e4dffc] disabled:opacity-40">
                         {busy ? <LoaderCircle className="size-3.5 animate-spin" /> : <Plus className="size-3.5" />}
-                        Import file
+                        Import File
                       </button>
                     </div>
                   </form>
@@ -1051,7 +1051,7 @@ export function ProjectFilesDashboard({
                     <button type="button" disabled={busy} onClick={() => setModalMode("choose")} className="rounded-xl border border-white/10 px-4 py-2.5 text-[10px] font-semibold text-white/55 disabled:opacity-40">Back</button>
                     <button type="submit" disabled={busy || !createName.trim()} className="flex items-center gap-2 rounded-xl bg-[#6354d4] px-4 py-2.5 text-[10px] font-semibold text-[#e4dffc] disabled:opacity-40">
                       {busy ? <LoaderCircle className="size-3.5 animate-spin" /> : <Plus className="size-3.5" />}
-                      Create file
+                      Create File
                     </button>
                   </div>
                 </form>
@@ -1093,7 +1093,7 @@ export function ProjectFilesDashboard({
                     <button type="button" disabled={busy} onClick={() => setModalMode("choose")} className="rounded-xl border border-white/10 px-4 py-2.5 text-[10px] font-semibold text-white/55 disabled:opacity-40">Back</button>
                     <button type="submit" disabled={busy || !uploadFiles.length} className="flex items-center gap-2 rounded-xl bg-[#6354d4] px-4 py-2.5 text-[10px] font-semibold text-[#e4dffc] disabled:opacity-40">
                       {busy ? <LoaderCircle className="size-3.5 animate-spin" /> : <Upload className="size-3.5" />}
-                      Import images
+                      Import Images
                     </button>
                   </div>
                 </form>
@@ -1126,7 +1126,7 @@ export function ProjectFilesDashboard({
               onClick={() => { void deleteSelectedDesigns(); }}
             >
               {busy ? <LoaderCircle className="size-3.5 animate-spin" /> : null}
-              Delete selected
+              Delete Selected
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -1180,7 +1180,7 @@ export function ProjectFilesDashboard({
             <AlertDialogMedia className="bg-[#fff1eb] text-[#a14428]">
               <Trash2 />
             </AlertDialogMedia>
-            <AlertDialogTitle>Delete all project files?</AlertDialogTitle>
+            <AlertDialogTitle>Delete All project files?</AlertDialogTitle>
             <AlertDialogDescription>
               {`This removes ${Math.max(imports.length, fileCount)} file${Math.max(imports.length, fileCount) === 1 ? "" : "s"} and ${designs.length} design${designs.length === 1 ? "" : "s"} from this project, including breakpoint groups and previews. This cannot be undone.`}
             </AlertDialogDescription>
@@ -1193,7 +1193,7 @@ export function ProjectFilesDashboard({
               onClick={() => { void deleteAllFiles(); }}
             >
               {busy ? <LoaderCircle className="size-3.5 animate-spin" /> : null}
-              Delete all
+              Delete All
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

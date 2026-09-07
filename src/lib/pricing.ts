@@ -35,7 +35,7 @@ export const pricingPlans: PricingPlan[] = [
       "Unlimited client reviewers",
       "Immutable revision approval records",
     ],
-    cta: { label: "Start free trial", href: "/login?mode=signup" },
+    cta: { label: "Start Free Trial", href: "/login?mode=signup" },
   },
   {
     id: "solo",
@@ -66,7 +66,7 @@ export const pricingPlans: PricingPlan[] = [
       "Extended room capacity (coming later)",
       "Fuller branding options (coming later)",
     ],
-    cta: { label: "Coming later", href: "/pricing" },
+    cta: { label: "Coming Later", href: "/pricing" },
   },
   {
     id: "agency",
@@ -81,7 +81,7 @@ export const pricingPlans: PricingPlan[] = [
       "White-label client experience (coming later)",
       "Larger team capacity (coming later)",
     ],
-    cta: { label: "Coming later", href: "/pricing" },
+    cta: { label: "Coming Later", href: "/pricing" },
   },
 ] as const;
 

@@ -30,22 +30,30 @@ import {
   assertStorageAllowance,
 } from "@/lib/rooms/entitlements";
 import { enqueueOutbox } from "@/lib/rooms/outbox";
+import { logWarn } from "@/lib/logging";
 import {
   ALLOWED_UPLOAD_MIME_TYPES,
+  ALLOWED_HANDOFF_MIME_TYPES,
   MAX_UPLOAD_BYTES,
   assetPublicUrl,
+  buildHandoffObjectPath,
   buildTenantObjectPath,
   checksumSha256,
   deleteAssetBytes,
   getStorageAdapter,
   writeAssetBytes,
 } from "@/lib/rooms/storage";
+import {
+  serializeApprovalReceipt,
+  type ApprovalReceiptSource,
+  type ApprovalReceiptView,
+} from "@/lib/rooms/approval-receipt";
 import { DEFAULT_APPROVAL_STATEMENT } from "@/lib/rooms/types";
 import { getSiteUrl } from "@/lib/site";
 import {
   allocateUniqueProjectSlug,
   type WorkspaceScope,
-} from "@/lib/tenant/context";
+} from "@/lib/tenant/scope";
 
 const ACTIVE_ROOM_STATUSES = ["DRAFT", "SENT", "VIEWED", "CHANGES_REQUESTED", "APPROVED"] as const;
 
@@ -194,11 +202,9 @@ export async function getRoomBundle(workspaceId: string, projectId: string) {
         .orderBy(asc(roomComments.createdAt))
     : [];
 
-  const approvalRows = await db
-    .select()
-    .from(approvals)
-    .where(eq(approvals.projectId, projectId))
-    .orderBy(desc(approvals.approvedAt));
+  const approvalReceipts = await listApprovalReceiptsForProject(projectId, {
+    includeReviewerEmail: true,
+  });
 
   const handoff = await db
     .select()
@@ -229,9 +235,80 @@ export async function getRoomBundle(workspaceId: string, projectId: string) {
         }
       : null,
     comments,
-    approvals: approvalRows,
+    approvals: approvalReceipts,
     handoff,
   };
+}
+
+/** Build approval receipt views from existing approval/revision/reviewer/asset rows. */
+export async function listApprovalReceiptsForProject(
+  projectId: string,
+  options?: { includeReviewerEmail?: boolean; decision?: "approved" | "changes_requested" },
+): Promise<ApprovalReceiptView[]> {
+  const project = (
+    await db.select().from(projects).where(eq(projects.id, projectId)).limit(1)
+  )[0];
+  if (!project) return [];
+
+  const approvalConditions = [eq(approvals.projectId, projectId)];
+  if (options?.decision) {
+    approvalConditions.push(eq(approvals.decision, options.decision));
+  }
+
+  const rows = await db
+    .select({
+      approval: approvals,
+      reviewerName: reviewers.name,
+      reviewerEmail: reviewers.email,
+      revisionNumber: revisions.number,
+      revisionId: revisions.id,
+    })
+    .from(approvals)
+    .innerJoin(reviewers, eq(approvals.reviewerId, reviewers.id))
+    .innerJoin(revisions, eq(approvals.revisionId, revisions.id))
+    .where(and(...approvalConditions))
+    .orderBy(desc(approvals.approvedAt));
+
+  const revisionIds = [...new Set(rows.map((row) => row.revisionId))];
+  const assetsByRevision = new Map<string, string[]>();
+  if (revisionIds.length > 0) {
+    const assetRows = await db
+      .select({
+        revisionId: revisionAssets.revisionId,
+        label: assets.label,
+        sortOrder: revisionAssets.sortOrder,
+      })
+      .from(revisionAssets)
+      .innerJoin(assets, eq(revisionAssets.assetId, assets.id))
+      .where(inArray(revisionAssets.revisionId, revisionIds))
+      .orderBy(asc(revisionAssets.sortOrder));
+    for (const row of assetRows) {
+      const list = assetsByRevision.get(row.revisionId) || [];
+      list.push(row.label);
+      assetsByRevision.set(row.revisionId, list);
+    }
+  }
+
+  return rows.map((row) => {
+    const source: ApprovalReceiptSource = {
+      id: row.approval.id,
+      decision: row.approval.decision,
+      acceptanceStatement: row.approval.acceptanceStatement,
+      contentDigest: row.approval.contentDigest,
+      approvedAt: row.approval.approvedAt,
+      supersededAt: row.approval.supersededAt,
+      projectName: project.name,
+      clientName: project.clientName,
+      revisionId: row.revisionId,
+      revisionNumber: row.revisionNumber,
+      reviewerName: row.reviewerName,
+      reviewerEmail: row.reviewerEmail,
+      assetNames: assetsByRevision.get(row.revisionId) || [],
+    };
+    return serializeApprovalReceipt(source, {
+      includeReviewerEmail: options?.includeReviewerEmail !== false,
+    });
+  });
 }
 
 export async function ensureDraftRevision(workspaceId: string, projectId: string) {
@@ -710,6 +787,9 @@ export async function createPublicComment(input: {
   if (!project || project.currentPublishedRevisionId !== input.revisionId) {
     throw new Error("Comments are only accepted on the current published revision.");
   }
+  if (project.status === "APPROVED" || project.status === "ARCHIVED") {
+    throw new Error("Comments are locked after approval.");
+  }
 
   const body = sanitizeCommentBody(input.body);
   if (!body) throw new Error("Comment text is required.");
@@ -770,6 +850,70 @@ export async function createPublicComment(input: {
   }
 
   return comment;
+}
+
+export async function updatePublicComment(input: {
+  workspaceId: string;
+  projectId: string;
+  revisionId: string;
+  commentId: string;
+  reviewerId: string;
+  body: string;
+}) {
+  const project = (
+    await db.select().from(projects).where(eq(projects.id, input.projectId)).limit(1)
+  )[0];
+  if (!project || project.currentPublishedRevisionId !== input.revisionId) {
+    throw new Error("Comments can only be edited on the current published revision.");
+  }
+  if (project.status === "APPROVED" || project.status === "ARCHIVED") {
+    throw new Error("Comments are locked after approval.");
+  }
+
+  const body = sanitizeCommentBody(input.body);
+  if (!body) throw new Error("Comment text is required.");
+
+  const comment = (
+    await db
+      .select()
+      .from(roomComments)
+      .where(
+        and(
+          eq(roomComments.id, input.commentId),
+          eq(roomComments.workspaceId, input.workspaceId),
+          eq(roomComments.projectId, input.projectId),
+          eq(roomComments.revisionId, input.revisionId),
+        ),
+      )
+      .limit(1)
+  )[0];
+  if (!comment) throw new Error("Comment not found.");
+  if (comment.reviewerId !== input.reviewerId) {
+    const err = new Error("You can only edit comments you left.");
+    (err as Error & { status?: number }).status = 403;
+    throw err;
+  }
+  if (comment.status !== "OPEN") {
+    throw new Error("Only open comments can be edited.");
+  }
+
+  const [updated] = await db
+    .update(roomComments)
+    .set({ body, updatedAt: new Date() })
+    .where(eq(roomComments.id, input.commentId))
+    .returning();
+
+  await writeAuditEvent({
+    workspaceId: input.workspaceId,
+    projectId: input.projectId,
+    actorType: "reviewer",
+    actorId: input.reviewerId,
+    action: "comment.updated",
+    targetType: "comment",
+    targetId: input.commentId,
+  });
+
+  return updated;
 }
 
 export async function resolveComment(scope: WorkspaceScope, commentId: string, status: "RESOLVED" | "WONT_FIX" | "OPEN") {
@@ -1093,6 +1237,23 @@ export async function reopenRoom(scope: WorkspaceScope, projectId: string) {
   });
 }
 
+/**
+ * Any handoff mutation after release clears handoffReleasedAt (option A).
+ * Clients return to “preparing” until the owner releases again.
+ */
+async function clearHandoffReleaseInTx(
+  tx: { update: typeof db.update },
+  projectId: string,
+  previouslyReleased: boolean,
+) {
+  if (!previouslyReleased) return false;
+  await tx
+    .update(projects)
+    .set({ handoffReleasedAt: null, updatedAt: new Date() })
+    .where(eq(projects.id, projectId));
+  return true;
+}
+
 export async function addHandoffItem(input: {
   scope: WorkspaceScope;
   projectId: string;
@@ -1107,36 +1268,424 @@ export async function addHandoffItem(input: {
     throw new Error("Release handoff after the client approves a revision.");
   }
 
-  const maxSort = (
+  const externalUrl = input.externalUrl?.trim() || null;
+  if (externalUrl && !/^https?:\/\//i.test(externalUrl)) {
+    throw new Error("Link must start with http:// or https://");
+  }
+
+  if (input.assetId) {
+    const asset = (
+      await db
+        .select()
+        .from(assets)
+        .where(
+          and(
+            eq(assets.id, input.assetId),
+            eq(assets.projectId, input.projectId),
+            eq(assets.workspaceId, input.scope.workspaceId),
+          ),
+        )
+        .limit(1)
+    )[0];
+    if (!asset) throw new Error("Handoff file not found.");
+  }
+
+  const category =
+    input.category ||
+    (input.assetId ? "file" : externalUrl ? "link" : "note");
+
+  const wasReleased = Boolean(project.handoffReleasedAt);
+
+  return db.transaction(async (tx) => {
+    const releaseCleared = await clearHandoffReleaseInTx(tx, input.projectId, wasReleased);
+
+    const maxSort = (
+      await tx
+        .select({ value: sql<number>`coalesce(max(${handoffItems.sortOrder}), -1)` })
+        .from(handoffItems)
+        .where(eq(handoffItems.projectId, input.projectId))
+    )[0]?.value;
+
+    const [item] = await tx
+      .insert(handoffItems)
+      .values({
+        workspaceId: input.scope.workspaceId,
+        projectId: input.projectId,
+        label: input.label.trim().slice(0, 200),
+        category: category.slice(0, 40),
+        notes: input.notes?.trim().slice(0, 4000) || null,
+        externalUrl,
+        assetId: input.assetId || null,
+        sortOrder: (maxSort ?? -1) + 1,
+        createdByUserId: input.scope.userId,
+      })
+      .returning();
+
+    await writeAuditEvent(
+      {
+        workspaceId: input.scope.workspaceId,
+        projectId: input.projectId,
+        actorType: "user",
+        actorId: input.scope.userId,
+        action: "handoff.item_added",
+        targetType: "handoff_item",
+        targetId: item.id,
+        metadata: {
+          category: item.category,
+          visibleToClient: false,
+          releaseCleared,
+        },
+      },
+      tx as unknown as typeof db,
+    );
+
+    if (releaseCleared) {
+      await writeAuditEvent(
+        {
+          workspaceId: input.scope.workspaceId,
+          projectId: input.projectId,
+          actorType: "user",
+          actorId: input.scope.userId,
+          action: "handoff.release_cleared",
+          targetType: "project",
+          targetId: input.projectId,
+          metadata: { reason: "item_added", itemId: item.id },
+        },
+        tx as unknown as typeof db,
+      );
+    }
+
+    return { item, releaseCleared };
+  });
+}
+
+/**
+ * Explicitly release prepared handoff items to the client share link.
+ * Idempotent when already released.
+ */
+export async function releaseHandoff(scope: WorkspaceScope, projectId: string) {
+  const project = await getRoomOrThrow(scope.workspaceId, projectId);
+  if (project.status !== "APPROVED" && project.status !== "ARCHIVED") {
+    throw new Error("Release handoff after the client approves a revision.");
+  }
+
+  if (project.handoffReleasedAt) {
+    return {
+      released: true as const,
+      alreadyReleased: true as const,
+      releasedAt: project.handoffReleasedAt,
+    };
+  }
+
+  const itemCount = (
     await db
-      .select({ value: sql<number>`coalesce(max(${handoffItems.sortOrder}), -1)` })
+      .select({ value: sql<number>`count(*)::int` })
       .from(handoffItems)
-      .where(eq(handoffItems.projectId, input.projectId))
+      .where(eq(handoffItems.projectId, projectId))
   )[0]?.value;
 
-  const [item] = await db
-    .insert(handoffItems)
+  if (!itemCount) {
+    throw new Error("Add at least one handoff item before releasing to the client.");
+  }
+
+  const releasedAt = new Date();
+  await db
+    .update(projects)
+    .set({ handoffReleasedAt: releasedAt, updatedAt: new Date() })
+    .where(eq(projects.id, projectId));
+
+  await writeAuditEvent({
+    workspaceId: scope.workspaceId,
+    projectId,
+    actorType: "user",
+    actorId: scope.userId,
+    action: "handoff.released",
+    targetType: "project",
+    targetId: projectId,
+    metadata: { itemCount },
+  });
+
+  return {
+    released: true as const,
+    alreadyReleased: false as const,
+    releasedAt,
+  };
+}
+
+export async function uploadHandoffFile(input: {
+  scope: WorkspaceScope;
+  projectId: string;
+  fileName: string;
+  mime: string;
+  bytes: Buffer;
+  label?: string;
+  notes?: string;
+  externalUrl?: string;
+}) {
+  const project = await getRoomOrThrow(input.scope.workspaceId, input.projectId);
+  if (project.status !== "APPROVED") {
+    throw new Error(
+      project.status === "ARCHIVED"
+        ? "Archived rooms cannot accept new handoff files."
+        : "Release handoff after the client approves a revision.",
+    );
+  }
+
+  const fileName = input.fileName.trim().slice(0, 200) || "handoff.bin";
+  const lowerName = fileName.toLowerCase();
+  let mime = input.mime.toLowerCase() || "application/octet-stream";
+  if (mime === "application/octet-stream") {
+    if (lowerName.endsWith(".pdf")) mime = "application/pdf";
+    else if (lowerName.endsWith(".zip")) mime = "application/zip";
+    else if (lowerName.endsWith(".png")) mime = "image/png";
+    else if (lowerName.endsWith(".jpg") || lowerName.endsWith(".jpeg")) mime = "image/jpeg";
+    else if (lowerName.endsWith(".webp")) mime = "image/webp";
+    else if (lowerName.endsWith(".gif")) mime = "image/gif";
+  }
+  if (!(ALLOWED_HANDOFF_MIME_TYPES as readonly string[]).includes(mime)) {
+    throw new Error("Handoff uploads support images, PDFs, and ZIP files.");
+  }
+  if (input.bytes.byteLength > MAX_UPLOAD_BYTES) {
+    throw new Error("Files must be 25 MB or smaller.");
+  }
+
+  await assertCanMutate(input.scope.organizationId);
+  await assertStorageAllowance(
+    input.scope.organizationId,
+    input.scope.workspaceId,
+    input.bytes.byteLength,
+  );
+
+  const objectKey = buildHandoffObjectPath({
+    workspaceId: input.scope.workspaceId,
+    projectId: input.projectId,
+    filename: fileName,
+  });
+  const stored = await writeAssetBytes(objectKey, input.bytes, mime);
+  const checksum = checksumSha256(input.bytes);
+  const storage = getStorageAdapter();
+  const label =
+    (input.label?.trim() || fileName.replace(/\.[^.]+$/, "") || "Delivery file").slice(0, 200);
+
+  const [asset] = await db
+    .insert(assets)
     .values({
       workspaceId: input.scope.workspaceId,
       projectId: input.projectId,
-      label: input.label.trim().slice(0, 200),
-      category: (input.category || "file").slice(0, 40),
-      notes: input.notes?.trim().slice(0, 4000) || null,
-      externalUrl: input.externalUrl?.trim() || null,
-      assetId: input.assetId || null,
-      sortOrder: (maxSort ?? -1) + 1,
-      createdByUserId: input.scope.userId,
+      kind: mime === "application/pdf" ? "pdf" : mime.includes("zip") ? "file" : "image",
+      label,
+      objectKey: stored.pathname,
+      blobUrl: stored.url ?? null,
+      storageProvider: storage.provider,
+      uploadStatus: "ready",
+      mime,
+      bytes: input.bytes.byteLength,
+      checksum,
+      uploadedByUserId: input.scope.userId,
     })
     .returning();
 
-  if (!project.handoffReleasedAt) {
-    await db
-      .update(projects)
-      .set({ handoffReleasedAt: new Date(), updatedAt: new Date() })
-      .where(eq(projects.id, input.projectId));
+  try {
+    const { item, releaseCleared } = await addHandoffItem({
+      scope: input.scope,
+      projectId: input.projectId,
+      label,
+      category: "file",
+      notes: input.notes,
+      externalUrl: input.externalUrl,
+      assetId: asset.id,
+    });
+    return { item, asset, releaseCleared };
+  } catch (error) {
+    await deleteAssetBytes(stored.url || stored.pathname).catch(() => undefined);
+    throw error;
+  }
+}
+
+/**
+ * Finalize a direct-to-Blob handoff upload after the client PUT succeeds.
+ * Creates the asset + handoff item; clears release when mutating a released handoff.
+ */
+export async function completeHandoffDirectUpload(input: {
+  scope: WorkspaceScope;
+  projectId: string;
+  pathname: string;
+  blobUrl: string;
+  contentType: string;
+  size: number;
+  fileName: string;
+  uploadSessionId: string;
+  label?: string;
+  notes?: string;
+  externalUrl?: string;
+}) {
+  const project = await getRoomOrThrow(input.scope.workspaceId, input.projectId);
+  if (project.status !== "APPROVED") {
+    throw new Error(
+      project.status === "ARCHIVED"
+        ? "Archived rooms cannot accept new handoff files."
+        : "Release handoff after the client approves a revision.",
+    );
   }
 
-  return item;
+  const expectedPrefix = `workspaces/${input.scope.workspaceId}/rooms/${input.projectId}/handoff/`;
+  if (!input.pathname.startsWith(expectedPrefix) || input.pathname.includes("..")) {
+    throw new Error("Upload path is not owned by this room.");
+  }
+  if (input.uploadSessionId !== input.pathname) {
+    throw new Error("Upload session mismatch.");
+  }
+
+  let mime = input.contentType.toLowerCase() || "application/octet-stream";
+  const lowerName = input.fileName.toLowerCase();
+  if (mime === "application/octet-stream") {
+    if (lowerName.endsWith(".pdf")) mime = "application/pdf";
+    else if (lowerName.endsWith(".zip")) mime = "application/zip";
+    else if (lowerName.endsWith(".png")) mime = "image/png";
+    else if (lowerName.endsWith(".jpg") || lowerName.endsWith(".jpeg")) mime = "image/jpeg";
+    else if (lowerName.endsWith(".webp")) mime = "image/webp";
+    else if (lowerName.endsWith(".gif")) mime = "image/gif";
+  }
+  if (!(ALLOWED_HANDOFF_MIME_TYPES as readonly string[]).includes(mime)) {
+    throw new Error("Handoff uploads support images, PDFs, and ZIP files.");
+  }
+  if (input.size <= 0 || input.size > MAX_UPLOAD_BYTES) {
+    throw new Error("Files must be between 1 byte and 25 MB.");
+  }
+
+  await assertCanMutate(input.scope.organizationId);
+  await assertStorageAllowance(input.scope.organizationId, input.scope.workspaceId, input.size);
+
+  const existing = (
+    await db
+      .select()
+      .from(assets)
+      .where(eq(assets.uploadSessionId, input.uploadSessionId))
+      .limit(1)
+  )[0];
+  if (existing) {
+    const existingItem = (
+      await db
+        .select()
+        .from(handoffItems)
+        .where(and(eq(handoffItems.assetId, existing.id), eq(handoffItems.projectId, input.projectId)))
+        .limit(1)
+    )[0];
+    return {
+      asset: existing,
+      item: existingItem ?? null,
+      releaseCleared: false,
+      idempotent: true as const,
+    };
+  }
+
+  const fileName = input.fileName.trim().slice(0, 200) || "handoff.bin";
+  const label =
+    (input.label?.trim() || fileName.replace(/\.[^.]+$/, "") || "Delivery file").slice(0, 200);
+  const storage = getStorageAdapter();
+
+  let asset: typeof assets.$inferSelect;
+  try {
+    const [created] = await db
+      .insert(assets)
+      .values({
+        workspaceId: input.scope.workspaceId,
+        projectId: input.projectId,
+        kind: mime === "application/pdf" ? "pdf" : mime.includes("zip") ? "file" : "image",
+        label,
+        objectKey: input.pathname,
+        blobUrl: input.blobUrl || null,
+        storageProvider: storage.provider,
+        uploadStatus: "ready",
+        uploadSessionId: input.uploadSessionId,
+        mime,
+        bytes: input.size,
+        uploadedByUserId: input.scope.userId,
+      })
+      .returning();
+    asset = created;
+  } catch (error) {
+    await deleteAssetBytes(input.blobUrl || input.pathname).catch(() => undefined);
+    throw error;
+  }
+
+  try {
+    const { item, releaseCleared } = await addHandoffItem({
+      scope: input.scope,
+      projectId: input.projectId,
+      label,
+      category: "file",
+      notes: input.notes,
+      externalUrl: input.externalUrl,
+      assetId: asset.id,
+    });
+    return { asset, item, releaseCleared, idempotent: false as const };
+  } catch (error) {
+    await db.delete(assets).where(eq(assets.id, asset.id)).catch(() => undefined);
+    await deleteAssetBytes(input.blobUrl || input.pathname).catch(() => undefined);
+    throw error;
+  }
+}
+
+export async function deleteHandoffItem(scope: WorkspaceScope, projectId: string, itemId: string) {
+  const project = await getRoomOrThrow(scope.workspaceId, projectId);
+  if (project.status === "ARCHIVED") {
+    throw new Error("Archived rooms cannot change handoff.");
+  }
+
+  const wasReleased = Boolean(project.handoffReleasedAt);
+
+  return db.transaction(async (tx) => {
+    const item = (
+      await tx
+        .select()
+        .from(handoffItems)
+        .where(
+          and(
+            eq(handoffItems.id, itemId),
+            eq(handoffItems.projectId, projectId),
+            eq(handoffItems.workspaceId, scope.workspaceId),
+          ),
+        )
+        .limit(1)
+    )[0];
+    if (!item) throw new Error("Handoff item not found.");
+
+    const releaseCleared = await clearHandoffReleaseInTx(tx, projectId, wasReleased);
+    await tx.delete(handoffItems).where(eq(handoffItems.id, itemId));
+
+    await writeAuditEvent(
+      {
+        workspaceId: scope.workspaceId,
+        projectId,
+        actorType: "user",
+        actorId: scope.userId,
+        action: "handoff.item_deleted",
+        targetType: "handoff_item",
+        targetId: itemId,
+        metadata: { releaseCleared },
+      },
+      tx as unknown as typeof db,
+    );
+
+    if (releaseCleared) {
+      await writeAuditEvent(
+        {
+          workspaceId: scope.workspaceId,
+          projectId,
+          actorType: "user",
+          actorId: scope.userId,
+          action: "handoff.release_cleared",
+          targetType: "project",
+          targetId: projectId,
+          metadata: { reason: "item_deleted", itemId },
+        },
+        tx as unknown as typeof db,
+      );
+    }
+
+    return { ok: true as const, releaseCleared };
+  });
 }
 
 export async function archiveRoom(scope: WorkspaceScope, projectId: string) {
@@ -1154,6 +1703,49 @@ export async function archiveRoom(scope: WorkspaceScope, projectId: string) {
     targetType: "project",
     targetId: projectId,
   });
+}
+
+/** Rename an approval room (project name and/or client name). Slug stays stable. */
+export async function updateRoom(
+  scope: WorkspaceScope,
+  projectId: string,
+  input: { name: string; clientName: string },
+) {
+  const name = input.name.trim().slice(0, 120);
+  const clientName = input.clientName.trim().slice(0, 120);
+  if (!name) throw new Error("A project name is required.");
+  if (!clientName) throw new Error("A client name is required.");
+
+  const project = await getRoomOrThrow(scope.workspaceId, projectId);
+  if (project.status === "ARCHIVED") {
+    throw new Error("Archived rooms cannot be edited.");
+  }
+
+  await assertCanMutate(scope.organizationId);
+
+  const [updated] = await db
+    .update(projects)
+    .set({ name, clientName, updatedAt: new Date() })
+    .where(eq(projects.id, projectId))
+    .returning();
+
+  await writeAuditEvent({
+    workspaceId: scope.workspaceId,
+    projectId,
+    actorType: "user",
+    actorId: scope.userId,
+    action: "project.renamed",
+    targetType: "project",
+    targetId: projectId,
+    metadata: {
+      name,
+      clientName,
+      previousName: project.name,
+      previousClientName: project.clientName,
+    },
+  });
+
+  return updated;
 }
 
 /**
@@ -1188,11 +1780,20 @@ export async function deleteRoom(scope: WorkspaceScope, projectId: string) {
 
   for (const asset of assetRows) {
     if (!asset.objectKey) continue;
-    await queueBlobDeletion({
+    await db.insert(blobDeletionJobs).values({
       workspaceId: scope.workspaceId,
       objectKey: asset.objectKey,
-      blobUrl: asset.blobUrl,
+      blobUrl: asset.blobUrl ?? null,
       reason: "room_deleted",
+    });
+  }
+
+  try {
+    await processBlobDeletionBatch(Math.max(25, assetRows.length));
+  } catch (error) {
+    logWarn("blob_deletion.flush_failed", {
+      projectId,
+      error: error instanceof Error ? error.message : "unknown",
     });
   }
 
@@ -1484,6 +2085,17 @@ export async function queueBlobDeletion(input: {
     blobUrl: input.blobUrl ?? null,
     reason: input.reason,
   });
+
+  // Best-effort flush so Blob cleanup does not wait solely on the cron worker
+  // (important on localhost where /api/internal/outbox never runs).
+  try {
+    await processBlobDeletionBatch(10);
+  } catch (error) {
+    logWarn("blob_deletion.flush_failed", {
+      objectKey: input.objectKey,
+      error: error instanceof Error ? error.message : "unknown",
+    });
+  }
 }
 
 /**

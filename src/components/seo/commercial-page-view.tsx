@@ -316,7 +316,7 @@ export function CommercialPageView({ page }: { page: CommercialPageContent }) {
           heading="Related solutions"
           links={[
             ...page.relatedCommercial,
-            { href: "/solutions", label: "All solutions", description: "Browse the full solutions hub." },
+            { href: "/solutions", label: "All Solutions", description: "Browse the full solutions hub." },
             { href: "/pricing", label: "Pricing", description: "Trial and Solo plans available now." },
           ]}
         />

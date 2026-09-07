@@ -115,7 +115,7 @@ export default function ResourcesHubPage() {
           path="/resources"
           heading="Start a free trial."
           body="Use these templates inside a live Pass-Off approval room."
-          secondary={{ href: "/solutions", label: "Browse solutions" }}
+          secondary={{ href: "/solutions", label: "Browse Solutions" }}
         />
       </MarketingShell>
     </>

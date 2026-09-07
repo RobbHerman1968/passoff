@@ -40,7 +40,7 @@ function PasswordField({
       <button
         type="button"
         onClick={() => setVisible((v) => !v)}
-        aria-label={visible ? "Hide password" : "Show password"}
+        aria-label={visible ? "Hide Password" : "Show Password"}
         aria-pressed={visible}
         className="absolute top-1/2 right-2.5 -translate-y-1/2 rounded-lg p-1.5 text-white/40 transition hover:bg-white/5 hover:text-white/70"
       >
@@ -72,13 +72,13 @@ export function CredentialsForms({
             href={`/login?mode=signin&callbackUrl=${encodeURIComponent(callbackUrl)}`}
             className={`flex-1 rounded-lg px-3 py-2 text-center transition ${mode === "signin" ? "bg-[#7c6cf0] text-white" : "text-white/55 hover:text-white"}`}
           >
-            Sign in
+            Sign In
           </a>
           <a
             href={`/login?mode=signup&callbackUrl=${encodeURIComponent(callbackUrl)}`}
             className={`flex-1 rounded-lg px-3 py-2 text-center transition ${mode === "signup" ? "bg-[#7c6cf0] text-white" : "text-white/55 hover:text-white"}`}
           >
-            Create account
+            Create Account
           </a>
         </div>
       ) : null}
@@ -129,7 +129,7 @@ export function CredentialsForms({
             disabled={pending}
             className="flex w-full items-center justify-center rounded-xl bg-[#7c6cf0] px-4 py-3 text-sm font-semibold text-white transition enabled:hover:-translate-y-0.5 enabled:hover:bg-[#6354d4] disabled:opacity-50"
           >
-            {pending ? "Creating account…" : "Create account"}
+            {pending ? "Creating Account…" : "Create Account"}
           </button>
         </form>
       ) : (
@@ -155,7 +155,7 @@ export function CredentialsForms({
               href="/forgot-password"
               className="text-xs font-semibold text-white/45 transition hover:text-[var(--brand-glow)]"
             >
-              Forgot password?
+              Forgot Password?
             </a>
           </div>
           <button
@@ -163,7 +163,7 @@ export function CredentialsForms({
             disabled={pending}
             className="flex w-full items-center justify-center rounded-xl bg-[#7c6cf0] px-4 py-3 text-sm font-semibold text-white transition enabled:hover:-translate-y-0.5 enabled:hover:bg-[#6354d4] disabled:opacity-50"
           >
-            {pending ? "Signing in…" : "Sign in"}
+            {pending ? "Signing In…" : "Sign In"}
           </button>
         </form>
       )}

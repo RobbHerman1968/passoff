@@ -111,7 +111,7 @@ export function AskPanel({
             placeholder="Ask what the design does not explain…"
             className="min-w-0 flex-1 resize-none rounded-xl border border-white/10 bg-white/8 px-3 py-2 text-xs leading-5 text-white outline-none placeholder:text-white/25 focus:border-[#a594f5]/50"
           />
-          <button type="submit" aria-label="Ask question" disabled={!selected || !question.trim() || asking} className="flex w-10 shrink-0 items-center justify-center rounded-xl bg-[#a594f5] text-[#17221f] disabled:opacity-35">
+          <button type="submit" aria-label="Ask Question" disabled={!selected || !question.trim() || asking} className="flex w-10 shrink-0 items-center justify-center rounded-xl bg-[#a594f5] text-[#17221f] disabled:opacity-35">
             {asking ? <LoaderCircle className="size-4 animate-spin" /> : <Send className="size-4" />}
           </button>
         </form>

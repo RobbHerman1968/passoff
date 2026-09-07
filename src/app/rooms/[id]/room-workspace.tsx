@@ -3,7 +3,8 @@
 import { put } from "@vercel/blob/client";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { createPortal } from "react-dom";
 import {
   Archive,
   Check,
@@ -24,8 +25,10 @@ import {
 } from "lucide-react";
 
 import { toast } from "@/components/ui/toast";
+import { ApprovalReceipt } from "@/components/approval-receipt";
 import { isFirstEvent } from "@/lib/analytics/client-flags";
 import { track } from "@/lib/analytics/events";
+import type { ApprovalReceiptView } from "@/lib/rooms/approval-receipt";
 
 type RoomAsset = {
   revisionAssetId: string;
@@ -69,8 +72,15 @@ type RoomBundle = {
   membership: RoomAsset[];
   comments: RoomComment[];
   shareLink: { id: string; viewCount: number; lastViewedAt?: string | Date | null } | null;
-  handoff: Array<{ id: string; label: string; category: string; notes: string | null; externalUrl: string | null }>;
-  approvals: Array<{ id: string; decision: string; contentDigest: string; approvedAt: string | Date }>;
+  handoff: Array<{
+    id: string;
+    label: string;
+    category: string;
+    notes: string | null;
+    externalUrl: string | null;
+    assetId: string | null;
+  }>;
+  approvals: ApprovalReceiptView[];
 };
 
 type Phase = "add" | "publish" | "share" | "review" | "handoff";
@@ -81,6 +91,7 @@ type PrimaryKind =
   | "share_copy"
   | "revise"
   | "handoff"
+  | "handoff_release"
   | "none";
 type RailTab = "ready" | "feedback" | "handoff";
 
@@ -144,19 +155,40 @@ function deriveNextAction(bundle: RoomBundle, shareUrl: string | null): NextActi
       phase: "add",
       completedThrough: "add",
       primary: "upload",
-      label: "Add work",
+      label: "Add Work",
       coach: "Add screenshots, a PDF, or a review URL.",
       busyLabel: "Uploading…",
     };
   }
 
   if (status === "APPROVED") {
+    const released = Boolean(bundle.project.handoffReleasedAt);
+    if (released) {
+      return {
+        phase: "handoff",
+        completedThrough: "handoff",
+        primary: "none",
+        label: "",
+        coach: "Handoff released. Final deliverables are available on the client link.",
+        busyLabel: "",
+      };
+    }
+    if (bundle.handoff.length > 0) {
+      return {
+        phase: "handoff",
+        completedThrough: "review",
+        primary: "handoff_release",
+        label: "Release Handoff",
+        coach: `Approved. ${bundle.handoff.length} item${bundle.handoff.length === 1 ? "" : "s"} ready—release when the client should see them.`,
+        busyLabel: "Releasing…",
+      };
+    }
     return {
       phase: "handoff",
-      completedThrough: bundle.handoff.length ? "handoff" : "review",
+      completedThrough: "review",
       primary: "handoff",
-      label: "Add handoff item",
-      coach: "Approved. Add final files or notes for delivery.",
+      label: "Prepare Handoff",
+      coach: "Approved. Add final files, links, or notes, then release them on the same client link.",
       busyLabel: "Saving…",
     };
   }
@@ -167,7 +199,7 @@ function deriveNextAction(bundle: RoomBundle, shareUrl: string | null): NextActi
         phase: "publish",
         completedThrough: "review",
         primary: "publish",
-        label: "Publish new revision",
+        label: "Publish New Revision",
         coach:
           openComments > 0
             ? `Client asked for changes (${openComments} open). Resolve what you can, then publish a new revision.`
@@ -179,7 +211,7 @@ function deriveNextAction(bundle: RoomBundle, shareUrl: string | null): NextActi
       phase: "review",
       completedThrough: "review",
       primary: "revise",
-      label: "Start new revision",
+      label: "Start New Revision",
       coach: "Client asked for changes. Open a new draft, then upload fixes and publish.",
       busyLabel: "Starting…",
     };
@@ -190,7 +222,7 @@ function deriveNextAction(bundle: RoomBundle, shareUrl: string | null): NextActi
       phase: "publish",
       completedThrough: "add",
       primary: "publish",
-      label: "Publish revision",
+      label: "Publish Revision",
       coach: "Publish when this set is ready for the client.",
       busyLabel: "Publishing…",
     };
@@ -201,7 +233,7 @@ function deriveNextAction(bundle: RoomBundle, shareUrl: string | null): NextActi
       phase: "publish",
       completedThrough: "share",
       primary: "publish",
-      label: "Publish revision",
+      label: "Publish Revision",
       coach: "You have an unpublished draft. Publish when ready to send updates.",
       busyLabel: "Publishing…",
     };
@@ -212,9 +244,9 @@ function deriveNextAction(bundle: RoomBundle, shareUrl: string | null): NextActi
       phase: "share",
       completedThrough: "publish",
       primary: "share_create",
-      label: "Create & copy share link",
+      label: "Create & Copy Share Link",
       coach: "Send this link — no client login required.",
-      busyLabel: "Creating link…",
+      busyLabel: "Creating Link…",
     };
   }
 
@@ -223,12 +255,12 @@ function deriveNextAction(bundle: RoomBundle, shareUrl: string | null): NextActi
       phase: "review",
       completedThrough: status === "VIEWED" ? "review" : "share",
       primary: shareUrl ? "share_copy" : "share_create",
-      label: shareUrl ? "Copy share link" : "Create a copyable link",
+      label: shareUrl ? "Copy Share Link" : "Create a Copyable Link",
       coach:
         status === "VIEWED"
           ? `${bundle.project.clientName} opened the link · ${views} view${views === 1 ? "" : "s"}. Waiting on a decision.`
           : `Waiting on ${bundle.project.clientName}. ${views} view${views === 1 ? "" : "s"}.`,
-      busyLabel: shareUrl ? "Copying…" : "Creating link…",
+      busyLabel: shareUrl ? "Copying…" : "Creating Link…",
     };
   }
 
@@ -237,9 +269,9 @@ function deriveNextAction(bundle: RoomBundle, shareUrl: string | null): NextActi
       phase: "review",
       completedThrough: "share",
       primary: shareUrl ? "share_copy" : "share_create",
-      label: shareUrl ? "Copy share link" : "Create a copyable link",
+      label: shareUrl ? "Copy Share Link" : "Create a Copyable Link",
       coach: `Share link is active · ${views} view${views === 1 ? "" : "s"}.`,
-      busyLabel: shareUrl ? "Copying…" : "Creating link…",
+      busyLabel: shareUrl ? "Copying…" : "Creating Link…",
     };
   }
 
@@ -247,7 +279,7 @@ function deriveNextAction(bundle: RoomBundle, shareUrl: string | null): NextActi
     phase: "add",
     completedThrough: "add",
     primary: "upload",
-    label: "Add work",
+    label: "Add Work",
     coach: "Add screenshots, a PDF, or a review URL.",
     busyLabel: "Uploading…",
   };
@@ -275,14 +307,47 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
   const [urlLabel, setUrlLabel] = useState("");
   const [handoffLabel, setHandoffLabel] = useState("");
   const [handoffNotes, setHandoffNotes] = useState("");
+  const [handoffUrl, setHandoffUrl] = useState("");
+  const [handoffFileName, setHandoffFileName] = useState<string | null>(null);
+  const handoffFileRef = useRef<HTMLInputElement>(null);
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [moreOpen, setMoreOpen] = useState(false);
+  const [renameRoomOpen, setRenameRoomOpen] = useState(false);
+  const [renameRoomName, setRenameRoomName] = useState("");
+  const [renameRoomClient, setRenameRoomClient] = useState("");
   const [assetMenuId, setAssetMenuId] = useState<string | null>(null);
+  const [assetMenuPos, setAssetMenuPos] = useState<{ top: number; left: number } | null>(null);
+  const assetMenuAnchorRef = useRef<HTMLButtonElement | null>(null);
   const [urlFormOpen, setUrlFormOpen] = useState(false);
   const [railTab, setRailTab] = useState<RailTab>("ready");
   const [railTabTouched, setRailTabTouched] = useState(false);
+
+  useLayoutEffect(() => {
+    if (!assetMenuId) {
+      setAssetMenuPos(null);
+      return;
+    }
+    function place() {
+      const el = assetMenuAnchorRef.current;
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      const menuWidth = 160;
+      const left = Math.min(Math.max(8, rect.left), window.innerWidth - menuWidth - 8);
+      // Prefer below the thumb; flip above if near the bottom of the viewport.
+      const below = rect.bottom + 6;
+      const top = below + 160 > window.innerHeight ? Math.max(8, rect.top - 166) : below;
+      setAssetMenuPos({ top, left });
+    }
+    place();
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
+    return () => {
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", place, true);
+    };
+  }, [assetMenuId]);
 
   useEffect(() => {
     try {
@@ -372,7 +437,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
       } else {
         toast.success("New share link created.");
       }
-    }, "Creating link…");
+    }, "Creating Link…");
   }
 
   async function copyShareLink() {
@@ -411,21 +476,51 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
           const prepared = (await prepare.json()) as {
             pathname?: string;
             clientToken?: string;
+            revisionId?: string;
+            uploadSessionId?: string;
             error?: string;
             fallback?: string;
           };
           if (prepare.status === 501 || prepared.fallback === "multipart") {
             throw new Error(prepared.error || "blob_unavailable");
           }
-          if (!prepare.ok || !prepared.pathname || !prepared.clientToken) {
+          if (!prepare.ok || !prepared.pathname || !prepared.clientToken || !prepared.revisionId) {
             throw new Error(prepared.error || "Upload authorization failed.");
           }
-          await put(prepared.pathname, file, {
+          const blob = await put(prepared.pathname, file, {
             access: "private",
             token: prepared.clientToken,
             multipart: file.size > 5 * 1024 * 1024,
           });
-        } catch {
+          // Register the asset in the DB. Blob's onUploadCompleted webhook never reaches localhost,
+          // and even in production we finalize here so the UI does not reload before membership exists.
+          const complete = await fetch(`/api/projects/${encodeURIComponent(roomId)}/uploads`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              action: "complete",
+              pathname: blob.pathname || prepared.pathname,
+              blobUrl: blob.url,
+              contentType: blob.contentType || file.type || "application/octet-stream",
+              size: file.size,
+              fileName: file.name,
+              revisionId: prepared.revisionId,
+              uploadSessionId: prepared.uploadSessionId || prepared.pathname,
+            }),
+          });
+          const completed = (await complete.json()) as { error?: string };
+          if (!complete.ok) throw new Error(completed.error || "Could not save uploaded file.");
+        } catch (err) {
+          // Only fall back to multipart when Blob prepare/put is unavailable — not when complete fails.
+          const message = err instanceof Error ? err.message : "";
+          const shouldFallback =
+            message.includes("blob_unavailable") ||
+            message.includes("BLOB_READ_WRITE_TOKEN") ||
+            message.includes("Upload authorization failed");
+          if (!shouldFallback && message && !message.includes("fetch")) {
+            // If put succeeded but complete failed, or prepare returned a hard error, surface it.
+            if (!message.includes("blob_unavailable")) throw err;
+          }
           const form = new FormData();
           form.set("file", file);
           const response = await fetch(`/api/projects/${encodeURIComponent(roomId)}/assets`, {
@@ -557,6 +652,23 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
     }, "Starting…");
   }
 
+  async function releaseHandoffToClient() {
+    await run(async () => {
+      const response = await fetch(`/api/projects/${encodeURIComponent(roomId)}/handoff`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "release" }),
+      });
+      const payload = (await response.json()) as { error?: string; alreadyReleased?: boolean };
+      if (!response.ok) throw new Error(payload.error || "Could not release handoff.");
+      toast.success(
+        payload.alreadyReleased
+          ? "Handoff was already released."
+          : "Handoff released — deliverables are on the client link.",
+      );
+    }, "Releasing…");
+  }
+
   async function archiveRoom() {
     await run(async () => {
       const response = await fetch(`/api/projects/${encodeURIComponent(roomId)}`, {
@@ -568,6 +680,34 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
       if (!response.ok) throw new Error(payload.error || "Archive failed.");
       toast.success("Room archived.");
     }, "Archiving…");
+  }
+
+  function openRenameRoom() {
+    if (!bundle || bundle.project.status === "ARCHIVED") return;
+    setRenameRoomName(bundle.project.name);
+    setRenameRoomClient(bundle.project.clientName);
+    setRenameRoomOpen(true);
+  }
+
+  async function renameRoom(event: FormEvent) {
+    event.preventDefault();
+    const name = renameRoomName.trim();
+    const clientName = renameRoomClient.trim();
+    if (!name || !clientName) {
+      toast.error("Project name and client name are required.");
+      return;
+    }
+    await run(async () => {
+      const response = await fetch(`/api/projects/${encodeURIComponent(roomId)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "rename", name, clientName }),
+      });
+      const payload = (await response.json()) as { error?: string };
+      if (!response.ok) throw new Error(payload.error || "Unable to rename room.");
+      setRenameRoomOpen(false);
+      toast.success("Room renamed.");
+    }, "Renaming…");
   }
 
   async function runPrimary() {
@@ -589,6 +729,9 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
         setRailTab("handoff");
         setRailTabTouched(true);
         window.setTimeout(() => document.getElementById("handoff-label")?.focus(), 50);
+        break;
+      case "handoff_release":
+        await releaseHandoffToClient();
         break;
       case "upload":
         document.getElementById("room-upload-input")?.click();
@@ -684,7 +827,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
                       disabled={busy}
                       onClick={() => copyShareLink()}
                       className="rounded p-1 text-[#6354d4] hover:bg-[#f3f0ff]"
-                      title="Copy share link"
+                      title="Copy Share Link"
                     >
                       <Copy className="size-3.5" />
                     </button>
@@ -693,7 +836,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
                       target="_blank"
                       rel="noreferrer"
                       className="rounded p-1 text-[#6354d4] hover:bg-[#f3f0ff]"
-                      title="Open share link"
+                      title="Open Share Link"
                     >
                       <ExternalLink className="size-3.5" />
                     </a>
@@ -705,7 +848,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
                     onClick={() => createShareLink(true)}
                     className="inline-flex items-center gap-1 text-[10px] font-semibold text-[#6354d4] disabled:opacity-50"
                   >
-                    <Link2 className="size-3.5" /> Create link
+                    <Link2 className="size-3.5" /> Create Link
                   </button>
                 )}
               </div>
@@ -752,11 +895,22 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
                       disabled={busy || archived}
                       onClick={() => {
                         setMoreOpen(false);
+                        openRenameRoom();
+                      }}
+                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-[11px] font-semibold text-black/65 hover:bg-[#f7f4ff] disabled:opacity-50"
+                    >
+                      <Pencil className="size-3.5" /> Rename
+                    </button>
+                    <button
+                      type="button"
+                      disabled={busy || archived}
+                      onClick={() => {
+                        setMoreOpen(false);
                         reopenRevision();
                       }}
                       className="flex w-full items-center gap-2 px-3 py-2 text-left text-[11px] font-semibold text-black/65 hover:bg-[#f7f4ff] disabled:opacity-50"
                     >
-                      <RefreshCw className="size-3.5" /> New revision
+                      <RefreshCw className="size-3.5" /> New Revision
                     </button>
                     {bundle.shareLink || shareUrl ? (
                       <button
@@ -768,7 +922,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
                         }}
                         className="flex w-full items-center gap-2 px-3 py-2 text-left text-[11px] font-semibold text-black/65 hover:bg-[#f7f4ff] disabled:opacity-50"
                       >
-                        <Link2 className="size-3.5" /> Rotate share link
+                        <Link2 className="size-3.5" /> Rotate Share Link
                       </button>
                     ) : null}
                     <button
@@ -831,7 +985,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
             </p>
             <label className="mt-6 inline-flex cursor-pointer items-center justify-center gap-2 rounded-xl bg-[#6354d4] px-5 py-3 text-[12px] font-semibold text-white">
               <Upload className="size-4" />
-              Upload image / PDF
+              Upload Image / PDF
               <input
                 id="room-upload-input"
                 type="file"
@@ -884,7 +1038,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
             {/* Filmstrip */}
             <div className="shrink-0 border-b border-[#a594f5]/15 bg-[#f7f4ff]/80">
               <div className="flex items-stretch gap-2 overflow-x-auto px-3 py-2 lg:px-4">
-                {bundle.membership.map((item, index) => {
+                {bundle.membership.map((item) => {
                   const isSelected = selected?.revisionAssetId === item.revisionAssetId;
                   const isRenaming = renamingId === item.revisionAssetId;
                   const thumb =
@@ -964,6 +1118,11 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
                                 setSelectedAssetId(item.revisionAssetId);
                                 setAssetMenuId(null);
                               }}
+                              onDoubleClick={() => {
+                                if (!canEditDraft || busy) return;
+                                startRename(item);
+                              }}
+                              title={canEditDraft ? "Double-click to rename" : undefined}
                               className="min-w-0 flex-1 truncate text-left"
                             >
                               {item.asset.label}
@@ -971,12 +1130,18 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
                             {canEditDraft ? (
                               <button
                                 type="button"
+                                ref={
+                                  assetMenuId === item.revisionAssetId
+                                    ? assetMenuAnchorRef
+                                    : undefined
+                                }
                                 aria-label={`Asset actions for ${item.asset.label}`}
+                                aria-expanded={assetMenuId === item.revisionAssetId}
                                 onClick={() => {
+                                  setSelectedAssetId(item.revisionAssetId);
                                   setAssetMenuId((id) =>
                                     id === item.revisionAssetId ? null : item.revisionAssetId,
                                   );
-                                  setSelectedAssetId(item.revisionAssetId);
                                 }}
                                 className={`rounded p-0.5 ${
                                   isSelected ? "hover:bg-white/20" : "hover:bg-black/5"
@@ -988,58 +1153,87 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
                           </div>
                         </div>
                       )}
-
-                      {assetMenuId === item.revisionAssetId && canEditDraft ? (
-                        <>
-                          <button
-                            type="button"
-                            aria-label="Close asset menu"
-                            className="fixed inset-0 z-10 cursor-default"
-                            onClick={() => setAssetMenuId(null)}
-                          />
-                          <div className="absolute left-0 top-full z-20 mt-1 min-w-[140px] rounded-lg border border-black/10 bg-white py-1 shadow-lg">
-                            <button
-                              type="button"
-                              disabled={busy || index === 0}
-                              onClick={() => moveAsset(item.revisionAssetId, -1)}
-                              className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[11px] font-medium text-black/65 hover:bg-[#f7f4ff] disabled:opacity-40"
-                            >
-                              <ChevronLeft className="size-3.5" /> Move earlier
-                            </button>
-                            <button
-                              type="button"
-                              disabled={busy || index === bundle.membership.length - 1}
-                              onClick={() => moveAsset(item.revisionAssetId, 1)}
-                              className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[11px] font-medium text-black/65 hover:bg-[#f7f4ff] disabled:opacity-40"
-                            >
-                              <ChevronRight className="size-3.5" /> Move later
-                            </button>
-                            <button
-                              type="button"
-                              disabled={busy}
-                              onClick={() => startRename(item)}
-                              className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[11px] font-medium text-black/65 hover:bg-[#f7f4ff]"
-                            >
-                              <Pencil className="size-3.5" /> Rename
-                            </button>
-                            <button
-                              type="button"
-                              disabled={busy}
-                              onClick={() => {
-                                setAssetMenuId(null);
-                                removeAsset(item.revisionAssetId);
-                              }}
-                              className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[11px] font-medium text-red-600/80 hover:bg-red-50"
-                            >
-                              <Trash2 className="size-3.5" /> Remove
-                            </button>
-                          </div>
-                        </>
-                      ) : null}
                     </div>
                   );
                 })}
 
+                {canEditDraft && assetMenuId && assetMenuPos
+                  ? createPortal(
+                      <>
+                        <button
+                          type="button"
+                          aria-label="Close asset menu"
+                          className="fixed inset-0 z-40 cursor-default"
+                          onClick={() => setAssetMenuId(null)}
+                        />
+                        <div
+                          role="menu"
+                          className="fixed z-50 min-w-[160px] rounded-lg border border-black/10 bg-white py-1 shadow-lg"
+                          style={{ top: assetMenuPos.top, left: assetMenuPos.left }}
+                        >
+                          {(() => {
+                            const menuItem = bundle.membership.find(
+                              (m) => m.revisionAssetId === assetMenuId,
+                            );
+                            const menuIndex = bundle.membership.findIndex(
+                              (m) => m.revisionAssetId === assetMenuId,
+                            );
+                            if (!menuItem) return null;
+                            return (
+                              <>
+                                <button
+                                  type="button"
+                                  role="menuitem"
+                                  disabled={busy || menuIndex === 0}
+                                  onClick={() => {
+                                    setAssetMenuId(null);
+                                    moveAsset(menuItem.revisionAssetId, -1);
+                                  }}
+                                  className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[11px] font-medium text-black/65 hover:bg-[#f7f4ff] disabled:opacity-40"
+                                >
+                                  <ChevronLeft className="size-3.5" /> Move Earlier
+                                </button>
+                                <button
+                                  type="button"
+                                  role="menuitem"
+                                  disabled={busy || menuIndex === bundle.membership.length - 1}
+                                  onClick={() => {
+                                    setAssetMenuId(null);
+                                    moveAsset(menuItem.revisionAssetId, 1);
+                                  }}
+                                  className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[11px] font-medium text-black/65 hover:bg-[#f7f4ff] disabled:opacity-40"
+                                >
+                                  <ChevronRight className="size-3.5" /> Move Later
+                                </button>
+                                <button
+                                  type="button"
+                                  role="menuitem"
+                                  disabled={busy}
+                                  onClick={() => startRename(menuItem)}
+                                  className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[11px] font-medium text-black/65 hover:bg-[#f7f4ff]"
+                                >
+                                  <Pencil className="size-3.5" /> Rename
+                                </button>
+                                <button
+                                  type="button"
+                                  role="menuitem"
+                                  disabled={busy}
+                                  onClick={() => {
+                                    setAssetMenuId(null);
+                                    removeAsset(menuItem.revisionAssetId);
+                                  }}
+                                  className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[11px] font-medium text-red-600/80 hover:bg-red-50"
+                                >
+                                  <Trash2 className="size-3.5" /> Remove
+                                </button>
+                              </>
+                            );
+                          })()}
+                        </div>
+                      </>,
+                      document.body,
+                    )
+                  : null}
                 {canEditDraft ? (
                   <div className="flex shrink-0 items-stretch gap-1.5">
                     <label className="flex h-[72px] w-[72px] cursor-pointer flex-col items-center justify-center gap-1 rounded-lg border border-dashed border-[#a594f5]/50 bg-white text-[#6354d4] transition hover:bg-[#f7f4ff]">
@@ -1126,7 +1320,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
 
               {!canEditDraft && bundle.published && !bundle.draft ? (
                 <p className="px-4 pb-2 text-[10px] text-black/35">
-                  Published assets are locked. Use More → New revision to change them.
+                  Published assets are locked. Use More → New Revision to change them.
                 </p>
               ) : null}
             </div>
@@ -1335,20 +1529,30 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
                   )}
 
                   {bundle.approvals.length > 0 ? (
-                    <div className="border-t border-black/8 pt-4">
+                    <div className="border-t border-black/8 pt-4 space-y-3">
                       <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-black/35">
-                        Approval history
+                        Approval record
                       </p>
-                      <ul className="mt-2 space-y-2">
-                        {bundle.approvals.map((a) => (
-                          <li key={a.id} className="rounded-xl bg-white px-3 py-2 text-xs shadow-sm">
-                            <p className="font-semibold capitalize">{a.decision.replace("_", " ")}</p>
-                            <p className="mt-1 truncate font-mono text-[10px] text-black/40">
-                              {a.contentDigest.slice(0, 16)}…
-                            </p>
-                          </li>
+                      {bundle.approvals
+                        .filter((a) => a.decision === "approved")
+                        .slice(0, 1)
+                        .map((receipt) => (
+                          <ApprovalReceipt key={receipt.id} receipt={receipt} variant="compact" />
                         ))}
-                      </ul>
+                      {bundle.approvals.some((a) => a.decision !== "approved") ? (
+                        <ul className="space-y-2">
+                          {bundle.approvals
+                            .filter((a) => a.decision !== "approved")
+                            .map((a) => (
+                              <li key={a.id} className="rounded-xl bg-white px-3 py-2 text-xs shadow-sm">
+                                <p className="font-semibold capitalize">{a.statusLabel}</p>
+                                <p className="mt-1 text-[10px] text-black/40">
+                                  Revision {a.revisionNumber} · {a.referenceId}
+                                </p>
+                              </li>
+                            ))}
+                        </ul>
+                      ) : null}
                     </div>
                   ) : null}
                 </div>
@@ -1361,40 +1565,241 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
                       Delivery handoff
                     </p>
                     <p className="mt-1 text-xs text-black/45">
-                      Items appear on the client link once added.
+                      {bundle.project.handoffReleasedAt
+                        ? "Released — these items are visible on the client link."
+                        : bundle.handoff.length > 0
+                          ? "Preparing — items stay private until you release."
+                          : "Add files, links, or notes, then release them to the client."}
                     </p>
                   </div>
+
+                  {bundle.approvals.find((a) => a.decision === "approved" && !a.supersededAt) ? (
+                    <ApprovalReceipt
+                      receipt={
+                        bundle.approvals.find((a) => a.decision === "approved" && !a.supersededAt)!
+                      }
+                      variant="compact"
+                    />
+                  ) : null}
+
+                  {!bundle.project.handoffReleasedAt && bundle.handoff.length > 0 ? (
+                    <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-3">
+                      <p className="text-xs font-semibold text-emerald-900">
+                        {bundle.handoff.length} item{bundle.handoff.length === 1 ? "" : "s"} ready to
+                        release
+                      </p>
+                      <p className="mt-1 text-[11px] leading-5 text-emerald-900/70">
+                        Clients still see “preparing final files” until you release.
+                      </p>
+                      <button
+                        type="button"
+                        disabled={busy || archived}
+                        onClick={() => releaseHandoffToClient()}
+                        className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-700 px-3 py-2 text-[11px] font-semibold text-white disabled:opacity-60"
+                      >
+                        <Package className="size-3.5" />
+                        {busy && busyLabel === "Releasing…" ? "Releasing…" : "Release to Client Link"}
+                      </button>
+                    </div>
+                  ) : null}
+
+                  {bundle.project.handoffReleasedAt ? (
+                    <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-3 text-xs text-amber-950">
+                      <p className="font-semibold">Handoff released</p>
+                      <p className="mt-1 text-[11px] leading-5 text-amber-950/70">
+                        Clients can see the current package. Adding, replacing, or removing items
+                        returns the handoff to preparing and requires another release.
+                      </p>
+                    </div>
+                  ) : null}
+
                   <form
                     className="space-y-2"
                     onSubmit={(e) => {
                       e.preventDefault();
-                      if (!handoffLabel.trim() || archived) return;
+                      if (archived || bundle.project.status !== "APPROVED") return;
+                      const file = handoffFileRef.current?.files?.[0] ?? null;
+                      const label =
+                        handoffLabel.trim() ||
+                        (file ? file.name.replace(/\.[^.]+$/, "") : "") ||
+                        (handoffUrl.trim() ? "Delivery link" : "");
+                      if (!label && !file) return;
+
                       run(async () => {
-                        const response = await fetch(`/api/projects/${encodeURIComponent(roomId)}/handoff`, {
-                          method: "POST",
-                          headers: { "Content-Type": "application/json" },
-                          body: JSON.stringify({
-                            label: handoffLabel.trim(),
-                            notes: handoffNotes.trim() || undefined,
-                            category: "note",
-                          }),
-                        });
-                        const payload = (await response.json()) as { error?: string };
-                        if (!response.ok) throw new Error(payload.error || "Handoff failed.");
+                        let releaseCleared = false;
+                        if (file) {
+                          try {
+                            const prepare = await fetch(
+                              `/api/projects/${encodeURIComponent(roomId)}/handoff`,
+                              {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({
+                                  action: "prepare_upload",
+                                  fileName: file.name,
+                                  contentType: file.type || "application/octet-stream",
+                                  size: file.size,
+                                }),
+                              },
+                            );
+                            const prepared = (await prepare.json()) as {
+                              error?: string;
+                              fallback?: string;
+                              pathname?: string;
+                              clientToken?: string;
+                              uploadSessionId?: string;
+                            };
+                            if (prepare.status === 501 || prepared.fallback === "multipart") {
+                              throw new Error(prepared.error || "blob_unavailable");
+                            }
+                            if (!prepare.ok || !prepared.pathname || !prepared.clientToken) {
+                              throw new Error(prepared.error || "Upload authorization failed.");
+                            }
+                            const blob = await put(prepared.pathname, file, {
+                              access: "private",
+                              token: prepared.clientToken,
+                              multipart: true,
+                            });
+                            const complete = await fetch(
+                              `/api/projects/${encodeURIComponent(roomId)}/handoff`,
+                              {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({
+                                  action: "complete_upload",
+                                  pathname: blob.pathname || prepared.pathname,
+                                  blobUrl: blob.url,
+                                  contentType: file.type || "application/octet-stream",
+                                  size: file.size,
+                                  fileName: file.name,
+                                  uploadSessionId: prepared.uploadSessionId || prepared.pathname,
+                                  label: label || undefined,
+                                  notes: handoffNotes.trim() || undefined,
+                                  externalUrl: handoffUrl.trim() || undefined,
+                                }),
+                              },
+                            );
+                            const completed = (await complete.json()) as {
+                              error?: string;
+                              releaseCleared?: boolean;
+                            };
+                            if (!complete.ok) {
+                              throw new Error(completed.error || "Could not save handoff file.");
+                            }
+                            releaseCleared = Boolean(completed.releaseCleared);
+                          } catch (err) {
+                            const message = err instanceof Error ? err.message : "";
+                            if (!/blob_unavailable|BLOB_READ_WRITE_TOKEN|501/i.test(message)) {
+                              throw err instanceof Error
+                                ? err
+                                : new Error("Handoff upload failed.");
+                            }
+                            const form = new FormData();
+                            form.set("file", file);
+                            if (label) form.set("label", label);
+                            if (handoffNotes.trim()) form.set("notes", handoffNotes.trim());
+                            if (handoffUrl.trim()) form.set("externalUrl", handoffUrl.trim());
+                            const response = await fetch(
+                              `/api/projects/${encodeURIComponent(roomId)}/handoff`,
+                              { method: "POST", body: form },
+                            );
+                            const payload = (await response.json()) as {
+                              error?: string;
+                              releaseCleared?: boolean;
+                            };
+                            if (!response.ok) throw new Error(payload.error || "Handoff failed.");
+                            releaseCleared = Boolean(payload.releaseCleared);
+                          }
+                        } else {
+                          if (!label) throw new Error("A title is required.");
+                          const response = await fetch(
+                            `/api/projects/${encodeURIComponent(roomId)}/handoff`,
+                            {
+                              method: "POST",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({
+                                label,
+                                notes: handoffNotes.trim() || undefined,
+                                externalUrl: handoffUrl.trim() || undefined,
+                                category: handoffUrl.trim() ? "link" : "note",
+                              }),
+                            },
+                          );
+                          const payload = (await response.json()) as {
+                            error?: string;
+                            releaseCleared?: boolean;
+                          };
+                          if (!response.ok) throw new Error(payload.error || "Handoff failed.");
+                          releaseCleared = Boolean(payload.releaseCleared);
+                        }
                         setHandoffLabel("");
                         setHandoffNotes("");
-                        toast.success("Handoff item added for the client.");
-                      }, "Saving…");
+                        setHandoffUrl("");
+                        setHandoffFileName(null);
+                        if (handoffFileRef.current) handoffFileRef.current.value = "";
+                        toast.success(
+                          releaseCleared
+                            ? "Item saved — handoff is preparing again; release when ready."
+                            : "Item saved — still private until you release.",
+                        );
+                      }, file ? "Uploading…" : "Saving…");
                     }}
                   >
                     <input
                       id="handoff-label"
                       value={handoffLabel}
                       onChange={(e) => setHandoffLabel(e.target.value)}
-                      placeholder="Final files / login notes"
+                      placeholder="Title (e.g. Final files)"
                       disabled={busy || archived || bundle.project.status !== "APPROVED"}
                       className="w-full rounded-lg border border-black/10 bg-white px-2.5 py-2 text-xs outline-none focus:border-[#6354d4]"
                     />
+                    <input
+                      value={handoffUrl}
+                      onChange={(e) => setHandoffUrl(e.target.value)}
+                      placeholder="https://… link to Drive, Dropbox, Figma…"
+                      type="url"
+                      disabled={busy || archived || bundle.project.status !== "APPROVED"}
+                      className="w-full rounded-lg border border-black/10 bg-white px-2.5 py-2 text-xs outline-none focus:border-[#6354d4]"
+                    />
+                    <div className="flex items-center gap-2">
+                      <input
+                        ref={handoffFileRef}
+                        type="file"
+                        accept="image/*,.pdf,.zip,application/pdf,application/zip"
+                        disabled={busy || archived || bundle.project.status !== "APPROVED"}
+                        className="hidden"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0] ?? null;
+                          setHandoffFileName(file?.name ?? null);
+                          if (file && !handoffLabel.trim()) {
+                            setHandoffLabel(file.name.replace(/\.[^.]+$/, ""));
+                          }
+                        }}
+                      />
+                      <button
+                        type="button"
+                        disabled={busy || archived || bundle.project.status !== "APPROVED"}
+                        onClick={() => handoffFileRef.current?.click()}
+                        className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-dashed border-[#a594f5]/45 bg-white px-2.5 py-2 text-[11px] font-semibold text-[#6354d4] disabled:opacity-50"
+                      >
+                        <Upload className="size-3.5" />
+                        {handoffFileName ? handoffFileName : "Attach file (image, PDF, ZIP)"}
+                      </button>
+                      {handoffFileName ? (
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => {
+                            setHandoffFileName(null);
+                            if (handoffFileRef.current) handoffFileRef.current.value = "";
+                          }}
+                          className="rounded-lg p-2 text-black/40 hover:bg-black/5 hover:text-black/70"
+                          aria-label="Remove attached file"
+                        >
+                          <X className="size-3.5" />
+                        </button>
+                      ) : null}
+                    </div>
                     <textarea
                       value={handoffNotes}
                       onChange={(e) => setHandoffNotes(e.target.value)}
@@ -1406,29 +1811,59 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
                     <button
                       type="submit"
                       disabled={
-                        busy || archived || bundle.project.status !== "APPROVED" || !handoffLabel.trim()
+                        busy ||
+                        archived ||
+                        bundle.project.status !== "APPROVED" ||
+                        (!handoffLabel.trim() && !handoffFileName && !handoffUrl.trim())
                       }
                       className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-[#6354d4] px-3 py-2 text-[11px] font-semibold text-white disabled:opacity-60"
                     >
                       <Package className="size-3.5" />
-                      {busy && busyLabel === "Saving…" ? "Saving…" : "Add handoff item"}
+                      {busy && (busyLabel === "Saving…" || busyLabel === "Uploading…")
+                        ? busyLabel
+                        : "Add Handoff Item"}
                     </button>
                   </form>
                   <ul className="space-y-2">
                     {bundle.handoff.map((item) => (
                       <li key={item.id} className="rounded-xl bg-white px-3 py-2.5 text-xs shadow-sm">
-                        <p className="font-semibold">{item.label}</p>
-                        {item.notes ? <p className="mt-1 text-black/50">{item.notes}</p> : null}
-                        {item.externalUrl ? (
-                          <a
-                            href={item.externalUrl}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="mt-1 inline-block text-[#6354d4] underline"
+                        <div className="flex items-start justify-between gap-2">
+                          <p className="font-semibold">{item.label}</p>
+                          <span
+                            className={`shrink-0 rounded-md px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.1em] ${
+                              bundle.project.handoffReleasedAt
+                                ? "bg-emerald-100 text-emerald-800"
+                                : "bg-black/5 text-black/40"
+                            }`}
                           >
-                            Open link
-                          </a>
-                        ) : null}
+                            {bundle.project.handoffReleasedAt ? "Visible" : "Private"}
+                          </span>
+                        </div>
+                        <p className="mt-0.5 text-[10px] uppercase tracking-[0.12em] text-black/35">
+                          {item.category}
+                        </p>
+                        {item.notes ? <p className="mt-1 text-black/50">{item.notes}</p> : null}
+                        <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1">
+                          {item.externalUrl ? (
+                            <a
+                              href={item.externalUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="inline-flex items-center gap-1 font-semibold text-[#6354d4] underline"
+                            >
+                              <ExternalLink className="size-3" />
+                              Open Link
+                            </a>
+                          ) : null}
+                          {item.assetId ? (
+                            <a
+                              href={`/api/assets/${encodeURIComponent(item.assetId)}?download=1`}
+                              className="inline-flex items-center gap-1 font-semibold text-[#6354d4] underline"
+                            >
+                              Download File
+                            </a>
+                          ) : null}
+                        </div>
                       </li>
                     ))}
                   </ul>
@@ -1438,6 +1873,65 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
           </aside>
         </div>
       )}
+
+      {renameRoomOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <form
+            onSubmit={renameRoom}
+            className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-semibold tracking-[-0.03em]">Rename room</h2>
+                <p className="mt-1 text-sm text-black/45">Update the client and project name.</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => !busy && setRenameRoomOpen(false)}
+                className="rounded-lg p-1.5 text-black/35 hover:bg-black/[0.04]"
+                aria-label="Close"
+              >
+                <X className="size-4" />
+              </button>
+            </div>
+            <label className="mt-5 block text-[11px] font-semibold uppercase tracking-[0.14em] text-black/40">
+              Client name
+              <input
+                value={renameRoomClient}
+                onChange={(e) => setRenameRoomClient(e.target.value)}
+                className="mt-2 w-full rounded-xl border border-black/10 px-3 py-2.5 text-sm outline-none focus:border-[#6354d4]"
+                placeholder="Acme Co"
+                autoFocus
+                required
+                maxLength={120}
+                disabled={busy}
+              />
+            </label>
+            <label className="mt-4 block text-[11px] font-semibold uppercase tracking-[0.14em] text-black/40">
+              Project name
+              <input
+                value={renameRoomName}
+                onChange={(e) => setRenameRoomName(e.target.value)}
+                className="mt-2 w-full rounded-xl border border-black/10 px-3 py-2.5 text-sm outline-none focus:border-[#6354d4]"
+                placeholder="Marketing site launch"
+                required
+                maxLength={120}
+                disabled={busy}
+              />
+            </label>
+            <button
+              type="submit"
+              disabled={busy || !renameRoomName.trim() || !renameRoomClient.trim()}
+              className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-[#6354d4] px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-60"
+            >
+              {busy && busyLabel === "Renaming…" ? (
+                <LoaderCircle className="size-4 animate-spin" />
+              ) : null}
+              Save
+            </button>
+          </form>
+        </div>
+      ) : null}
     </div>
   );
 }

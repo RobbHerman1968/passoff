@@ -1,10 +1,14 @@
 import "server-only";
 
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 
 import { db } from "@/db";
-import { assets, subscriptions } from "@/db/schema";
+import { assets, projects, subscriptions } from "@/db/schema";
 import { pricingPlans, type PricingPlan } from "@/lib/pricing";
+
+export { formatStorageBytes } from "@/lib/rooms/entitlements-format";
+
+const ACTIVE_ROOM_STATUSES = ["DRAFT", "SENT", "VIEWED", "CHANGES_REQUESTED", "APPROVED"] as const;
 
 export type Entitlements = {
   planId: PricingPlan["id"];
@@ -139,6 +143,27 @@ export async function getWorkspaceStorageUsageBytes(workspaceId: string) {
       .where(and(eq(assets.workspaceId, workspaceId), eq(assets.uploadStatus, "ready")))
   )[0];
   return Number(row?.total || 0);
+}
+
+export async function getWorkspaceUsageSummary(organizationId: string, workspaceId: string) {
+  const entitlements = await getOrganizationEntitlements(organizationId);
+  const usedBytes = await getWorkspaceStorageUsageBytes(workspaceId);
+  const roomRows = await db
+    .select({ id: projects.id })
+    .from(projects)
+    .where(
+      and(
+        eq(projects.workspaceId, workspaceId),
+        inArray(projects.status, [...ACTIVE_ROOM_STATUSES]),
+      ),
+    );
+  return {
+    roomCount: roomRows.length,
+    maxActiveRooms: entitlements.maxActiveRooms,
+    usedBytes,
+    maxStorageBytes: entitlements.maxStorageBytes,
+    planId: entitlements.planId,
+  };
 }
 
 export async function assertStorageAllowance(organizationId: string, workspaceId: string, additionalBytes: number) {

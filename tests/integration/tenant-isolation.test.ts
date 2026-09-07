@@ -7,27 +7,35 @@
 import { randomBytes } from "node:crypto";
 import { config } from "dotenv";
 import { and, eq } from "drizzle-orm";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
+
+import { ensureTestMigrations } from "../helpers/ensure-migrations";
 
 config({ path: ".env" });
 
 const hasDb = Boolean(process.env.DATABASE_URL);
 
 describe.skipIf(!hasDb)("tenant isolation (DB)", () => {
+  beforeAll(async () => {
+    await ensureTestMigrations();
+  }, 120_000);
+
   it("two users receive distinct workspaces and cannot read each other's rooms", async () => {
     const { createPasswordUser } = await import("@/lib/auth/password");
     const { createPrivateTenantForUser } = await import("@/lib/auth/tenant-membership");
     const { db } = await import("@/db");
     const { organizations, projects, users, workspaces } = await import("@/db/schema");
 
-    // Skip when first-release migrations have not been applied yet.
+    // Fail loudly when first-release migrations have not been applied —
+    // a logged skip must not count as successful tenant-isolation coverage.
     try {
       await db.select({ id: workspaces.id, notificationEmail: workspaces.notificationEmail }).from(workspaces).limit(1);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (/notification_email|does not exist/i.test(message)) {
-        console.warn("Skipping: apply drizzle-postgres/0007_first_release_hardening.sql first.");
-        return;
+        throw new Error(
+          "tenant isolation requires drizzle-postgres/0007_first_release_hardening.sql — apply migrations before counting this coverage.",
+        );
       }
       throw error;
     }

@@ -92,7 +92,7 @@ export const designFeedbackChecklist: ResourcePageContent = {
       id: "comment-pattern",
       title: "Comment pattern to copy",
       kind: "template",
-      copyLabel: "Copy comment pattern",
+      copyLabel: "Copy Comment Pattern",
       body: `[Screen / breakpoint]: [what I see]
 Problem: [why it matters — brand, usability, content, legal]
 Request: [specific change or question]
@@ -151,7 +151,7 @@ export const designApprovalEmailTemplate: ResourcePageContent = {
       id: "initial",
       title: "1. Initial review request",
       kind: "template",
-      copyLabel: "Copy initial review email",
+      copyLabel: "Copy Initial Review Email",
       body: `Subject: Design review ready — [Project] Revision [N]
 
 Hi [Name],
@@ -173,7 +173,7 @@ Thanks,
       id: "reminder",
       title: "2. Reminder",
       kind: "template",
-      copyLabel: "Copy reminder email",
+      copyLabel: "Copy Reminder Email",
       body: `Subject: Reminder: design approval due [date] — [Project]
 
 Hi [Name],
@@ -192,7 +192,7 @@ Thanks,
       id: "changes",
       title: "3. Changes requested (designer → client acknowledgment)",
       kind: "template",
-      copyLabel: "Copy changes-requested email",
+      copyLabel: "Copy Changes-Requested Email",
       body: `Subject: Received your feedback — next revision for [Project]
 
 Hi [Name],
@@ -212,7 +212,7 @@ Thanks,
       id: "confirmation",
       title: "4. Approval confirmation",
       kind: "template",
-      copyLabel: "Copy approval confirmation email",
+      copyLabel: "Copy Approval Confirmation Email",
       body: `Subject: Confirmed: [Project] Revision [N] approved
 
 Hi [Name],
@@ -231,7 +231,7 @@ Thanks,
       id: "handoff",
       title: "5. Final handoff",
       kind: "template",
-      copyLabel: "Copy handoff email",
+      copyLabel: "Copy Handoff Email",
       body: `Subject: Handoff ready — [Project] (approved Revision [N])
 
 Hi [Name],
@@ -407,7 +407,7 @@ export const websiteHandoffChecklist: ResourcePageContent = {
       id: "handoff-message",
       title: "Handoff message template",
       kind: "template",
-      copyLabel: "Copy handoff message",
+      copyLabel: "Copy Handoff Message",
       body: `Handoff package — [Project] (approved Revision [N])
 
 Approved revision record: [link]

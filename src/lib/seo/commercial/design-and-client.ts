@@ -76,7 +76,7 @@ export const designApprovalSoftware: CommercialPageContent = {
   ],
   secondaryCta: {
     href: "/resources/design-approval-checklist",
-    label: "Review the approval checklist",
+    label: "Review the Approval Checklist",
   },
   resourceLinks: [
     {
@@ -211,7 +211,7 @@ export const clientApprovalSoftware: CommercialPageContent = {
   ],
   secondaryCta: {
     href: "#how-it-works",
-    label: "See how approval rooms work",
+    label: "See How Approval Rooms Work",
   },
   resourceLinks: [
     {

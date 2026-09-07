@@ -114,7 +114,7 @@ export default function SolutionsHubPage() {
           path="/solutions"
           heading="Start a free trial."
           body="Create an approval room and send your first review link."
-          secondary={{ href: "/resources", label: "Browse resources" }}
+          secondary={{ href: "/resources", label: "Browse Resources" }}
         />
       </MarketingShell>
     </>

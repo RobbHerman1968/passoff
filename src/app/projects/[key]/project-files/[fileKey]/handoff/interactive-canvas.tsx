@@ -303,10 +303,10 @@ export function InteractiveScreenCanvas({
       onPointerCancel={stopDragging}
     >
       <div data-viewer-control className="absolute left-3 top-3 z-30 flex items-center gap-1 rounded-xl border border-black/10 bg-white/95 p-1 shadow-lg backdrop-blur">
-        <button type="button" aria-label="Zoom out" onClick={() => changeZoom(zoom / 1.08)} className="flex size-8 items-center justify-center rounded-lg text-black/60 hover:bg-black/5"><Minus className="size-4" /></button>
+        <button type="button" aria-label="Zoom Out" onClick={() => changeZoom(zoom / 1.08)} className="flex size-8 items-center justify-center rounded-lg text-black/60 hover:bg-black/5"><Minus className="size-4" /></button>
         <span className="w-12 text-center text-[10px] font-semibold tabular-nums text-black/60">{Math.round(zoom * 100)}%</span>
         <button type="button" aria-label="Zoom in" onClick={() => changeZoom(zoom * 1.08)} className="flex size-8 items-center justify-center rounded-lg text-black/60 hover:bg-black/5"><Plus className="size-4" /></button>
-        <button type="button" aria-label="Reset view" onClick={reset} className="flex size-8 items-center justify-center rounded-lg text-black/60 hover:bg-black/5"><RotateCcw className="size-3.5" /></button>
+        <button type="button" aria-label="Reset View" onClick={reset} className="flex size-8 items-center justify-center rounded-lg text-black/60 hover:bg-black/5"><RotateCcw className="size-3.5" /></button>
         <span className="mx-1 h-5 w-px bg-black/10" />
         <button
           type="button"
@@ -418,7 +418,7 @@ export function InteractiveScreenCanvas({
                     <button type="button" onClick={() => setCommentStatus(comment, comment.status === "open" ? "resolved" : "open")} className="flex items-center gap-1 rounded-lg bg-black/5 px-2 py-1.5 text-[9px] font-semibold">
                       <Check className="size-3" />{comment.status === "open" ? "Resolve" : "Reopen"}
                     </button>
-                    <button type="button" aria-label="Delete comment" onClick={() => deleteComment(comment)} className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-[9px] font-semibold text-[#b23b35] hover:bg-[#fff0ee]">
+                    <button type="button" aria-label="Delete Comment" onClick={() => deleteComment(comment)} className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-[9px] font-semibold text-[#b23b35] hover:bg-[#fff0ee]">
                       <Trash2 className="size-3" />Delete
                     </button>
                   </div>
@@ -448,7 +448,7 @@ export function InteractiveScreenCanvas({
               <div className="mt-2 flex justify-end gap-2">
                 <button type="button" onClick={() => setDraftPosition(null)} className="rounded-lg px-2.5 py-1.5 text-[9px] font-semibold text-black/45">Cancel</button>
                 <button type="submit" disabled={!draft.trim() || savingComment} className="rounded-lg bg-[#7c6cf0] px-3 py-1.5 text-[9px] font-semibold text-white disabled:opacity-40">
-                  {savingComment ? "Saving…" : "Post comment"}
+                  {savingComment ? "Saving…" : "Post Comment"}
                 </button>
               </div>
             </form>

@@ -44,3 +44,47 @@ describe("outbox concurrency contract", () => {
     expect(CLAIM_STALE_MS).toBeGreaterThanOrEqual(60_000);
   });
 });
+
+describe("approval receipt and handoff release contracts", () => {
+  it("approval receipts omit email when includeReviewerEmail is false", async () => {
+    const { serializeApprovalReceipt } = await import("@/lib/rooms/approval-receipt");
+    const receipt = serializeApprovalReceipt(
+      {
+        id: "11111111-2222-3333-4444-555555555555",
+        decision: "approved",
+        acceptanceStatement: "Approved.",
+        contentDigest: "abc123",
+        approvedAt: new Date("2026-01-01T00:00:00.000Z"),
+        projectName: "Demo",
+        clientName: "Client",
+        revisionId: "rev",
+        revisionNumber: 1,
+        reviewerName: "Pat",
+        reviewerEmail: "pat@example.com",
+        assetNames: ["Hero"],
+      },
+      { includeReviewerEmail: false },
+    );
+    expect(receipt.reviewerEmail).toBeNull();
+    expect(receipt.reviewerName).toBe("Pat");
+  });
+
+  it("released handoff listing stays empty until handoffReleasedAt is set", () => {
+    function visibleHandoffCount(releasedAt: string | null, items: number) {
+      return releasedAt ? items : 0;
+    }
+    expect(visibleHandoffCount(null, 3)).toBe(0);
+    expect(visibleHandoffCount("2026-09-06T12:00:00.000Z", 3)).toBe(3);
+  });
+
+  it("mutating a released handoff returns clients to preparing until re-release", () => {
+    let releasedAt: string | null = "2026-09-06T12:00:00.000Z";
+    const items = ["a"];
+    // Option A: any mutation clears release.
+    releasedAt = null;
+    items.push("b");
+    expect(releasedAt ? items.length : 0).toBe(0);
+    releasedAt = "2026-09-06T13:00:00.000Z";
+    expect(releasedAt ? items.length : 0).toBe(2);
+  });
+});

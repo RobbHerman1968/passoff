@@ -56,10 +56,10 @@ export function ProductPreview({
               </p>
               <div className="mt-3 space-y-2">
                 <div className="flex h-9 items-center justify-center rounded-lg bg-[var(--brand)] text-xs font-semibold text-white">
-                  Approve revision
+                  Approve Revision
                 </div>
                 <div className="flex h-9 items-center justify-center rounded-lg border border-white/15 text-xs font-semibold text-white/70">
-                  Request changes
+                  Request Changes
                 </div>
               </div>
               <p className="mt-4 text-xs leading-5 text-white/45">

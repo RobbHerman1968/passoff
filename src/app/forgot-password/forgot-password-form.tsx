@@ -43,13 +43,13 @@ export function ForgotPasswordForm() {
           disabled={pending}
           className="flex w-full items-center justify-center rounded-xl bg-[#7c6cf0] px-4 py-3 text-sm font-semibold text-white transition enabled:hover:-translate-y-0.5 enabled:hover:bg-[#6354d4] disabled:opacity-50"
         >
-          {pending ? "Sending…" : "Send reset link"}
+          {pending ? "Sending…" : "Send Reset Link"}
         </button>
       </form>
 
       <p className="text-center text-sm text-white/45">
         <Link href="/login" className="font-semibold text-[var(--brand)] hover:text-[var(--brand-glow)]">
-          Back to sign in
+          Back to Sign In
         </Link>
       </p>
     </div>

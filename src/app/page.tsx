@@ -4,6 +4,7 @@ import { ArrowRight, Check, Lock, Shield } from "lucide-react";
 
 import { BrandMark } from "@/components/brand-mark";
 import { MarketingFooter } from "@/components/seo/marketing-shell";
+import { ProductProofSection } from "@/components/seo/product-proof";
 import { SiteHeader } from "@/components/site-header";
 import { getSiteUrl, siteConfig } from "@/lib/site";
 
@@ -145,11 +146,11 @@ function ApprovalRoomPreview() {
               Approval room
             </p>
             <p className="mt-0.5 truncate text-sm font-semibold text-[var(--brand-soft)]">
-              Acme marketing site
+              Harbor & Co. Website
             </p>
           </div>
           <span className="shrink-0 rounded-lg bg-[color-mix(in_srgb,var(--brand)_28%,transparent)] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-white">
-            Revision 3
+            Revision 2
           </span>
         </div>
 
@@ -177,18 +178,18 @@ function ApprovalRoomPreview() {
             </p>
             <div className="mt-3 space-y-3">
               <div className="rounded-xl bg-white/5 px-3 py-2.5">
-                <p className="text-[11px] font-semibold text-white/80">Jordan · Client</p>
+                <p className="text-[11px] font-semibold text-white/80">Alex · Client</p>
                 <p className="mt-1 text-xs leading-5 text-white/45">
-                  Can we tighten the hero spacing on mobile?
+                  Soften the hero headline on mobile?
                 </p>
               </div>
               <div className="rounded-xl border border-[color-mix(in_srgb,var(--brand)_40%,transparent)] bg-[color-mix(in_srgb,var(--brand)_14%,transparent)] px-3 py-2.5">
                 <div className="flex items-center gap-1.5 text-[11px] font-semibold text-[var(--brand-soft)]">
                   <Check className="size-3.5" />
-                  Approved · Revision 3
+                  Approved · Revision 2
                 </div>
                 <p className="mt-1 text-xs leading-5 text-white/45">
-                  Sign-off recorded on this immutable revision.
+                  Receipt bound to this frozen revision digest.
                 </p>
               </div>
             </div>
@@ -239,14 +240,14 @@ export default function Home() {
                   href="/login?mode=signup"
                   className="inline-flex h-12 items-center gap-2 rounded-xl bg-[var(--brand-surface)] px-5 text-sm font-semibold text-[var(--brand-soft)] transition hover:-translate-y-0.5 hover:bg-[var(--brand-deep)]"
                 >
-                  Start free trial
+                  Start Free Trial
                   <ArrowRight className="size-4" />
                 </Link>
                 <a
-                  href="#how-it-works"
+                  href="#product-proof"
                   className="inline-flex h-12 items-center rounded-xl px-4 text-sm font-semibold text-[var(--brand-ink)] transition hover:bg-[color-mix(in_srgb,var(--brand)_10%,transparent)]"
                 >
-                  See how it works
+                  See the Closeout Loop
                 </a>
               </div>
             </div>
@@ -255,10 +256,12 @@ export default function Home() {
           </div>
         </section>
 
+        <ProductProofSection />
+
         <section
           id="how-it-works"
           aria-labelledby="how-heading"
-          className="border-t border-[color-mix(in_srgb,var(--brand-ink)_10%,transparent)] bg-[#faf8ff]"
+          className="border-t border-[color-mix(in_srgb,var(--brand-ink)_10%,transparent)]"
         >
           <div className="mx-auto max-w-6xl px-5 py-16 sm:px-8 lg:py-20">
             <p className="text-xs font-semibold uppercase tracking-[0.2em] text-[var(--brand)]">
@@ -445,7 +448,7 @@ export default function Home() {
               href="/login?mode=signup"
               className="inline-flex h-12 shrink-0 items-center gap-2 self-start rounded-xl bg-[var(--brand)] px-5 text-sm font-semibold text-white transition hover:-translate-y-0.5 hover:bg-[var(--brand-strong)]"
             >
-              Start free trial
+              Start Free Trial
               <ArrowRight className="size-4" />
             </Link>
           </div>

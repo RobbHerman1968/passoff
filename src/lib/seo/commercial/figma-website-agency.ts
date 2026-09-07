@@ -78,7 +78,7 @@ export const figmaDesignApproval: CommercialPageContent = {
   ],
   secondaryCta: {
     href: "/resources/design-approval-checklist",
-    label: "Review the approval checklist",
+    label: "Review the Approval Checklist",
   },
   resourceLinks: [
     {
@@ -213,7 +213,7 @@ export const websiteDesignApproval: CommercialPageContent = {
   ],
   secondaryCta: {
     href: "/resources/design-approval-checklist",
-    label: "Review the approval checklist",
+    label: "Review the Approval Checklist",
   },
   resourceLinks: [
     {
@@ -350,7 +350,7 @@ export const approvalWorkflowForAgencies: CommercialPageContent = {
   ],
   secondaryCta: {
     href: "/resources/client-sign-off-template",
-    label: "Use the sign-off template",
+    label: "Use the Sign-Off Template",
   },
   resourceLinks: [
     {

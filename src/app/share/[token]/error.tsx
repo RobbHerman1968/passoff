@@ -30,10 +30,10 @@ export default function ShareError({
             onClick={() => retry()}
             className="inline-flex h-10 items-center rounded-xl bg-[#7c6cf0] px-4 text-sm font-semibold text-white"
           >
-            Try again
+            Try Again
           </button>
           <Link href="/" className="inline-flex h-10 items-center rounded-xl px-4 text-sm font-semibold text-white/70">
-            Pass-Off home
+            Pass-Off Home
           </Link>
         </div>
       </div>

@@ -189,6 +189,16 @@ export function buildTenantObjectPath(input: {
   return `workspaces/${input.workspaceId}/rooms/${input.projectId}/revisions/${input.revisionId}/${randomId}-${safeFilename(input.filename)}`;
 }
 
+/** Tenant-scoped path for delivery handoff files (not tied to a revision). */
+export function buildHandoffObjectPath(input: {
+  workspaceId: string;
+  projectId: string;
+  filename: string;
+}) {
+  const randomId = randomBytes(16).toString("hex");
+  return `workspaces/${input.workspaceId}/rooms/${input.projectId}/handoff/${randomId}-${safeFilename(input.filename)}`;
+}
+
 /** @deprecated Prefer buildTenantObjectPath */
 export function buildObjectKey(workspaceId: string, projectId: string, filename: string) {
   const ext = path.extname(filename).slice(0, 12) || ".bin";
@@ -226,6 +236,13 @@ export const ALLOWED_UPLOAD_MIME_TYPES = [
   "image/webp",
   "image/gif",
   "application/pdf",
+] as const;
+
+/** Broader set for delivery handoff (final packages, etc.). */
+export const ALLOWED_HANDOFF_MIME_TYPES = [
+  ...ALLOWED_UPLOAD_MIME_TYPES,
+  "application/zip",
+  "application/x-zip-compressed",
 ] as const;
 
 export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
