@@ -663,6 +663,7 @@ export function ProjectDesigns({
 
       {active && activeGroup && result && (
         <HandoffWorkspace
+          projectKey={projectKey}
           result={result}
           screen={active}
           siblingScreens={activeGroup.screens}

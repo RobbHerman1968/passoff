@@ -1146,6 +1146,7 @@ export function ProjectFilesDashboard({
           .filter((screen): screen is NonNullable<typeof screen> => Boolean(screen));
         return (
           <HandoffWorkspace
+            projectKey={projectKey}
             result={handoff.result}
             screen={activeScreen}
             siblingScreens={siblingScreens.length > 0 ? siblingScreens : [activeScreen]}

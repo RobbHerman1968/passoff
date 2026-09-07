@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Figtree, Syne } from "next/font/google";
+import { Figtree, Manrope } from "next/font/google";
 
 import { ToastViewport } from "@/components/ui/toast";
 import { getSiteUrl, siteConfig } from "@/lib/site";
@@ -12,7 +12,7 @@ const figtree = Figtree({
   display: "swap",
 });
 
-const syne = Syne({
+const manrope = Manrope({
   variable: "--font-display",
   subsets: ["latin"],
   display: "swap",
@@ -59,7 +59,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html
       lang="en"
-      className={`${figtree.variable} ${syne.variable} h-full antialiased`}
+      className={`${figtree.variable} ${manrope.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col font-[family-name:var(--font-figtree)]">
         {children}

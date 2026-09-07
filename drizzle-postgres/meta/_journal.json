@@ -71,6 +71,27 @@
       "when": 1788125000000,
       "tag": "0009_handoff_item_asset_unique",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1788126000000,
+      "tag": "0010_figma_explanations",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1788127000000,
+      "tag": "0011_preserve_figma_explanations",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1788814800000,
+      "tag": "0012_developer_handoff_snapshots",
+      "breakpoints": true
     }
   ]
 }

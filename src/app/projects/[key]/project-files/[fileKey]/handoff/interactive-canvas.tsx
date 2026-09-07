@@ -1,10 +1,13 @@
 "use client";
 
 import {
+  BookOpenText,
   Check,
+  FilePenLine,
   LoaderCircle,
   MessageSquarePlus,
   Minus,
+  Move,
   MousePointer2,
   Plus,
   RotateCcw,
@@ -13,15 +16,48 @@ import {
 import { useEffect, useRef, useState } from "react";
 
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogMedia,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
   findInspectNode,
   hitTestInspectNode,
   type InspectNode,
 } from "@/lib/figma/inspect";
-import type { FigmaCommentRecord, FigmaImportResult, FigmaInteraction, FigmaScreen } from "@/lib/figma/types";
+import {
+  buildFigmaExplanationsUrl,
+  FIGMA_EXPLANATION_CATEGORIES,
+  FIGMA_EXPLANATION_CATEGORY_LABELS,
+  toggleFigmaAuthoringMode,
+  type FigmaAuthoringMode,
+} from "@/lib/figma/explanation-contract";
+import type {
+  FigmaCommentRecord,
+  FigmaExplanationCategory,
+  FigmaExplanationRecord,
+  FigmaExplanationStatus,
+  FigmaImportResult,
+  FigmaInteraction,
+  FigmaScreen,
+} from "@/lib/figma/types";
 
-import { commentsUpdatedEvent, focusCommentEvent, notifyCommentsUpdated } from "./events";
+import {
+  commentsUpdatedEvent,
+  focusCommentEvent,
+  focusExplanationEvent,
+  notifyCommentsUpdated,
+  notifyExplanationsUpdated,
+} from "./events";
 
 type Props = {
+  projectKey: string;
   file: FigmaImportResult["file"];
   screen: FigmaScreen;
   outgoing: FigmaInteraction[];
@@ -33,9 +69,14 @@ type Props = {
   onSelectNode?: (node: InspectNode | null) => void;
   selectedHotspotIndex?: number | null;
   onSelectHotspot?: (index: number | null, interaction: FigmaInteraction | null) => void;
+  readOnly?: boolean;
+  initialExplanations?: FigmaExplanationRecord[];
 };
 
+const EMPTY_EXPLANATIONS: FigmaExplanationRecord[] = [];
+
 export function InteractiveScreenCanvas({
+  projectKey,
   file,
   screen,
   outgoing,
@@ -47,16 +88,32 @@ export function InteractiveScreenCanvas({
   onSelectNode,
   selectedHotspotIndex = null,
   onSelectHotspot,
+  readOnly = false,
+  initialExplanations = EMPTY_EXPLANATIONS,
 }: Props) {
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
-  const [commentMode, setCommentMode] = useState(false);
+  const [authoringMode, setAuthoringMode] = useState<FigmaAuthoringMode>(null);
   const [comments, setComments] = useState<FigmaCommentRecord[]>([]);
   const [draftPosition, setDraftPosition] = useState<{ x: number; y: number } | null>(null);
   const [draft, setDraft] = useState("");
   const [activeCommentId, setActiveCommentId] = useState<string | null>(null);
   const [commentError, setCommentError] = useState<string | null>(null);
   const [savingComment, setSavingComment] = useState(false);
+  const [explanations, setExplanations] = useState<FigmaExplanationRecord[]>([]);
+  const [explanationPosition, setExplanationPosition] = useState<{ x: number; y: number } | null>(null);
+  const [explanationNode, setExplanationNode] = useState<{ id: string; name: string } | null>(null);
+  const [explanationDraft, setExplanationDraft] = useState({
+    category: "intent" as FigmaExplanationCategory,
+    title: "",
+    body: "",
+  });
+  const [activeExplanationId, setActiveExplanationId] = useState<string | null>(null);
+  const [editingExplanationId, setEditingExplanationId] = useState<string | null>(null);
+  const [movingExplanationId, setMovingExplanationId] = useState<string | null>(null);
+  const [deleteExplanationTarget, setDeleteExplanationTarget] = useState<FigmaExplanationRecord | null>(null);
+  const [explanationError, setExplanationError] = useState<string | null>(null);
+  const [savingExplanation, setSavingExplanation] = useState(false);
   const [viewport, setViewport] = useState({ width: 0, height: 0 });
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const drag = useRef<{ pointerId: number; x: number; y: number; startX: number; startY: number; moved: boolean } | null>(null);
@@ -96,6 +153,8 @@ export function InteractiveScreenCanvas({
   };
   const reset = () => { setZoom(1); setPan({ x: 0, y: 0 }); };
   const selectedNode = inspectTree && selectedNodeId ? findInspectNode(inspectTree, selectedNodeId) : null;
+  const commentMode = authoringMode === "comment";
+  const explainMode = authoringMode === "explain";
 
   useEffect(() => {
     setZoom(1);
@@ -116,6 +175,10 @@ export function InteractiveScreenCanvas({
   }, []);
 
   useEffect(() => {
+    if (readOnly) {
+      setComments([]);
+      return;
+    }
     const query = new URLSearchParams({ fileKey: file.key, screenId: screen.id });
     fetch(`/api/integrations/figma/comments?${query}`, { cache: "no-store" })
       .then(async (response) => {
@@ -125,7 +188,23 @@ export function InteractiveScreenCanvas({
       })
       .then(setComments)
       .catch((reason: unknown) => setCommentError(reason instanceof Error ? reason.message : "Unable to load comments."));
-  }, [file.key, screen.id]);
+  }, [file.key, readOnly, screen.id]);
+
+  useEffect(() => {
+    if (readOnly) {
+      setExplanations(initialExplanations);
+      setExplanationError(null);
+      return;
+    }
+    fetch(buildFigmaExplanationsUrl(projectKey, file.key, screen.id), { cache: "no-store" })
+      .then(async (response) => {
+        const payload = await response.json() as { explanations?: FigmaExplanationRecord[]; error?: string };
+        if (!response.ok) throw new Error(payload.error || "Unable to load explanations.");
+        return payload.explanations ?? [];
+      })
+      .then(setExplanations)
+      .catch((reason: unknown) => setExplanationError(reason instanceof Error ? reason.message : "Unable to load explanations."));
+  }, [file.key, initialExplanations, projectKey, readOnly, screen.id]);
 
   useEffect(() => {
     function focusComment(event: Event) {
@@ -137,6 +216,20 @@ export function InteractiveScreenCanvas({
     }
     window.addEventListener(focusCommentEvent, focusComment);
     return () => window.removeEventListener(focusCommentEvent, focusComment);
+  }, [file.key, screen.id]);
+
+  useEffect(() => {
+    function focusExplanation(event: Event) {
+      const detail = (event as CustomEvent<{ fileKey?: string; screenId?: string; explanationId?: string }>).detail;
+      if (detail?.fileKey === file.key && detail.screenId === screen.id && detail.explanationId) {
+        setDraftPosition(null);
+        setExplanationPosition(null);
+        setActiveCommentId(null);
+        setActiveExplanationId(detail.explanationId);
+      }
+    }
+    window.addEventListener(focusExplanationEvent, focusExplanation);
+    return () => window.removeEventListener(focusExplanationEvent, focusExplanation);
   }, [file.key, screen.id]);
 
   useEffect(() => {
@@ -175,8 +268,8 @@ export function InteractiveScreenCanvas({
   }
 
   function handlePointerDown(event: React.PointerEvent<HTMLDivElement>) {
-    if (commentMode) return;
-    if ((event.target as HTMLElement).closest("[data-hotspot], [data-viewer-control], [data-comment-pin], [data-comment-composer]")) return;
+    if (authoringMode) return;
+    if ((event.target as HTMLElement).closest("[data-hotspot], [data-viewer-control], [data-comment-pin], [data-comment-composer], [data-explanation-pin], [data-explanation-composer]")) return;
     event.currentTarget.setPointerCapture(event.pointerId);
     didPanRef.current = false;
     drag.current = {
@@ -216,9 +309,40 @@ export function InteractiveScreenCanvas({
     setCommentError(null);
   }
 
+  function positionFromClick(event: React.MouseEvent<HTMLDivElement>) {
+    const rect = event.currentTarget.getBoundingClientRect();
+    return {
+      x: Math.max(0, Math.min(100, ((event.clientX - rect.left) / rect.width) * 100)),
+      y: Math.max(0, Math.min(100, ((event.clientY - rect.top) / rect.height) * 100)),
+    };
+  }
+
+  async function placeExplanation(event: React.MouseEvent<HTMLDivElement>) {
+    if (!explainMode || didPanRef.current || (event.target as HTMLElement).closest("[data-explanation-pin], [data-explanation-composer]")) return;
+    event.stopPropagation();
+    const position = positionFromClick(event);
+    if (movingExplanationId) {
+      const updated = await patchExplanation(movingExplanationId, position);
+      if (updated) {
+        setMovingExplanationId(null);
+        setAuthoringMode(null);
+        setActiveExplanationId(updated.id);
+      }
+      return;
+    }
+    setExplanationPosition(position);
+    setExplanationNode(selectedNode ? { id: selectedNode.id, name: selectedNode.name } : null);
+    setExplanationDraft({ category: "intent", title: "", body: "" });
+    setDraftPosition(null);
+    setActiveCommentId(null);
+    setActiveExplanationId(null);
+    setEditingExplanationId(null);
+    setExplanationError(null);
+  }
+
   function handleInspectClick(event: React.MouseEvent<HTMLDivElement>) {
     if (!inspectMode || !inspectTree || !onSelectNode || didPanRef.current) return;
-    if ((event.target as HTMLElement).closest("[data-viewer-control], [data-comment-pin], [data-comment-composer]")) return;
+    if ((event.target as HTMLElement).closest("[data-viewer-control], [data-comment-pin], [data-comment-composer], [data-explanation-pin], [data-explanation-composer]")) return;
     event.stopPropagation();
     const rect = event.currentTarget.getBoundingClientRect();
     const x = ((event.clientX - rect.left) / rect.width) * width;
@@ -286,11 +410,126 @@ export function InteractiveScreenCanvas({
     notifyCommentsUpdated(file.key, screen.id);
   }
 
+  async function patchExplanation(
+    id: string,
+    changes: Partial<Pick<FigmaExplanationRecord, "title" | "body" | "category" | "x" | "y" | "status">>,
+  ) {
+    setSavingExplanation(true);
+    setExplanationError(null);
+    try {
+      const response = await fetch("/api/integrations/figma/explanations", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectKey, id, ...changes }),
+      });
+      const payload = await response.json() as FigmaExplanationRecord | { error?: string };
+      if (!response.ok || !("title" in payload)) {
+        throw new Error("error" in payload && payload.error ? payload.error : "Unable to update explanation.");
+      }
+      setExplanations((current) => current.map((item) => item.id === payload.id ? payload : item));
+      notifyExplanationsUpdated(file.key, screen.id);
+      return payload;
+    } catch (reason) {
+      setExplanationError(reason instanceof Error ? reason.message : "Unable to update explanation.");
+      return null;
+    } finally {
+      setSavingExplanation(false);
+    }
+  }
+
+  async function saveNewExplanation(status: FigmaExplanationStatus) {
+    if (!explanationPosition || !explanationDraft.title.trim() || !explanationDraft.body.trim() || savingExplanation) return;
+    setSavingExplanation(true);
+    setExplanationError(null);
+    try {
+      const response = await fetch("/api/integrations/figma/explanations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          projectKey,
+          fileKey: file.key,
+          fileName: file.name,
+          screenId: screen.id,
+          screenName: screen.name,
+          figmaNodeId: explanationNode?.id ?? null,
+          figmaNodeName: explanationNode?.name ?? null,
+          x: explanationPosition.x,
+          y: explanationPosition.y,
+          category: explanationDraft.category,
+          title: explanationDraft.title,
+          body: explanationDraft.body,
+          status,
+        }),
+      });
+      const payload = await response.json() as FigmaExplanationRecord | { error?: string };
+      if (!response.ok || !("title" in payload)) {
+        throw new Error("error" in payload && payload.error ? payload.error : "Unable to save explanation.");
+      }
+      setExplanations((current) => [...current, payload]);
+      setExplanationPosition(null);
+      setExplanationNode(null);
+      setActiveExplanationId(payload.id);
+      setAuthoringMode(null);
+      notifyExplanationsUpdated(file.key, screen.id);
+    } catch (reason) {
+      setExplanationError(reason instanceof Error ? reason.message : "Unable to save explanation.");
+    } finally {
+      setSavingExplanation(false);
+    }
+  }
+
+  async function saveExplanationEdits(explanation: FigmaExplanationRecord) {
+    const updated = await patchExplanation(explanation.id, {
+      category: explanationDraft.category,
+      title: explanationDraft.title,
+      body: explanationDraft.body,
+    });
+    if (updated) setEditingExplanationId(null);
+  }
+
+  function beginExplanationEdit(explanation: FigmaExplanationRecord) {
+    setExplanationDraft({
+      category: explanation.category,
+      title: explanation.title,
+      body: explanation.body,
+    });
+    setEditingExplanationId(explanation.id);
+  }
+
+  async function deleteExplanation(explanation: FigmaExplanationRecord) {
+    setSavingExplanation(true);
+    setExplanationError(null);
+    try {
+      const response = await fetch("/api/integrations/figma/explanations", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectKey, id: explanation.id }),
+      });
+      const payload = await response.json() as { deleted?: boolean; error?: string };
+      if (!response.ok) throw new Error(payload.error || "Unable to delete explanation.");
+      setExplanations((current) => current.filter((item) => item.id !== explanation.id));
+      setActiveExplanationId(null);
+      setEditingExplanationId(null);
+      setDeleteExplanationTarget(null);
+      notifyExplanationsUpdated(file.key, screen.id);
+    } catch (reason) {
+      setExplanationError(reason instanceof Error ? reason.message : "Unable to delete explanation.");
+    } finally {
+      setSavingExplanation(false);
+    }
+  }
+
   const hint = commentMode
     ? "Click the design to place a comment"
+    : explainMode
+      ? movingExplanationId
+        ? "Click the design to move this explanation"
+        : "Click the design to place an explanation"
     : inspectMode
       ? "Scroll or drag to pan · ⌘/Ctrl+scroll to zoom · click a layer"
-      : "Scroll or drag to pan · ⌘/Ctrl+scroll to zoom · click hotspots";
+      : readOnly
+        ? "Read-only snapshot · drag to pan · click hotspots and notes"
+        : "Scroll or drag to pan · ⌘/Ctrl+scroll to zoom · click hotspots";
 
   return (
     <div
@@ -307,34 +546,58 @@ export function InteractiveScreenCanvas({
         <span className="w-12 text-center text-[10px] font-semibold tabular-nums text-black/60">{Math.round(zoom * 100)}%</span>
         <button type="button" aria-label="Zoom in" onClick={() => changeZoom(zoom * 1.08)} className="flex size-8 items-center justify-center rounded-lg text-black/60 hover:bg-black/5"><Plus className="size-4" /></button>
         <button type="button" aria-label="Reset View" onClick={reset} className="flex size-8 items-center justify-center rounded-lg text-black/60 hover:bg-black/5"><RotateCcw className="size-3.5" /></button>
-        <span className="mx-1 h-5 w-px bg-black/10" />
-        <button
-          type="button"
-          aria-pressed={commentMode}
-          onClick={() => {
-            setCommentMode((current) => !current);
-            setDraftPosition(null);
-            setActiveCommentId(null);
-          }}
-          className={`flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-[10px] font-semibold transition ${commentMode ? "bg-[#7c6cf0] text-white" : "text-black/60 hover:bg-black/5"}`}
-        >
-          <MessageSquarePlus className="size-3.5" />Comment
-        </button>
-        <span className="rounded-md bg-black/5 px-1.5 py-1 text-[9px] font-bold text-black/45">{comments.filter((item) => item.status === "open").length}</span>
+        {!readOnly && (
+          <>
+            <span className="mx-1 h-5 w-px bg-black/10" />
+            <button
+              type="button"
+              aria-pressed={commentMode}
+              onClick={() => {
+                setAuthoringMode((current) => toggleFigmaAuthoringMode(current, "comment"));
+                setDraftPosition(null);
+                setExplanationPosition(null);
+                setMovingExplanationId(null);
+                setActiveCommentId(null);
+                setActiveExplanationId(null);
+              }}
+              className={`flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-[10px] font-semibold transition ${commentMode ? "bg-[#7c6cf0] text-white" : "text-black/60 hover:bg-black/5"}`}
+            >
+              <MessageSquarePlus className="size-3.5" />Comment
+            </button>
+            <span className="rounded-md bg-black/5 px-1.5 py-1 text-[9px] font-bold text-black/45">{comments.filter((item) => item.status === "open").length}</span>
+            <button
+              type="button"
+              aria-pressed={explainMode}
+              onClick={() => {
+                setAuthoringMode((current) => toggleFigmaAuthoringMode(current, "explain"));
+                setDraftPosition(null);
+                setExplanationPosition(null);
+                setMovingExplanationId(null);
+                setActiveCommentId(null);
+                setActiveExplanationId(null);
+              }}
+              className={`flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-[10px] font-semibold transition ${explainMode ? "bg-[#16857a] text-white" : "text-black/60 hover:bg-black/5"}`}
+            >
+              <BookOpenText className="size-3.5" />Explain
+            </button>
+            <span className="rounded-md bg-black/5 px-1.5 py-1 text-[9px] font-bold text-black/45">{explanations.length}</span>
+          </>
+        )}
       </div>
       <div className="pointer-events-none absolute bottom-3 left-1/2 z-30 flex -translate-x-1/2 items-center gap-2 whitespace-nowrap rounded-full bg-black/70 px-3 py-1.5 text-[9px] font-medium text-white/80 backdrop-blur">
         <MousePointer2 className="size-3" />{hint}
       </div>
-      {commentError && <div data-viewer-control role="alert" className="absolute right-3 top-3 z-40 max-w-xs rounded-xl bg-[#2e2654] px-3 py-2 text-[10px] text-white shadow-lg">{commentError}</div>}
+      {(commentError || explanationError) && <div data-viewer-control role="alert" className="absolute right-3 top-3 z-40 max-w-xs rounded-xl bg-[#2e2654] px-3 py-2 text-[10px] text-white shadow-lg">{commentError || explanationError}</div>}
       {screen.imageUrl ? (
         <div
           role="img"
           aria-label={`Interactive preview of ${screen.name}`}
           onClick={(event) => {
             if (commentMode) placeComment(event);
+            else if (explainMode) void placeExplanation(event);
             else if (inspectMode) handleInspectClick(event);
           }}
-          className={`relative shrink-0 bg-white bg-[length:100%_100%] bg-center bg-no-repeat shadow-xl ${commentMode || inspectMode ? "cursor-crosshair" : "cursor-grab"} ${!commentMode ? "active:cursor-grabbing" : ""}`}
+          className={`relative shrink-0 bg-white bg-[length:100%_100%] bg-center bg-no-repeat shadow-xl ${authoringMode || inspectMode ? "cursor-crosshair" : "cursor-grab"} ${!authoringMode ? "active:cursor-grabbing" : ""}`}
           style={{
             aspectRatio: `${width} / ${height}`,
             backgroundImage: `url(${JSON.stringify(screen.imageUrl).slice(1, -1)})`,
@@ -372,7 +635,7 @@ export function InteractiveScreenCanvas({
               <button
                 data-hotspot
                 type="button"
-                disabled={!destination || commentMode}
+                disabled={!destination || Boolean(authoringMode)}
                 key={`${interaction.sourceNodeId}-${index}`}
                 title={`${interaction.sourceNodeName} → ${destination?.name || interaction.destinationScreenId || "No destination"}`}
                 onClick={(event) => {
@@ -380,7 +643,7 @@ export function InteractiveScreenCanvas({
                   onSelectHotspot?.(index, interaction);
                   if (destination && !inspectMode) onNavigate(destination.id);
                 }}
-                className={`group absolute z-20 min-h-6 min-w-6 cursor-pointer rounded border-2 bg-[#7c6cf0]/15 shadow-[0_0_0_2px_rgba(255,255,255,.65)] transition hover:bg-[#7c6cf0]/30 disabled:cursor-not-allowed ${commentMode ? "pointer-events-none opacity-35" : ""} ${selected ? "border-[#6354d4] ring-2 ring-[#7c6cf0]/40" : "border-[#7c6cf0]"}`}
+                className={`group absolute z-20 min-h-6 min-w-6 cursor-pointer rounded border-2 bg-[#7c6cf0]/15 shadow-[0_0_0_2px_rgba(255,255,255,.65)] transition hover:bg-[#7c6cf0]/30 disabled:cursor-not-allowed ${authoringMode ? "pointer-events-none opacity-35" : ""} ${selected ? "border-[#6354d4] ring-2 ring-[#7c6cf0]/40" : "border-[#7c6cf0]"}`}
                 style={{ left: `${left}%`, top: `${top}%`, width: `${hotspotWidth}%`, height: `${hotspotHeight}%` }}
               >
                 <span className="absolute -right-2 -top-2 flex size-5 items-center justify-center rounded-full bg-[#6354d4] text-[9px] font-bold text-white shadow">{index + 1}</span>
@@ -390,6 +653,93 @@ export function InteractiveScreenCanvas({
               </button>
             );
           })}
+          {explanations.map((explanation, index) => (
+            <div
+              data-explanation-pin
+              key={explanation.id}
+              className="absolute z-40"
+              style={{ left: `${explanation.x}%`, top: `${explanation.y}%`, transform: `translate(-50%, -50%) scale(${1 / zoom})` }}
+            >
+              <button
+                type="button"
+                aria-label={`Open explanation ${index + 1}`}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setDraftPosition(null);
+                  setExplanationPosition(null);
+                  setActiveCommentId(null);
+                  setEditingExplanationId(null);
+                  setActiveExplanationId((current) => current === explanation.id ? null : explanation.id);
+                }}
+                className={`relative flex size-8 items-center justify-center rounded-lg border-2 border-white text-white shadow-lg ${explanation.status === "draft" ? "bg-[#52706b] ring-2 ring-dashed ring-[#f3c56f]" : "bg-[#16857a]"}`}
+              >
+                <BookOpenText className="size-4" />
+                <span className="absolute -right-2 -top-2 flex size-4 items-center justify-center rounded-full bg-[#0f4f49] text-[8px] font-bold">{index + 1}</span>
+              </button>
+              {activeExplanationId === explanation.id && (
+                <div
+                  data-explanation-composer
+                  onClick={(event) => event.stopPropagation()}
+                  className="absolute left-10 top-0 w-72 rounded-2xl border border-black/10 bg-white p-3 text-left text-black shadow-2xl"
+                >
+                  {editingExplanationId === explanation.id ? (
+                    <>
+                      <ExplanationFields value={explanationDraft} onChange={setExplanationDraft} />
+                      <div className="mt-2 flex justify-end gap-2">
+                        <button type="button" onClick={() => setEditingExplanationId(null)} className="rounded-lg px-2 py-1.5 text-[9px] font-semibold text-black/45">Cancel</button>
+                        <button
+                          type="button"
+                          disabled={savingExplanation || !explanationDraft.title.trim() || !explanationDraft.body.trim()}
+                          onClick={() => void saveExplanationEdits(explanation)}
+                          className="rounded-lg bg-[#16857a] px-3 py-1.5 text-[9px] font-semibold text-white disabled:opacity-40"
+                        >
+                          {savingExplanation ? "Saving…" : "Save changes"}
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="text-[9px] font-bold uppercase tracking-wide text-[#16857a]">{FIGMA_EXPLANATION_CATEGORY_LABELS[explanation.category]}</p>
+                          <h3 className="mt-1 text-[12px] font-semibold leading-4">{explanation.title}</h3>
+                        </div>
+                        <span className={`rounded-md px-1.5 py-1 text-[8px] font-bold uppercase ${explanation.status === "draft" ? "bg-[#fff4d8] text-[#76500b]" : "bg-[#dff3ef] text-[#0f665d]"}`}>{explanation.status}</span>
+                      </div>
+                      <p className="mt-2 whitespace-pre-wrap text-[11px] leading-5 text-black/70">{explanation.body}</p>
+                      {explanation.figmaNodeName && <p className="mt-2 truncate font-mono text-[8px] text-black/35">Layer: {explanation.figmaNodeName}</p>}
+                      <p className="mt-2 text-[9px] text-black/35">{explanation.authorName} · {new Date(explanation.updatedAt).toLocaleString()}</p>
+                      {explanation.canEdit && (
+                        <div className="mt-3 flex flex-wrap gap-1.5 border-t border-black/8 pt-2">
+                          <button type="button" onClick={() => beginExplanationEdit(explanation)} className="flex items-center gap-1 rounded-lg bg-black/5 px-2 py-1.5 text-[9px] font-semibold"><FilePenLine className="size-3" />Edit</button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setMovingExplanationId(explanation.id);
+                              setAuthoringMode("explain");
+                              setActiveExplanationId(null);
+                            }}
+                            className="flex items-center gap-1 rounded-lg bg-black/5 px-2 py-1.5 text-[9px] font-semibold"
+                          >
+                            <Move className="size-3" />Move
+                          </button>
+                          <button
+                            type="button"
+                            disabled={savingExplanation}
+                            onClick={() => void patchExplanation(explanation.id, { status: explanation.status === "draft" ? "published" : "draft" })}
+                            className="rounded-lg bg-[#dff3ef] px-2 py-1.5 text-[9px] font-semibold text-[#0f665d]"
+                          >
+                            {explanation.status === "draft" ? "Publish" : "Unpublish"}
+                          </button>
+                          <button type="button" disabled={savingExplanation} onClick={() => setDeleteExplanationTarget(explanation)} className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-[9px] font-semibold text-[#b23b35] hover:bg-[#fff0ee]"><Trash2 className="size-3" />Delete</button>
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+          ))}
           {comments.map((comment, index) => (
             <div data-comment-pin key={comment.id} className="absolute z-40" style={{ left: `${comment.x}%`, top: `${comment.y}%`, transform: `translate(-50%, -50%) scale(${1 / zoom})` }}>
               <button
@@ -453,10 +803,126 @@ export function InteractiveScreenCanvas({
               </div>
             </form>
           )}
+          {explanationPosition && (
+            <div
+              data-explanation-composer
+              onClick={(event) => event.stopPropagation()}
+              className="absolute z-50 w-72 rounded-2xl border border-black/10 bg-white p-3 text-black shadow-2xl"
+              style={{ left: `${explanationPosition.x}%`, top: `${explanationPosition.y}%`, transform: `translate(12px, 12px) scale(${1 / zoom})`, transformOrigin: "top left" }}
+            >
+              <p className="text-[10px] font-semibold">Explain this design decision</p>
+              {explanationNode && <p className="mt-1 truncate font-mono text-[8px] text-black/35">Attached to {explanationNode.name}</p>}
+              <div className="mt-2">
+                <ExplanationFields value={explanationDraft} onChange={setExplanationDraft} autoFocus />
+              </div>
+              <div className="mt-2 flex justify-end gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setExplanationPosition(null);
+                    setExplanationNode(null);
+                  }}
+                  className="rounded-lg px-2 py-1.5 text-[9px] font-semibold text-black/45"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={savingExplanation || !explanationDraft.title.trim() || !explanationDraft.body.trim()}
+                  onClick={() => void saveNewExplanation("draft")}
+                  className="rounded-lg border border-[#16857a]/25 px-2 py-1.5 text-[9px] font-semibold text-[#0f665d] disabled:opacity-40"
+                >
+                  Save as draft
+                </button>
+                <button
+                  type="button"
+                  disabled={savingExplanation || !explanationDraft.title.trim() || !explanationDraft.body.trim()}
+                  onClick={() => void saveNewExplanation("published")}
+                  className="rounded-lg bg-[#16857a] px-2.5 py-1.5 text-[9px] font-semibold text-white disabled:opacity-40"
+                >
+                  Publish
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       ) : (
         <p className="text-sm text-black/35">Preview unavailable</p>
       )}
+      <AlertDialog
+        open={Boolean(deleteExplanationTarget)}
+        onOpenChange={(open) => !open && setDeleteExplanationTarget(null)}
+      >
+        <AlertDialogContent size="sm">
+          <AlertDialogHeader>
+            <AlertDialogMedia className="bg-[#fff1eb] text-[#a14428]">
+              <Trash2 className="size-5" />
+            </AlertDialogMedia>
+            <AlertDialogTitle>Delete explanation?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This permanently deletes “{deleteExplanationTarget?.title}” from this design screen.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={savingExplanation}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={savingExplanation || !deleteExplanationTarget}
+              onClick={() => deleteExplanationTarget && void deleteExplanation(deleteExplanationTarget)}
+            >
+              {savingExplanation ? "Deleting…" : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+  );
+}
+
+function ExplanationFields({
+  value,
+  onChange,
+  autoFocus = false,
+}: {
+  value: { category: FigmaExplanationCategory; title: string; body: string };
+  onChange: (value: { category: FigmaExplanationCategory; title: string; body: string }) => void;
+  autoFocus?: boolean;
+}) {
+  return (
+    <div className="space-y-2">
+      <label className="block">
+        <span className="text-[9px] font-semibold text-black/50">Category</span>
+        <select
+          value={value.category}
+          onChange={(event) => onChange({ ...value, category: event.target.value as FigmaExplanationCategory })}
+          className="mt-1 h-8 w-full rounded-lg border border-black/10 bg-[#f7f7f4] px-2 text-[10px] outline-none focus:border-[#16857a]/60"
+        >
+          {FIGMA_EXPLANATION_CATEGORIES.map((category) => (
+            <option key={category} value={category}>{FIGMA_EXPLANATION_CATEGORY_LABELS[category]}</option>
+          ))}
+        </select>
+      </label>
+      <label className="block">
+        <span className="text-[9px] font-semibold text-black/50">Title</span>
+        <input
+          autoFocus={autoFocus}
+          maxLength={120}
+          value={value.title}
+          onChange={(event) => onChange({ ...value, title: event.target.value })}
+          placeholder="What implementers need to know"
+          className="mt-1 h-8 w-full rounded-lg border border-black/10 bg-[#f7f7f4] px-2 text-[10px] outline-none focus:border-[#16857a]/60"
+        />
+      </label>
+      <label className="block">
+        <span className="text-[9px] font-semibold text-black/50">Explanation</span>
+        <textarea
+          rows={4}
+          maxLength={4000}
+          value={value.body}
+          onChange={(event) => onChange({ ...value, body: event.target.value })}
+          placeholder="Document intent, behavior, content, data, or edge cases."
+          className="mt-1 w-full resize-none rounded-lg border border-black/10 bg-[#f7f7f4] px-2 py-1.5 text-[10px] leading-4 outline-none focus:border-[#16857a]/60"
+        />
+      </label>
     </div>
   );
 }

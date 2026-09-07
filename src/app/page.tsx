@@ -229,7 +229,7 @@ export default function Home() {
                   Pass-Off
                 </p>
               </div>
-              <h1 className="passoff-rise passoff-rise-delay-1 mt-8 font-[family-name:var(--font-display)] text-2xl font-semibold leading-[1.12] tracking-[-0.035em] text-[color-mix(in_srgb,var(--brand-deep)_88%,transparent)] sm:text-3xl lg:text-[2.15rem]">
+              <h1 className="passoff-rise passoff-rise-delay-1 mt-8 text-2xl font-semibold leading-[1.12] tracking-[-0.025em] text-[color-mix(in_srgb,var(--brand-deep)_88%,transparent)] sm:text-3xl lg:text-[2.15rem]">
                 {siteConfig.tagline}
               </h1>
               <p className="passoff-rise passoff-rise-delay-2 mt-5 max-w-lg text-base leading-7 text-[color-mix(in_srgb,var(--brand-deep)_68%,transparent)] sm:text-lg sm:leading-8">

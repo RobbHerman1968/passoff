@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  BookOpenText,
   Check,
   ClipboardCopy,
   Download,
@@ -9,8 +10,12 @@ import {
   Send,
   Sparkles,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
+import {
+  buildFigmaExplanationsUrl,
+  FIGMA_EXPLANATION_CATEGORY_LABELS,
+} from "@/lib/figma/explanation-contract";
 import {
   flattenInspectNodes,
   inspectNodeToCss,
@@ -19,11 +24,13 @@ import {
 import type {
   FigmaImportResult,
   FigmaInteraction,
+  FigmaExplanationRecord,
   FigmaQuestionRecord,
   FigmaScreen,
 } from "@/lib/figma/types";
 
 import { ScreenCommentsPanel } from "./interactive-canvas";
+import { explanationsUpdatedEvent, focusExplanationEvent } from "./events";
 
 export function AskPanel({
   inputId,
@@ -338,7 +345,123 @@ function ExportButton({ label, busy, onClick }: { label: string; busy: boolean; 
   );
 }
 
+export function ScreenExplanationsPanel({
+  projectKey,
+  file,
+  screen,
+}: {
+  projectKey: string;
+  file: FigmaImportResult["file"];
+  screen: FigmaScreen;
+}) {
+  const [explanations, setExplanations] = useState<FigmaExplanationRecord[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    async function loadExplanations() {
+      try {
+        const response = await fetch(
+          buildFigmaExplanationsUrl(projectKey, file.key, screen.id),
+          { cache: "no-store" },
+        );
+        const payload = await response.json() as { explanations?: FigmaExplanationRecord[]; error?: string };
+        if (!response.ok) throw new Error(payload.error || "Unable to load explanations.");
+        if (active) {
+          setExplanations(payload.explanations ?? []);
+          setError(null);
+        }
+      } catch (reason) {
+        if (active) setError(reason instanceof Error ? reason.message : "Unable to load explanations.");
+      } finally {
+        if (active) setLoading(false);
+      }
+    }
+    function explanationsChanged(event: Event) {
+      const detail = (event as CustomEvent<{ fileKey?: string; screenId?: string }>).detail;
+      if (detail?.fileKey === file.key && detail.screenId === screen.id) void loadExplanations();
+    }
+    void loadExplanations();
+    window.addEventListener(explanationsUpdatedEvent, explanationsChanged);
+    return () => {
+      active = false;
+      window.removeEventListener(explanationsUpdatedEvent, explanationsChanged);
+    };
+  }, [file.key, projectKey, screen.id]);
+
+  const published = explanations.filter((item) => item.status === "published");
+  const drafts = explanations.filter((item) => item.status === "draft");
+
+  function focus(explanationId: string) {
+    window.dispatchEvent(new CustomEvent(focusExplanationEvent, {
+      detail: { fileKey: file.key, screenId: screen.id, explanationId },
+    }));
+  }
+
+  function group(label: string, items: FigmaExplanationRecord[]) {
+    if (!items.length) return null;
+    return (
+      <section>
+        <p className="mb-2 px-1 text-[9px] font-bold uppercase tracking-[0.14em] text-white/35">{label}</p>
+        <div className="space-y-2">
+          {items.map((explanation) => {
+            const pinNumber = explanations.findIndex((item) => item.id === explanation.id) + 1;
+            return (
+              <button
+                type="button"
+                key={explanation.id}
+                onClick={() => focus(explanation.id)}
+                className="flex w-full items-start gap-3 rounded-2xl border border-white/8 bg-white/5 p-3 text-left transition hover:border-[#4ab7ac]/45 hover:bg-white/8"
+              >
+                <span className={`flex size-8 shrink-0 items-center justify-center rounded-lg border-2 border-white/70 text-[10px] font-bold text-white ${explanation.status === "draft" ? "bg-[#52706b] ring-1 ring-[#f3c56f]" : "bg-[#16857a]"}`}>{pinNumber}</span>
+                <span className="min-w-0 flex-1">
+                  <span className="block text-[8px] font-bold uppercase tracking-wide text-[#71d0c6]">{FIGMA_EXPLANATION_CATEGORY_LABELS[explanation.category]}</span>
+                  <strong className="mt-1 block truncate text-[10px]">{explanation.title}</strong>
+                  <span className="mt-1 line-clamp-3 block whitespace-pre-wrap text-[10px] leading-4 text-white/55">{explanation.body}</span>
+                  <span className="mt-1.5 block text-[8px] text-white/30">{explanation.authorName}</span>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <div className="min-w-0 text-white">
+      <div className="border-b border-white/10 p-4">
+        <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-[#71d0c6]">
+          <BookOpenText className="size-4" /> Design notes
+        </div>
+        <h3 className="mt-2 truncate text-sm font-semibold">{screen.name}</h3>
+        <p className="mt-1 text-[10px] leading-4 text-white/40">Explanations document durable design and implementation intent. Comments request changes or start a conversation.</p>
+      </div>
+      <div className="max-h-[560px] space-y-5 overflow-auto p-3">
+        {loading ? (
+          <div className="flex justify-center py-12"><LoaderCircle className="size-5 animate-spin text-white/35" /></div>
+        ) : error ? (
+          <p role="alert" className="rounded-xl bg-[#2e2654]/70 p-3 text-[10px] leading-4">{error}</p>
+        ) : explanations.length ? (
+          <>
+            {group("Published", published)}
+            {group("Your drafts", drafts)}
+          </>
+        ) : (
+          <div className="py-10 text-center">
+            <BookOpenText className="mx-auto size-6 text-white/25" />
+            <p className="mt-3 text-xs font-semibold text-white/65">No design notes yet</p>
+            <p className="mx-auto mt-1 max-w-[230px] text-[10px] leading-4 text-white/35">Use Explain on the canvas for durable intent. Use Comment when you want a change or reply.</p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function HandoffRail({
+  projectKey,
   tab,
   setTab,
   result,
@@ -356,8 +479,9 @@ export function HandoffRail({
   selectedNodeId,
   onSelectNode,
 }: {
-  tab: "inspect" | "comments" | "ask" | "assets" | "behavior";
-  setTab: (tab: "inspect" | "comments" | "ask" | "assets" | "behavior") => void;
+  projectKey: string;
+  tab: "inspect" | "comments" | "notes" | "ask" | "assets" | "behavior";
+  setTab: (tab: "inspect" | "comments" | "notes" | "ask" | "assets" | "behavior") => void;
   result: FigmaImportResult;
   screen: FigmaScreen;
   questions: FigmaQuestionRecord[];
@@ -384,13 +508,14 @@ export function HandoffRail({
     { id: "inspect" as const, label: "Inspect" },
     { id: "behavior" as const, label: "Behavior" },
     { id: "comments" as const, label: "Comments" },
+    { id: "notes" as const, label: "Notes" },
     { id: "ask" as const, label: "Ask" },
     { id: "assets" as const, label: "Assets" },
   ];
 
   return (
     <aside className="flex h-full min-h-0 flex-col bg-[#17221f] text-white xl:border-l xl:border-white/8">
-      <div role="tablist" aria-label="Handoff tools" className="grid grid-cols-5 gap-1 border-b border-white/10 bg-[#111c19] p-1.5">
+      <div role="tablist" aria-label="Handoff tools" className="grid grid-cols-6 gap-1 border-b border-white/10 bg-[#111c19] p-1.5">
         {tabs.map((item) => (
           <button
             key={item.id}
@@ -416,6 +541,7 @@ export function HandoffRail({
         )}
         {tab === "behavior" && <BehaviorPanel screen={screen} interaction={interaction} destinationName={destination} />}
         {tab === "comments" && <ScreenCommentsPanel file={result.file} screen={screen} />}
+        {tab === "notes" && <ScreenExplanationsPanel projectKey={projectKey} file={result.file} screen={screen} />}
         {tab === "ask" && (
           <AskPanel
             inputId="handoff-ask"

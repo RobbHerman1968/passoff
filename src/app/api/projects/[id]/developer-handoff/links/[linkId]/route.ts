@@ -1,0 +1,35 @@
+import { NextResponse } from "next/server";
+
+import { authzResponse, requireProjectMembership } from "@/lib/auth/authorization";
+import {
+  DeveloperHandoffError,
+  revokeDeveloperHandoffLink,
+} from "@/lib/developer-handoff/service";
+
+export const runtime = "nodejs";
+const NO_STORE_HEADERS = { "Cache-Control": "private, no-store, max-age=0" };
+
+export async function DELETE(
+  _request: Request,
+  { params }: { params: Promise<{ id: string; linkId: string }> },
+) {
+  try {
+    const { id, linkId } = await params;
+    const { scope } = await requireProjectMembership(id);
+    return NextResponse.json(
+      await revokeDeveloperHandoffLink(scope, id, linkId),
+      { headers: NO_STORE_HEADERS },
+    );
+  } catch (error) {
+    const authz = authzResponse(error);
+    if (authz) {
+      authz.headers.set("Cache-Control", NO_STORE_HEADERS["Cache-Control"]);
+      return authz;
+    }
+    const status = error instanceof DeveloperHandoffError ? error.status : 400;
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "Unable to revoke developer handoff link." },
+      { status, headers: NO_STORE_HEADERS },
+    );
+  }
+}

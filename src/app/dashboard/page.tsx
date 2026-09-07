@@ -54,7 +54,7 @@ export default async function DashboardPage() {
         </div>
       </header>
 
-      <div className="mx-auto max-w-7xl px-5 py-6 lg:px-8">
+      <div className="w-full px-5 py-6 lg:px-8">
         <RoomsDashboard
           workspaceName={scope.workspaceName}
           rooms={rooms.map((room) => ({

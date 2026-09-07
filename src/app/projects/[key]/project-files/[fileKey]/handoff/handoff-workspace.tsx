@@ -23,11 +23,12 @@ import type {
 import { deriveBreakpointLabel } from "@/lib/figma/breakpoints";
 
 import { InteractiveScreenCanvas } from "./interactive-canvas";
+import { DeveloperHandoffPublisher } from "./developer-handoff-publisher";
 import { HandoffRail } from "./panels";
 import { DeveloperContractView, ProcessMapView, ScreenSpecView } from "./views";
 
 type View = "prototype" | "map" | "spec" | "contract";
-type RailTab = "inspect" | "comments" | "ask" | "assets" | "behavior";
+type RailTab = "inspect" | "comments" | "notes" | "ask" | "assets" | "behavior";
 
 const viewItems: { id: View; label: string; icon: typeof Play }[] = [
   { id: "prototype", label: "Prototype", icon: Play },
@@ -41,6 +42,7 @@ function designImageUnoptimized(src: string) {
 }
 
 export function HandoffWorkspace({
+  projectKey,
   result,
   screen,
   siblingScreens,
@@ -48,6 +50,7 @@ export function HandoffWorkspace({
   onNavigate,
   onSelectSibling,
 }: {
+  projectKey: string;
   result: FigmaImportResult;
   screen: FigmaScreen;
   siblingScreens: FigmaScreen[];
@@ -205,6 +208,7 @@ export function HandoffWorkspace({
         >
           <ExternalLink className="size-3.5" />Figma
         </a>
+        <DeveloperHandoffPublisher projectId={projectKey} fileKey={result.file.key} />
         <button type="button" onClick={onClose} aria-label="Close Handoff" className="flex size-9 items-center justify-center rounded-xl border border-black/10 bg-white text-black/55">
           <X className="size-4" />
         </button>
@@ -260,6 +264,7 @@ export function HandoffWorkspace({
             <div className="flex min-h-0 flex-1 flex-col p-0">
               <InteractiveScreenCanvas
                 key={screen.id}
+                projectKey={projectKey}
                 file={result.file}
                 screen={screen}
                 outgoing={outgoing}
@@ -304,6 +309,7 @@ export function HandoffWorkspace({
 
         <div className="min-h-[320px] shrink-0 xl:h-full xl:w-[340px] xl:min-h-0">
           <HandoffRail
+            projectKey={projectKey}
             tab={railTab}
             setTab={setRailTab}
             result={result}

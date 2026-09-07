@@ -153,3 +153,35 @@ export type FigmaCommentRecord = {
   createdAt: string;
   resolvedAt: string | null;
 };
+
+export type FigmaExplanationCategory =
+  | "intent"
+  | "behavior"
+  | "content"
+  | "data"
+  | "animation"
+  | "responsive"
+  | "accessibility"
+  | "edge_case"
+  | "developer_note";
+
+export type FigmaExplanationStatus = "draft" | "published";
+
+export type FigmaExplanationRecord = {
+  id: string;
+  screenId: string;
+  screenName: string;
+  figmaNodeId: string | null;
+  figmaNodeName: string | null;
+  x: number;
+  y: number;
+  category: FigmaExplanationCategory;
+  title: string;
+  body: string;
+  status: FigmaExplanationStatus;
+  authorName: string;
+  authorUserId: string | null;
+  canEdit: boolean;
+  createdAt: string;
+  updatedAt: string;
+};

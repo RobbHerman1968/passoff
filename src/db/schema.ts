@@ -448,6 +448,43 @@ export const figmaComments = pgTable("figma_comments", {
   index("figma_comments_author_created_idx").on(table.authorUserId, table.createdAt),
 ]);
 
+export const figmaExplanations = pgTable("figma_explanations", {
+  id: uuid("id").primaryKey(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+  projectId: uuid("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  authorUserId: uuid("author_user_id").references(() => users.id, { onDelete: "set null" }),
+  figmaFileKey: text("figma_file_key").notNull(),
+  figmaFileName: text("figma_file_name").notNull(),
+  screenId: text("screen_id").notNull(),
+  screenName: text("screen_name").notNull(),
+  figmaNodeId: text("figma_node_id"),
+  figmaNodeName: text("figma_node_name"),
+  xBasisPoints: integer("x_basis_points").notNull(),
+  yBasisPoints: integer("y_basis_points").notNull(),
+  category: text("category").notNull(),
+  title: text("title").notNull(),
+  body: text("body").notNull(),
+  status: text("status").notNull().default("draft"),
+  ...timestamps,
+}, (table) => [
+  index("figma_explanations_tenant_screen_created_idx").on(
+    table.organizationId,
+    table.workspaceId,
+    table.projectId,
+    table.figmaFileKey,
+    table.screenId,
+    table.createdAt,
+  ),
+  index("figma_explanations_author_updated_idx").on(
+    table.organizationId,
+    table.workspaceId,
+    table.projectId,
+    table.authorUserId,
+    table.updatedAt,
+  ),
+]);
+
 export const figmaImports = pgTable("figma_imports", {
   id: uuid("id").primaryKey(),
   organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
@@ -537,6 +574,90 @@ export const figmaImportScreenTrees = pgTable("figma_import_screen_trees", {
 }, (table) => [
   uniqueIndex("figma_import_screen_trees_import_node_unique").on(table.figmaImportId, table.figmaNodeId),
   index("figma_import_screen_trees_import_idx").on(table.figmaImportId),
+]);
+
+/**
+ * Immutable, developer-facing handoff releases. payloadJson contains the
+ * canonical DTO; source identity fields are copied so later room edits cannot
+ * rewrite release history.
+ */
+export const developerHandoffSnapshots = pgTable("developer_handoff_snapshots", {
+  id: uuid("id").primaryKey(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+  projectId: uuid("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  figmaFileKey: text("figma_file_key").notNull(),
+  sourceImportId: uuid("source_import_id").references(() => figmaImports.id, { onDelete: "set null" }),
+  version: integer("version").notNull(),
+  sourceApprovedRevisionId: uuid("source_approved_revision_id"),
+  sourceApprovedRevisionNumber: integer("source_approved_revision_number"),
+  sourceApprovedRevisionDigest: text("source_approved_revision_digest"),
+  sourceApprovalId: uuid("source_approval_id"),
+  sourceApprovedAt: timestamp("source_approved_at", { withTimezone: true }),
+  sourceApproverDisplayName: text("source_approver_display_name"),
+  payloadJson: text("payload_json").notNull(),
+  contentSha256: text("content_sha256").notNull(),
+  publishedByUserId: uuid("published_by_user_id").references(() => users.id, { onDelete: "set null" }),
+  publishedByDisplayName: text("published_by_display_name").notNull(),
+  publishedAt: timestamp("published_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("developer_handoff_snapshots_project_file_version_unique").on(
+    table.projectId,
+    table.figmaFileKey,
+    table.version,
+  ),
+  index("developer_handoff_snapshots_tenant_project_idx").on(
+    table.organizationId,
+    table.workspaceId,
+    table.projectId,
+    table.publishedAt,
+  ),
+]);
+
+/** Private preview objects owned by a snapshot, never by a mutable Figma import. */
+export const developerHandoffSnapshotScreens = pgTable("developer_handoff_snapshot_screens", {
+  id: uuid("id").primaryKey(),
+  snapshotId: uuid("snapshot_id").notNull().references(() => developerHandoffSnapshots.id, { onDelete: "cascade" }),
+  figmaFileKey: text("figma_file_key").notNull(),
+  figmaNodeId: text("figma_node_id").notNull(),
+  storageProvider: text("storage_provider").notNull(),
+  objectKey: text("object_key").notNull(),
+  blobUrl: text("blob_url"),
+  contentType: text("content_type").notNull().default("image/png"),
+  bytes: integer("bytes").notNull(),
+  sha256: text("sha256").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("developer_handoff_snapshot_screens_snapshot_node_unique").on(
+    table.snapshotId,
+    table.figmaFileKey,
+    table.figmaNodeId,
+  ),
+  index("developer_handoff_snapshot_screens_snapshot_idx").on(table.snapshotId),
+]);
+
+/**
+ * Developer handoff bearer tokens. This table is intentionally separate from
+ * client-review share_links so neither resolver can authorize the other scope.
+ */
+export const developerHandoffLinks = pgTable("developer_handoff_links", {
+  id: uuid("id").primaryKey(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+  projectId: uuid("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  snapshotId: uuid("snapshot_id").notNull().references(() => developerHandoffSnapshots.id, { onDelete: "cascade" }),
+  tokenHash: text("token_hash").notNull(),
+  status: text("status").notNull().default("ACTIVE"),
+  expiresAt: timestamp("expires_at", { withTimezone: true }),
+  revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  lastViewedAt: timestamp("last_viewed_at", { withTimezone: true }),
+  viewCount: integer("view_count").notNull().default(0),
+  createdByUserId: uuid("created_by_user_id").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("developer_handoff_links_token_hash_unique").on(table.tokenHash),
+  index("developer_handoff_links_project_created_idx").on(table.projectId, table.createdAt),
+  index("developer_handoff_links_snapshot_idx").on(table.snapshotId),
 ]);
 
 export const openaiRuns = pgTable("openai_runs", {

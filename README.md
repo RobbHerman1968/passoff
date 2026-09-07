@@ -23,6 +23,8 @@ Every new account receives a **private organization and workspace**. Authenticat
 
 Seeded owner data (`npm run db:seed-owner`) continues to work for local Figma prototypes.
 
+Imported Figma screens support tenant-scoped design explanations: authenticated project members can read published implementation notes, while authors can keep drafts and edit, move, publish, or delete their own notes. Explanations are separate from review comments.
+
 ## Local development
 
 ```bash

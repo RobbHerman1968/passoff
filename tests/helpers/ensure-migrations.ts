@@ -6,7 +6,7 @@ import pg from "pg";
 
 /**
  * Apply pending drizzle-postgres migrations in journal order.
- * Uses the official drizzle migrator so a fresh test database receives 0000–0009.
+ * Uses the official drizzle migrator so a fresh test database receives all migrations.
  */
 export async function ensureTestMigrations() {
   const databaseUrl = process.env.DATABASE_URL;
@@ -29,6 +29,21 @@ export async function ensureTestMigrations() {
   if (!files.includes("0009_handoff_item_asset_unique.sql")) {
     throw new Error(
       "Missing drizzle-postgres/0009_handoff_item_asset_unique.sql — handoff asset uniqueness migration is required.",
+    );
+  }
+  if (!files.includes("0010_figma_explanations.sql")) {
+    throw new Error(
+      "Missing drizzle-postgres/0010_figma_explanations.sql — design explanations require the forward-only 0010 migration.",
+    );
+  }
+  if (!files.includes("0011_preserve_figma_explanations.sql")) {
+    throw new Error(
+      "Missing drizzle-postgres/0011_preserve_figma_explanations.sql — durable explanations must survive author removal.",
+    );
+  }
+  if (!files.includes("0012_developer_handoff_snapshots.sql")) {
+    throw new Error(
+      "Missing drizzle-postgres/0012_developer_handoff_snapshots.sql — immutable developer handoff releases require migration 0012.",
     );
   }
 

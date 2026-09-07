@@ -2,6 +2,17 @@ import type { NextConfig } from "next";
 import path from "node:path";
 
 const nextConfig: NextConfig = {
+  async headers() {
+    return [
+      {
+        source: "/developer-handoff/:token",
+        headers: [
+          { key: "Cache-Control", value: "private, no-store, max-age=0" },
+          { key: "Referrer-Policy", value: "no-referrer" },
+        ],
+      },
+    ];
+  },
   turbopack: {
     // Keep the workspace root here (avoids picking up ~/package-lock.json)
     root: path.join(__dirname),
