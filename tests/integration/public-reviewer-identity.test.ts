@@ -33,7 +33,7 @@ async function setupPublishedShare() {
   const { createPasswordUser } = await import("@/lib/auth/password");
   const { createPrivateTenantForUser } = await import("@/lib/auth/tenant-membership");
   const { db } = await import("@/db");
-  const { projects, revisionAssets, revisions, assets, workspaces } = await import("@/db/schema");
+  const { revisionAssets, revisions, assets, rooms, workspaces } = await import("@/db/schema");
   const { createOrRotateShareLink } = await import("@/lib/rooms/service");
 
   const stamp = randomBytes(4).toString("hex");
@@ -57,7 +57,7 @@ async function setupPublishedShare() {
   };
 
   const [room] = await db
-    .insert(projects)
+    .insert(rooms)
     .values({
       organizationId: workspace.organizationId,
       workspaceId: tenant.workspaceId,
@@ -72,7 +72,7 @@ async function setupPublishedShare() {
     .insert(revisions)
     .values({
       workspaceId: tenant.workspaceId,
-      projectId: room.id,
+      roomId: room.id,
       number: 1,
       status: "PUBLISHED",
       contentDigest: `digest-${stamp}`,
@@ -81,15 +81,15 @@ async function setupPublishedShare() {
     .returning();
 
   await db
-    .update(projects)
+    .update(rooms)
     .set({ currentPublishedRevisionId: revision.id, status: "SENT" })
-    .where(eq(projects.id, room.id));
+    .where(eq(rooms.id, room.id));
 
   const [asset] = await db
     .insert(assets)
     .values({
       workspaceId: tenant.workspaceId,
-      projectId: room.id,
+      roomId: room.id,
       kind: "image",
       label: "Hero",
       objectKey: `workspaces/${tenant.workspaceId}/rooms/${room.id}/revisions/${revision.id}/hero.png`,
@@ -248,7 +248,7 @@ describe.skipIf(!hasDb)("public reviewer identity API", () => {
     expect(reclaimEdit.response.status).toBe(403);
   });
 
-  it("forged, expired, cross-project, and cross-share credentials are rejected", async () => {
+  it("forged, expired, cross-room, and cross-share credentials are rejected", async () => {
     const ctx = await setupPublishedShare();
     const other = await setupPublishedShare();
     const {
@@ -259,14 +259,14 @@ describe.skipIf(!hasDb)("public reviewer identity API", () => {
 
     const reviewer = await createReviewer({
       workspaceId: ctx.workspaceId,
-      projectId: ctx.room.id,
+      roomId: ctx.room.id,
       name: "Cred",
       email: `cred-${ctx.stamp}@example.com`,
     });
 
     const valid = createReviewerSessionToken({
       reviewerId: reviewer.id,
-      projectId: ctx.room.id,
+      roomId: ctx.room.id,
       shareToken: ctx.shareToken,
     });
 
@@ -280,7 +280,7 @@ describe.skipIf(!hasDb)("public reviewer identity API", () => {
 
     const expired = createReviewerSessionToken({
       reviewerId: reviewer.id,
-      projectId: ctx.room.id,
+      roomId: ctx.room.id,
       shareToken: ctx.shareToken,
       maxAgeSec: 1,
       nowMs: Date.now() - 60_000,
@@ -292,21 +292,21 @@ describe.skipIf(!hasDb)("public reviewer identity API", () => {
     );
     expect(expiredRes.response.status).toBe(401);
 
-    const crossProject = createReviewerSessionToken({
+    const crossRoom = createReviewerSessionToken({
       reviewerId: reviewer.id,
-      projectId: other.room.id,
+      roomId: other.room.id,
       shareToken: ctx.shareToken,
     });
-    const crossProjectRes = await postPublic(
+    const crossRoomRes = await postPublic(
       ctx.shareToken,
       { action: "comment", revisionAssetId: ctx.membership.id, xPercent: 0.1, yPercent: 0.1, body: "x" },
-      `${REVIEWER_SESSION_COOKIE}=${encodeURIComponent(crossProject)}`,
+      `${REVIEWER_SESSION_COOKIE}=${encodeURIComponent(crossRoom)}`,
     );
-    expect([401, 403]).toContain(crossProjectRes.response.status);
+    expect([401, 403]).toContain(crossRoomRes.response.status);
 
     const crossShare = createReviewerSessionToken({
       reviewerId: reviewer.id,
-      projectId: ctx.room.id,
+      roomId: ctx.room.id,
       shareToken: other.shareToken,
     });
     const crossShareRes = await postPublic(

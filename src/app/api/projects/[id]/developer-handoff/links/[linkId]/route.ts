@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { authzResponse, requireProjectMembership } from "@/lib/auth/authorization";
+import { authzResponse, requireRoomMembership } from "@/lib/auth/authorization";
 import {
   DeveloperHandoffError,
   revokeDeveloperHandoffLink,
@@ -14,10 +14,10 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string; linkId: string }> },
 ) {
   try {
-    const { id, linkId } = await params;
-    const { scope } = await requireProjectMembership(id);
+    const { id: roomId, linkId } = await params;
+    const { scope } = await requireRoomMembership(roomId);
     return NextResponse.json(
-      await revokeDeveloperHandoffLink(scope, id, linkId),
+      await revokeDeveloperHandoffLink(scope, roomId, linkId),
       { headers: NO_STORE_HEADERS },
     );
   } catch (error) {

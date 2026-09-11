@@ -4,6 +4,22 @@
  * Does not invent a separate source of truth or claim legal e-signature status.
  */
 
+export type ApprovalReceiptDesignVersion = {
+  designId: string;
+  designVersionId: string;
+  designName: string;
+  versionNumber: number;
+  contentSha256: string;
+  screenNames: string[];
+  sourceType?: "figma" | "video";
+  video?: {
+    durationMs: number;
+    mimeType: string;
+    originalFilename: string;
+    byteSize: number;
+  } | null;
+};
+
 export type ApprovalReceiptSource = {
   id: string;
   decision: string;
@@ -18,6 +34,7 @@ export type ApprovalReceiptSource = {
   reviewerName: string;
   reviewerEmail: string;
   assetNames: string[];
+  designVersions?: ApprovalReceiptDesignVersion[];
 };
 
 export type ApprovalReceiptView = {
@@ -39,6 +56,9 @@ export type ApprovalReceiptView = {
   digestShort: string;
   assetNames: string[];
   assetCount: number;
+  designVersions: ApprovalReceiptDesignVersion[];
+  designCount: number;
+  reviewedItemCount: number;
   supersededAt: string | null;
   /** Fixed copy flag for UI — approval is bound to this frozen revision digest. */
   boundToFrozenRevision: true;
@@ -76,6 +96,11 @@ export function serializeApprovalReceipt(
 ): ApprovalReceiptView {
   const includeEmail = options?.includeReviewerEmail !== false;
   const assetNames = source.assetNames.map((name) => name.trim()).filter(Boolean);
+  const designVersions = (source.designVersions ?? []).map((design) => ({
+    ...design,
+    designName: design.designName.trim(),
+    screenNames: design.screenNames.map((name) => name.trim()).filter(Boolean),
+  }));
 
   return {
     id: source.id,
@@ -94,6 +119,9 @@ export function serializeApprovalReceipt(
     digestShort: shortenDigest(source.contentDigest),
     assetNames,
     assetCount: assetNames.length,
+    designVersions,
+    designCount: designVersions.length,
+    reviewedItemCount: assetNames.length + designVersions.length,
     supersededAt: source.supersededAt ? toIso(source.supersededAt) : null,
     boundToFrozenRevision: true,
   };

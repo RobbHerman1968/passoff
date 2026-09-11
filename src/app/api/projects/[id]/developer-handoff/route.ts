@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { authzResponse, requireProjectMembership } from "@/lib/auth/authorization";
+import { authzResponse, requireRoomMembership } from "@/lib/auth/authorization";
 import {
   DeveloperHandoffError,
   getDeveloperHandoffSummary,
@@ -29,11 +29,11 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    const { id } = await params;
-    const { scope } = await requireProjectMembership(id);
+    const { id: roomId } = await params;
+    const { scope } = await requireRoomMembership(roomId);
     const fileKey = new URL(request.url).searchParams.get("fileKey") || "";
     return NextResponse.json(
-      await getDeveloperHandoffSummary(scope, id, fileKey),
+      await getDeveloperHandoffSummary(scope, roomId, fileKey),
       { headers: NO_STORE_HEADERS },
     );
   } catch (error) {
@@ -46,15 +46,15 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    const { id } = await params;
-    const { scope } = await requireProjectMembership(id);
+    const { id: roomId } = await params;
+    const { scope } = await requireRoomMembership(roomId);
     const body = (await request.json().catch(() => ({}))) as {
       fileKey?: unknown;
       expiresInDays?: unknown;
     };
     const result = await publishDeveloperHandoffSnapshot(
       scope,
-      id,
+      roomId,
       typeof body.fileKey === "string" ? body.fileKey : "",
       {
         expiresInDays:

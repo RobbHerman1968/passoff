@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import { del, get, put } from "@vercel/blob";
+import { del, get, list, put } from "@vercel/blob";
 
 import type { TenantContext } from "@/lib/tenant/context";
 
@@ -37,6 +37,23 @@ function previewPathname(tenant: TenantContext, fileKey: string, nodeId: string)
   return `workspaces/${tenant.workspaceId}/figma/${tenant.projectId}/${safeSegment(fileKey)}/${safeSegment(nodeId)}.png`;
 }
 
+function previewFilePrefix(tenant: TenantContext, fileKey: string) {
+  return `workspaces/${tenant.workspaceId}/figma/${tenant.projectId}/${safeSegment(fileKey)}/`;
+}
+
+function previewProjectPrefix(tenant: TenantContext) {
+  return `workspaces/${tenant.workspaceId}/figma/${tenant.projectId}/`;
+}
+
+function versionPreviewPathname(
+  tenant: TenantContext,
+  designId: string,
+  designVersionId: string,
+  nodeId: string,
+) {
+  return `workspaces/${tenant.workspaceId}/project-designs/${tenant.projectId}/${designId}/${designVersionId}/${safeSegment(nodeId)}.png`;
+}
+
 function localFilePath(tenant: TenantContext, fileKey: string, nodeId: string) {
   return path.join(
     localRoot(),
@@ -46,8 +63,35 @@ function localFilePath(tenant: TenantContext, fileKey: string, nodeId: string) {
   );
 }
 
-export function previewPublicUrl(fileKey: string, nodeId: string) {
+function localVersionFilePath(
+  tenant: TenantContext,
+  designId: string,
+  designVersionId: string,
+  nodeId: string,
+) {
+  return path.join(
+    localRoot(),
+    "versions",
+    safeSegment(tenant.projectId),
+    designId,
+    designVersionId,
+    `${safeSegment(nodeId)}.png`,
+  );
+}
+
+export function previewPublicUrl(fileKey: string, nodeId: string, projectKey?: string) {
   const params = new URLSearchParams({ fileKey, nodeId });
+  if (projectKey) params.set("projectKey", projectKey);
+  return `/api/integrations/figma/previews?${params.toString()}`;
+}
+
+export function designVersionPreviewPublicUrl(
+  designVersionId: string,
+  nodeId: string,
+  projectKey?: string,
+) {
+  const params = new URLSearchParams({ designVersionId, nodeId });
+  if (projectKey) params.set("projectKey", projectKey);
   return `/api/integrations/figma/previews?${params.toString()}`;
 }
 
@@ -74,7 +118,7 @@ export async function writePreviewPng(
       addRandomSuffix: false,
       allowOverwrite: true,
     });
-    return previewPublicUrl(fileKey, nodeId);
+    return previewPublicUrl(fileKey, nodeId, tenant.projectId);
   }
 
   if (isProductionRuntime()) {
@@ -84,7 +128,32 @@ export async function writePreviewPng(
   const absolute = localFilePath(tenant, fileKey, nodeId);
   await mkdir(path.dirname(absolute), { recursive: true });
   await writeFile(absolute, bytes);
-  return previewPublicUrl(fileKey, nodeId);
+  return previewPublicUrl(fileKey, nodeId, tenant.projectId);
+}
+
+export async function writeDesignVersionPreviewPng(
+  tenant: TenantContext,
+  designId: string,
+  designVersionId: string,
+  nodeId: string,
+  bytes: Buffer,
+) {
+  if (process.env.BLOB_READ_WRITE_TOKEN) {
+    await put(versionPreviewPathname(tenant, designId, designVersionId, nodeId), bytes, {
+      access: "private",
+      token: requireBlobToken(),
+      contentType: "image/png",
+      addRandomSuffix: false,
+      allowOverwrite: false,
+    });
+    return;
+  }
+  if (isProductionRuntime()) {
+    throw new Error("BLOB_READ_WRITE_TOKEN is required in production.");
+  }
+  const absolute = localVersionFilePath(tenant, designId, designVersionId, nodeId);
+  await mkdir(path.dirname(absolute), { recursive: true });
+  await writeFile(absolute, bytes, { flag: "wx" });
 }
 
 export async function readPreviewPng(tenant: TenantContext, fileKey: string, nodeId: string) {
@@ -119,6 +188,69 @@ export async function readPreviewPng(tenant: TenantContext, fileKey: string, nod
   }
 }
 
+export async function readDesignVersionPreviewPng(
+  tenant: TenantContext,
+  designId: string,
+  designVersionId: string,
+  nodeId: string,
+) {
+  if (process.env.BLOB_READ_WRITE_TOKEN) {
+    try {
+      const result = await get(versionPreviewPathname(tenant, designId, designVersionId, nodeId), {
+        access: "private",
+        token: requireBlobToken(),
+      });
+      if (!result || result.statusCode !== 200 || !result.stream) return null;
+      const reader = result.stream.getReader();
+      const chunks: Uint8Array[] = [];
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value) chunks.push(value);
+      }
+      return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)));
+    } catch {
+      return null;
+    }
+  }
+  if (isProductionRuntime()) {
+    throw new Error("BLOB_READ_WRITE_TOKEN is required in production.");
+  }
+  try {
+    return await readFile(localVersionFilePath(tenant, designId, designVersionId, nodeId));
+  } catch {
+    return null;
+  }
+}
+
+export async function clearDesignVersionPreviews(
+  tenant: TenantContext,
+  designId: string,
+  designVersionId: string,
+  nodeIds: string[],
+) {
+  if (process.env.BLOB_READ_WRITE_TOKEN) {
+    await Promise.all(nodeIds.map(async (nodeId) => {
+      try {
+        await del(versionPreviewPathname(tenant, designId, designVersionId, nodeId), {
+          token: requireBlobToken(),
+        });
+      } catch {
+        // Database deletion is authoritative; object cleanup is best effort.
+      }
+    }));
+    return;
+  }
+  try {
+    await rm(path.dirname(localVersionFilePath(tenant, designId, designVersionId, "__version__")), {
+      recursive: true,
+      force: true,
+    });
+  } catch {
+    // ignore missing files
+  }
+}
+
 export async function deletePreviewPng(tenant: TenantContext, fileKey: string, nodeId: string) {
   if (process.env.BLOB_READ_WRITE_TOKEN) {
     try {
@@ -135,9 +267,29 @@ export async function deletePreviewPng(tenant: TenantContext, fileKey: string, n
   }
 }
 
+async function clearBlobPrefix(prefix: string) {
+  const token = requireBlobToken();
+  const pathnames: string[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await list({ token, prefix, cursor, limit: 1000 });
+    pathnames.push(...page.blobs.map((blob) => blob.pathname));
+    cursor = page.hasMore ? page.cursor : undefined;
+  } while (cursor);
+
+  for (let start = 0; start < pathnames.length; start += 100) {
+    await del(pathnames.slice(start, start + 100), { token });
+  }
+}
+
 export async function clearFilePreviews(tenant: TenantContext, fileKey: string) {
-  // Best-effort local cleanup; Blob objects are cleaned via deletion jobs when assets are removed.
-  if (!process.env.BLOB_READ_WRITE_TOKEN) {
+  if (process.env.BLOB_READ_WRITE_TOKEN) {
+    try {
+      await clearBlobPrefix(previewFilePrefix(tenant, fileKey));
+    } catch {
+      // Database replacement is authoritative; object cleanup is best effort.
+    }
+  } else {
     try {
       await rm(path.join(localRoot(), safeSegment(tenant.projectId), safeSegment(fileKey)), {
         recursive: true,
@@ -150,7 +302,13 @@ export async function clearFilePreviews(tenant: TenantContext, fileKey: string) 
 }
 
 export async function clearProjectPreviews(tenant: TenantContext) {
-  if (!process.env.BLOB_READ_WRITE_TOKEN) {
+  if (process.env.BLOB_READ_WRITE_TOKEN) {
+    try {
+      await clearBlobPrefix(previewProjectPrefix(tenant));
+    } catch {
+      // Database deletion is authoritative; object cleanup is best effort.
+    }
+  } else {
     try {
       await rm(path.join(localRoot(), safeSegment(tenant.projectId)), {
         recursive: true,

@@ -1,17 +1,20 @@
 "use client";
 
 import { put } from "@vercel/blob/client";
+import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { createPortal } from "react-dom";
 import {
   Archive,
+  ArrowLeft,
   Check,
   ChevronLeft,
   ChevronRight,
   Copy,
   ExternalLink,
+  FolderOpen,
   Link2,
   LoaderCircle,
   MoreHorizontal,
@@ -29,6 +32,10 @@ import { ApprovalReceipt } from "@/components/approval-receipt";
 import { isFirstEvent } from "@/lib/analytics/client-flags";
 import { track } from "@/lib/analytics/events";
 import type { ApprovalReceiptView } from "@/lib/rooms/approval-receipt";
+
+import { EmptyRoomDesignsCallToAction } from "./room-design-navigation";
+import { RoomDesignPicker } from "./room-design-picker";
+import { RoomDesignPreview } from "./room-design-preview";
 
 type RoomAsset = {
   revisionAssetId: string;
@@ -54,7 +61,36 @@ type RoomComment = {
   yPercent: string | number;
 };
 
+type RoomDesignMembership = {
+  id: string;
+  sortOrder: number;
+  designId: string;
+  designName: string;
+  designVersionId: string;
+  versionNumber: number;
+  sourceType: "figma" | "video";
+  newerVersionAvailable: boolean;
+  video: {
+    durationMs: number;
+    width: number | null;
+    height: number | null;
+    mimeType: string;
+    originalFilename: string;
+  } | null;
+  screens: Array<{
+    id: string;
+    name: string;
+    width: number | null;
+    height: number | null;
+    imageUrl: string | null;
+  }>;
+};
+
 type RoomBundle = {
+  clientProject: {
+    id: string;
+    name: string;
+  } | null;
   project: {
     id: string;
     name: string;
@@ -70,6 +106,7 @@ type RoomBundle = {
     contentDigest: string | null;
   } | null;
   membership: RoomAsset[];
+  designMembership: RoomDesignMembership[];
   comments: RoomComment[];
   shareLink: { id: string; viewCount: number; lastViewedAt?: string | Date | null } | null;
   handoff: Array<{
@@ -120,7 +157,7 @@ function shareStorageKey(roomId: string) {
 
 function deriveNextAction(bundle: RoomBundle, shareUrl: string | null): NextAction {
   const status = bundle.project.status;
-  const hasAssets = bundle.membership.length > 0;
+  const hasAssets = bundle.membership.length > 0 || bundle.designMembership.length > 0;
   const hasPublished = Boolean(bundle.published);
   const hasDraftAssets = Boolean(bundle.draft) && hasAssets;
   const draftNeedsPublish =
@@ -296,7 +333,7 @@ function defaultRailTab(phase: Phase, showFeedback: boolean, showHandoff: boolea
   return "ready";
 }
 
-export function RoomWorkspace({ roomId }: { roomId: string }) {
+export function RoomWorkspace({ projectId, roomId }: { projectId: string; roomId: string }) {
   const router = useRouter();
   const [bundle, setBundle] = useState<RoomBundle | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -311,6 +348,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
   const [handoffFileName, setHandoffFileName] = useState<string | null>(null);
   const handoffFileRef = useRef<HTMLInputElement>(null);
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
+  const [selectedDesignMembershipId, setSelectedDesignMembershipId] = useState<string | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [moreOpen, setMoreOpen] = useState(false);
@@ -323,6 +361,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
   const [urlFormOpen, setUrlFormOpen] = useState(false);
   const [railTab, setRailTab] = useState<RailTab>("ready");
   const [railTabTouched, setRailTabTouched] = useState(false);
+  const [designPickerOpen, setDesignPickerOpen] = useState(false);
 
   useLayoutEffect(() => {
     if (!assetMenuId) {
@@ -369,7 +408,18 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
       if (current && payload.membership.some((m) => m.revisionAssetId === current)) return current;
       return payload.membership[0]?.revisionAssetId ?? null;
     });
+    setSelectedDesignMembershipId((current) => {
+      if (current && payload.designMembership.some((item) => item.id === current)) return current;
+      return payload.membership.length === 0 ? payload.designMembership[0]?.id ?? null : null;
+    });
   }, [roomId]);
+
+  const closeDesignPicker = useCallback(() => setDesignPickerOpen(false), []);
+  const finishAddingDesigns = useCallback(async () => {
+    await load();
+    router.refresh();
+    toast.success("Selected designs added to the room.");
+  }, [load, router]);
 
   useEffect(() => {
     load().catch((err) => setLoadError(err instanceof Error ? err.message : "Failed to load."));
@@ -378,6 +428,10 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
   const selected = useMemo(
     () => bundle?.membership.find((m) => m.revisionAssetId === selectedAssetId) || bundle?.membership[0],
     [bundle, selectedAssetId],
+  );
+  const selectedDesign = useMemo(
+    () => bundle?.designMembership.find((item) => item.id === selectedDesignMembershipId) ?? null,
+    [bundle, selectedDesignMembershipId],
   );
 
   const next = useMemo(
@@ -551,6 +605,32 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
     }, "Removing…");
   }
 
+  async function removePinnedDesign(revisionDesignVersionId: string) {
+    await run(async () => {
+      const params = new URLSearchParams({ revisionDesignVersionId });
+      const response = await fetch(
+        `/api/projects/${encodeURIComponent(roomId)}/design-versions?${params}`,
+        { method: "DELETE" },
+      );
+      const payload = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(payload.error || "Unable to remove this design.");
+      toast.success("Design removed from draft.");
+    }, "Removing…");
+  }
+
+  async function upgradePinnedDesign(designId: string) {
+    await run(async () => {
+      const response = await fetch(`/api/projects/${encodeURIComponent(roomId)}/design-versions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ designId }),
+      });
+      const payload = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(payload.error || "Unable to use the newer version.");
+      toast.success("Pinned design updated.");
+    }, "Updating…");
+  }
+
   async function moveAsset(revisionAssetId: string, direction: -1 | 1) {
     if (!bundle) return;
     const ids = bundle.membership.map((m) => m.revisionAssetId);
@@ -604,6 +684,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
 
   function startRename(item: RoomAsset) {
     setSelectedAssetId(item.revisionAssetId);
+    setSelectedDesignMembershipId(null);
     setRenamingId(item.revisionAssetId);
     setRenameValue(item.asset.label);
     setAssetMenuId(null);
@@ -681,7 +762,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
     const name = renameRoomName.trim();
     const clientName = renameRoomClient.trim();
     if (!name || !clientName) {
-      toast.error("Project name and client name are required.");
+      toast.error("Room name and client name are required.");
       return;
     }
     await run(async () => {
@@ -721,7 +802,8 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
         await releaseHandoffToClient();
         break;
       case "upload":
-        document.getElementById("room-upload-input")?.click();
+        if (bundle?.clientProject) setDesignPickerOpen(true);
+        else document.getElementById("room-upload-input")?.click();
         break;
       default:
         break;
@@ -741,7 +823,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
   }
 
   const openComments = bundle.comments.filter((c) => c.status === "OPEN");
-  const isEmpty = bundle.membership.length === 0;
+  const isEmpty = bundle.membership.length === 0 && bundle.designMembership.length === 0;
   const archived = bundle.project.status === "ARCHIVED";
   const canEditDraft = Boolean(bundle.draft) && !archived;
   const showFeedback = Boolean(bundle.published);
@@ -790,17 +872,35 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
     <div className="flex min-h-0 flex-1 flex-col">
       {/* Sticky action bar */}
       <div className="sticky top-0 z-30 shrink-0 border-b border-[#a594f5]/20 bg-[#faf8ff]/95 backdrop-blur">
-        <div className="flex flex-wrap items-center gap-3 px-4 py-2.5 lg:px-5">
+        <div className="flex flex-wrap items-center gap-3 px-4 pb-2 pt-3 lg:px-5">
           <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-              <h1 className="truncate text-sm font-semibold tracking-[-0.03em]">{bundle.project.name}</h1>
-              <span className="truncate text-[11px] text-black/40">{bundle.project.clientName}</span>
-            </div>
-            <p className="mt-0.5 truncate text-[11px] text-black/50">
-              <span className="font-medium text-black/55">{statusLine}</span>
-              <span className="mx-1.5 text-black/25">·</span>
-              {next.coach}
-            </p>
+            <nav aria-label="Breadcrumb" className="inline-flex max-w-full rounded-xl border border-[#a594f5]/25 bg-white/75 p-1 shadow-[0_1px_2px_rgba(45,35,105,0.05)] backdrop-blur-sm">
+              <ol className="flex min-w-0 items-center text-sm">
+                <li>
+                  <Link href="/dashboard" className="inline-flex items-center gap-1.5 rounded-lg bg-[#eeeaff] px-2.5 py-1.5 font-semibold text-[#6354d4] transition hover:bg-[#e2dcff] hover:text-[#5143b8]">
+                    <ArrowLeft className="size-4" />
+                    Projects
+                  </Link>
+                </li>
+                {bundle.clientProject ? (
+                  <>
+                    <li aria-hidden="true" className="px-1 text-black/20">|</li>
+                    <li className="min-w-0">
+                      <Link
+                        href={`/projects/${encodeURIComponent(bundle.clientProject.id)}`}
+                        className="block max-w-48 truncate rounded-lg border border-[#a594f5]/30 bg-[#faf8ff] px-2.5 py-1.5 font-medium text-[#6354d4] transition hover:border-[#8a78ec]/55 hover:bg-[#f3f0ff] hover:text-[#5143b8] sm:max-w-80"
+                      >
+                        {bundle.clientProject.name}
+                      </Link>
+                    </li>
+                  </>
+                ) : null}
+                <li aria-hidden="true" className="px-1 text-black/20">|</li>
+                <li aria-current="page" className="max-w-48 truncate rounded-lg border border-[#a594f5]/30 bg-[#faf8ff] px-2.5 py-1.5 font-medium text-[var(--brand-deep)] sm:max-w-80">
+                  {bundle.project.name}
+                </li>
+              </ol>
+            </nav>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
@@ -936,53 +1036,52 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
           </div>
         </div>
 
-        <nav aria-label="Room progress" className="flex items-center gap-1 overflow-x-auto px-4 pb-2 lg:px-5">
-          {PHASES.map((step, index) => {
-            const done = index < completedIdx || (index === completedIdx && index < currentIdx);
-            const current = step.id === next.phase;
-            return (
-              <span key={step.id} className="flex items-center gap-1">
-                {index > 0 ? <span className="mx-0.5 h-px w-3 bg-black/15" aria-hidden /> : null}
-                <span
-                  className={`inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.1em] ${
-                    current
-                      ? "bg-[#6354d4] text-white"
-                      : done
-                        ? "text-[#6354d4]"
-                        : "text-black/30"
-                  }`}
-                >
-                  {done && !current ? <Check className="size-2.5" /> : null}
-                  {step.label}
+        <div className="flex flex-wrap items-center justify-between gap-2 px-4 pb-2 lg:px-5">
+          <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
+            <h1 className="truncate text-sm font-semibold tracking-[-0.03em]">{bundle.project.name}</h1>
+            <span className="truncate text-[11px] text-black/40">{bundle.project.clientName}</span>
+            <span className="hidden text-black/20 sm:inline">·</span>
+            <p className="min-w-0 truncate text-[11px] text-black/50">
+              <span className="font-medium text-black/55">{statusLine}</span>
+              <span className="mx-1.5 text-black/25">·</span>
+              {next.coach}
+            </p>
+          </div>
+          <nav aria-label="Room progress" className="flex shrink-0 items-center gap-1 overflow-x-auto">
+            {PHASES.map((step, index) => {
+              const done = index < completedIdx || (index === completedIdx && index < currentIdx);
+              const current = step.id === next.phase;
+              return (
+                <span key={step.id} className="flex items-center gap-1">
+                  {index > 0 ? <span className="mx-0.5 h-px w-3 bg-black/15" aria-hidden /> : null}
+                  <span
+                    className={`inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.1em] ${
+                      current
+                        ? "bg-[#6354d4] text-white"
+                        : done
+                          ? "text-[#6354d4]"
+                          : "text-black/30"
+                    }`}
+                  >
+                    {done && !current ? <Check className="size-2.5" /> : null}
+                    {step.label}
+                  </span>
                 </span>
-              </span>
-            );
-          })}
-        </nav>
+              );
+            })}
+          </nav>
+        </div>
       </div>
 
       {isEmpty ? (
         <div className="flex flex-1 items-center justify-center p-6">
-          <div className="w-full max-w-md rounded-2xl border border-dashed border-[#a594f5]/45 bg-white p-8 text-center sm:p-10">
-            <Upload className="mx-auto size-8 text-[#6354d4]" />
-            <h2 className="mt-4 text-xl font-semibold tracking-[-0.03em]">Add work to review</h2>
-            <p className="mt-2 text-sm text-black/50">
-              Upload screenshots or a PDF, or paste a staging URL. Then publish a revision and share a magic
-              link.
-            </p>
-            <label className="mt-6 inline-flex cursor-pointer items-center justify-center gap-2 rounded-xl bg-[#6354d4] px-5 py-3 text-[12px] font-semibold text-white">
-              <Upload className="size-4" />
-              Upload Image / PDF
-              <input
-                id="room-upload-input"
-                type="file"
-                accept="image/*,application/pdf"
-                multiple
-                className="hidden"
-                disabled={busy || archived}
-                onChange={(e) => onUpload(e.target.files)}
-              />
-            </label>
+          <div className="w-full max-w-md">
+            <EmptyRoomDesignsCallToAction
+              busy={busy}
+              archived={archived}
+              onUpload={onUpload}
+              onAddFromDesigns={() => setDesignPickerOpen(true)}
+            />
             <form
               className="mt-6 text-left"
               onSubmit={(e) => {
@@ -1025,6 +1124,57 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
             {/* Filmstrip */}
             <div className="shrink-0 border-b border-[#a594f5]/15 bg-[#f7f4ff]/80">
               <div className="flex items-stretch gap-2 overflow-x-auto px-3 py-2 lg:px-4">
+                {bundle.designMembership.map((item) => {
+                  const isSelected = selectedDesign?.id === item.id;
+                  const thumbnail = item.screens.find((screen) => screen.imageUrl)?.imageUrl ?? null;
+                  return (
+                    <div
+                      key={item.id}
+                      className={`relative flex h-[72px] w-[150px] shrink-0 flex-col overflow-hidden rounded-lg border ${
+                        isSelected ? "border-[#6354d4] ring-2 ring-[#6354d4]/25" : "border-black/10 bg-white"
+                      }`}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedDesignMembershipId(item.id);
+                          setSelectedAssetId(null);
+                        }}
+                        className="relative min-h-0 flex-1 bg-[#ebe6f8]"
+                      >
+                        {thumbnail ? (
+                          <Image
+                            src={thumbnail}
+                            alt=""
+                            fill
+                            sizes="150px"
+                            className="object-cover object-top"
+                            unoptimized
+                          />
+                        ) : item.sourceType === "video" ? (
+                          <span className="flex h-full items-center justify-center text-[10px] font-semibold text-[#6354d4]">VIDEO</span>
+                        ) : null}
+                      </button>
+                      <div className={`flex items-center gap-1 px-1.5 py-1 text-[9px] ${isSelected ? "bg-[#6354d4] text-white" : "bg-white text-black/65"}`}>
+                        <span className="min-w-0 flex-1 truncate">{item.designName} · v{item.versionNumber}</span>
+                        {canEditDraft ? (
+                          <button type="button" onClick={() => { void removePinnedDesign(item.id); }} aria-label={`Remove ${item.designName}`}>
+                            <X className="size-3" />
+                          </button>
+                        ) : null}
+                      </div>
+                      {canEditDraft && item.newerVersionAvailable ? (
+                        <button
+                          type="button"
+                          onClick={() => { void upgradePinnedDesign(item.designId); }}
+                          className="absolute inset-x-1 top-1 rounded bg-amber-100 px-1 py-0.5 text-[8px] font-semibold text-amber-900"
+                        >
+                          Newer version available
+                        </button>
+                      ) : null}
+                    </div>
+                  );
+                })}
                 {bundle.membership.map((item) => {
                   const isSelected = selected?.revisionAssetId === item.revisionAssetId;
                   const isRenaming = renamingId === item.revisionAssetId;
@@ -1076,6 +1226,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
                             type="button"
                             onClick={() => {
                               setSelectedAssetId(item.revisionAssetId);
+                              setSelectedDesignMembershipId(null);
                               setAssetMenuId(null);
                             }}
                             className="relative min-h-0 flex-1 bg-[#ebe6f8] text-left"
@@ -1103,6 +1254,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
                               type="button"
                               onClick={() => {
                                 setSelectedAssetId(item.revisionAssetId);
+                                setSelectedDesignMembershipId(null);
                                 setAssetMenuId(null);
                               }}
                               onDoubleClick={() => {
@@ -1126,6 +1278,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
                                 aria-expanded={assetMenuId === item.revisionAssetId}
                                 onClick={() => {
                                   setSelectedAssetId(item.revisionAssetId);
+                                  setSelectedDesignMembershipId(null);
                                   setAssetMenuId((id) =>
                                     id === item.revisionAssetId ? null : item.revisionAssetId,
                                   );
@@ -1223,6 +1376,15 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
                   : null}
                 {canEditDraft ? (
                   <div className="flex shrink-0 items-stretch gap-1.5">
+                    <button
+                      type="button"
+                      disabled={busy || archived}
+                      onClick={() => setDesignPickerOpen(true)}
+                      className="flex h-[72px] w-[88px] flex-col items-center justify-center gap-1 rounded-lg border border-dashed border-[#a594f5]/50 bg-white text-[#6354d4] transition hover:bg-[#f7f4ff] disabled:opacity-40"
+                    >
+                      <FolderOpen className="size-4" />
+                      <span className="text-[9px] font-semibold uppercase tracking-wide">Designs</span>
+                    </button>
                     <label className="flex h-[72px] w-[72px] cursor-pointer flex-col items-center justify-center gap-1 rounded-lg border border-dashed border-[#a594f5]/50 bg-white text-[#6354d4] transition hover:bg-[#f7f4ff]">
                       <Upload className="size-4" />
                       <span className="text-[9px] font-semibold uppercase tracking-wide">Upload</span>
@@ -1346,7 +1508,31 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
                 </div>
               ) : null}
 
-              {selected?.asset.kind === "url" ? (
+              {selectedDesign ? (
+                <div className="h-full w-full overflow-auto p-4">
+                  <div className="mb-3 flex items-center justify-between">
+                    <h2 className="font-semibold">{selectedDesign.designName}</h2>
+                    <span className="rounded-full bg-[#e4dffc] px-2 py-1 text-[10px] font-semibold text-[#6354d4]">
+                      Version {selectedDesign.versionNumber}
+                    </span>
+                  </div>
+                  {selectedDesign.sourceType === "video" && selectedDesign.video ? (
+                    <div>
+                      <video
+                        src={`/api/client-projects/${bundle.clientProject?.id}/videos/${selectedDesign.designVersionId}/playback`}
+                        controls
+                        preload="metadata"
+                        className="max-h-[65vh] w-full rounded-xl bg-black"
+                      />
+                      <p className="mt-2 text-xs text-black/45">
+                        {selectedDesign.video.originalFilename} · {selectedDesign.video.mimeType} · {Math.floor(selectedDesign.video.durationMs / 60000)}:{String(Math.floor(selectedDesign.video.durationMs / 1000) % 60).padStart(2, "0")}
+                      </p>
+                    </div>
+                  ) : (
+                    <RoomDesignPreview key={selectedDesign.id} screens={selectedDesign.screens} />
+                  )}
+                </div>
+              ) : selected?.asset.kind === "url" ? (
                 <div className="m-6 flex max-w-lg flex-col items-center gap-3 rounded-2xl border border-black/8 bg-white p-8 text-center shadow-sm">
                   <p className="text-base font-semibold">{selected.asset.label}</p>
                   <p className="text-xs text-black/40">External review URL</p>
@@ -1871,7 +2057,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
             <div className="flex items-start justify-between gap-3">
               <div>
                 <h2 className="text-lg font-semibold tracking-[-0.03em]">Rename room</h2>
-                <p className="mt-1 text-sm text-black/45">Update the client and project name.</p>
+                <p className="mt-1 text-sm text-black/45">Update the client and room name.</p>
               </div>
               <button
                 type="button"
@@ -1896,7 +2082,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
               />
             </label>
             <label className="mt-4 block text-[11px] font-semibold uppercase tracking-[0.14em] text-black/40">
-              Project name
+              Room name
               <input
                 value={renameRoomName}
                 onChange={(e) => setRenameRoomName(e.target.value)}
@@ -1920,6 +2106,19 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
           </form>
         </div>
       ) : null}
+
+      <RoomDesignPicker
+        open={designPickerOpen}
+        projectId={projectId}
+        roomId={roomId}
+        existingDesigns={bundle.designMembership.map((item) => ({
+          designId: item.designId,
+          designVersionId: item.designVersionId,
+          versionNumber: item.versionNumber,
+        }))}
+        onClose={closeDesignPicker}
+        onAdded={finishAddingDesigns}
+      />
     </div>
   );
 }

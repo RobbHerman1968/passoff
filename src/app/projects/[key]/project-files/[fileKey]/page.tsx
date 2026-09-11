@@ -1,14 +1,13 @@
 import type { Metadata } from "next";
 import { notFound, redirect } from "next/navigation";
-import { Suspense } from "react";
 
+import { getProjectDesignIdBySourceKey } from "@/lib/figma/persistence";
 import { getTenantContextForProjectKey, normalizeProjectKey } from "@/lib/tenant/context";
-
-import { ProjectDesigns } from "./project-designs";
+import { projectDesignPath, projectDesignsPath } from "@/lib/rooms/routes";
 
 export const metadata: Metadata = {
-  title: "Project designs | Pass-Off",
-  description: "Browse designs for a Pass-Off project file.",
+  title: "Design file | Pass-Off",
+  description: "Browse a design file in a Pass-Off room.",
 };
 
 export default async function ProjectFilePage({
@@ -21,8 +20,6 @@ export default async function ProjectFilePage({
   const { key, fileKey } = await params;
   const query = await searchParams;
   const screen = typeof query.screen === "string" ? query.screen : Array.isArray(query.screen) ? query.screen[0] : undefined;
-  const screenSuffix = screen ? `?screen=${encodeURIComponent(screen)}` : "";
-
   let tenant;
   try {
     tenant = await getTenantContextForProjectKey(key);
@@ -31,20 +28,17 @@ export default async function ProjectFilePage({
   }
 
   if (!/^[A-Za-z0-9_-]+$/.test(fileKey)) {
-    redirect(`/projects/${encodeURIComponent(tenant.projectId)}`);
+    redirect(projectDesignsPath(tenant.projectId));
   }
 
   const normalized = normalizeProjectKey(key);
-  if (normalized === tenant.projectSlug) {
-    redirect(`/projects/${encodeURIComponent(tenant.projectId)}/project-files/${encodeURIComponent(fileKey)}${screenSuffix}`);
-  }
-  if (normalized !== tenant.projectId) {
-    redirect(`/projects/${encodeURIComponent(tenant.projectId)}`);
-  }
+  if (normalized !== tenant.projectId && normalized !== tenant.projectSlug) notFound();
+  const designId = await getProjectDesignIdBySourceKey(tenant, fileKey);
+  if (!designId) notFound();
 
-  return (
-    <Suspense fallback={null}>
-      <ProjectDesigns projectKey={tenant.projectId} fileKey={fileKey} initialScreen={screen} />
-    </Suspense>
+  redirect(
+    projectDesignPath(tenant.projectId, designId, {
+      screen,
+    }),
   );
 }

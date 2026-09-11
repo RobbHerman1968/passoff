@@ -39,14 +39,14 @@ export async function GET(
 
     if (shareToken) {
       const resolved = await resolveShareToken(shareToken);
-      if (resolved.project.id !== asset.projectId) {
+      if (resolved.room.id !== asset.roomId) {
         throw new AuthzError("Not found.", 404);
       }
 
       const inPublishedRevision = resolved.membership.some((m) => m.asset.id === asset.id);
       let isHandoffAsset = false;
-      if (resolved.project.handoffReleasedAt) {
-        const handoff = await listReleasedHandoffItems(resolved.project.id);
+      if (resolved.room.handoffReleasedAt) {
+        const handoff = await listReleasedHandoffItems(resolved.room.id);
         isHandoffAsset = handoff.some((h) => h.assetId === asset.id);
       }
 

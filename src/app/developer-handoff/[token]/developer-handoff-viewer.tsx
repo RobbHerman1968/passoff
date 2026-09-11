@@ -53,6 +53,8 @@ type PublicSnapshot = {
         figmaNodeName: string | null;
         xBasisPoints: number;
         yBasisPoints: number;
+        selectionWidthBasisPoints?: number | null;
+        selectionHeightBasisPoints?: number | null;
         category: string;
         title: string;
         body: string;
@@ -187,6 +189,8 @@ export function DeveloperHandoffViewer({ token }: { token: string }) {
       figmaNodeName: item.figmaNodeName,
       x: item.xBasisPoints / 100,
       y: item.yBasisPoints / 100,
+      selectionWidth: item.selectionWidthBasisPoints == null ? null : item.selectionWidthBasisPoints / 100,
+      selectionHeight: item.selectionHeightBasisPoints == null ? null : item.selectionHeightBasisPoints / 100,
       category: isCategory(item.category) ? item.category : "developer_note",
       title: item.title,
       body: item.body,
@@ -194,6 +198,7 @@ export function DeveloperHandoffViewer({ token }: { token: string }) {
       authorName: item.authorDisplayName,
       authorUserId: null,
       canEdit: false,
+      canMoveToDraft: false,
       createdAt: item.publishedAt,
       updatedAt: item.publishedAt,
     }));

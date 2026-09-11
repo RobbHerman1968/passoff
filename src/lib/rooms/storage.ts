@@ -16,10 +16,12 @@ export type StorageObject = {
 export type StorageAdapter = {
   readonly provider: "vercel_blob" | "local";
   put(pathname: string, body: Buffer | Uint8Array | ReadableStream, contentType: string): Promise<StorageObject>;
-  getStream(pathnameOrUrl: string): Promise<{
+  getStream(pathnameOrUrl: string, options?: { range?: string | null }): Promise<{
     stream: ReadableStream<Uint8Array>;
     contentType: string | null;
     size: number | null;
+    contentLength?: number | null;
+    contentRange?: string | null;
   } | null>;
   getBytes(pathnameOrUrl: string): Promise<Buffer | null>;
   delete(pathnameOrUrl: string): Promise<void>;
@@ -66,21 +68,39 @@ class LocalStorageAdapter implements StorageAdapter {
     await mkdir(path.dirname(absolute), { recursive: true });
     const buffer = Buffer.isBuffer(body) ? body : Buffer.from(body);
     await writeFile(absolute, buffer);
+    await writeFile(`${absolute}.meta.json`, JSON.stringify({ contentType }), "utf8");
     return { pathname, url: null, size: buffer.byteLength, contentType };
   }
 
-  async getStream(pathnameOrUrl: string) {
+  async getStream(pathnameOrUrl: string, options?: { range?: string | null }) {
     const bytes = await this.getBytes(pathnameOrUrl);
     if (!bytes) return null;
+    let contentType: string | null = null;
+    try {
+      const metadata = JSON.parse(
+        await readFile(`${this.absolute(pathnameOrUrl)}.meta.json`, "utf8"),
+      ) as { contentType?: unknown };
+      contentType = typeof metadata.contentType === "string" ? metadata.contentType : null;
+    } catch {
+      // Legacy local objects predate MIME sidecars.
+    }
+    const match = options?.range?.match(/^bytes=(\d+)-(\d*)$/);
+    const start = match ? Number(match[1]) : 0;
+    const requestedEnd = match?.[2] ? Number(match[2]) : bytes.byteLength - 1;
+    const end = Math.min(requestedEnd, bytes.byteLength - 1);
+    if (start < 0 || start >= bytes.byteLength || end < start) return null;
+    const responseBytes = match ? bytes.subarray(start, end + 1) : bytes;
     return {
       stream: new ReadableStream({
         start(controller) {
-          controller.enqueue(new Uint8Array(bytes));
+          controller.enqueue(new Uint8Array(responseBytes));
           controller.close();
         },
       }),
-      contentType: null,
+      contentType,
       size: bytes.byteLength,
+      contentLength: responseBytes.byteLength,
+      contentRange: match ? `bytes ${start}-${end}/${bytes.byteLength}` : null,
     };
   }
 
@@ -94,7 +114,11 @@ class LocalStorageAdapter implements StorageAdapter {
 
   async delete(pathnameOrUrl: string) {
     try {
-      await rm(this.absolute(pathnameOrUrl), { force: true });
+      const absolute = this.absolute(pathnameOrUrl);
+      await Promise.all([
+        rm(absolute, { force: true }),
+        rm(`${absolute}.meta.json`, { force: true }),
+      ]);
     } catch {
       // ignore
     }
@@ -122,14 +146,20 @@ class VercelBlobStorageAdapter implements StorageAdapter {
     };
   }
 
-  async getStream(pathnameOrUrl: string) {
+  async getStream(pathnameOrUrl: string, options?: { range?: string | null }) {
     const token = requireBlobToken();
-    const result = await get(pathnameOrUrl, { access: "private", token });
+    const result = await get(pathnameOrUrl, {
+      access: "private",
+      token,
+      headers: options?.range ? { Range: options.range } : undefined,
+    });
     if (!result || result.statusCode !== 200 || !result.stream) return null;
     return {
       stream: result.stream,
       contentType: result.blob.contentType,
       size: result.blob.size,
+      contentLength: Number(result.headers.get("content-length") || result.blob.size) || null,
+      contentRange: result.headers.get("content-range"),
     };
   }
 
@@ -181,28 +211,28 @@ function safeFilename(filename: string) {
 /** Tenant-scoped, non-guessable Blob pathname. */
 export function buildTenantObjectPath(input: {
   workspaceId: string;
-  projectId: string;
+  roomId: string;
   revisionId: string;
   filename: string;
 }) {
   const randomId = randomBytes(16).toString("hex");
-  return `workspaces/${input.workspaceId}/rooms/${input.projectId}/revisions/${input.revisionId}/${randomId}-${safeFilename(input.filename)}`;
+  return `workspaces/${input.workspaceId}/rooms/${input.roomId}/revisions/${input.revisionId}/${randomId}-${safeFilename(input.filename)}`;
 }
 
 /** Tenant-scoped path for delivery handoff files (not tied to a revision). */
 export function buildHandoffObjectPath(input: {
   workspaceId: string;
-  projectId: string;
+  roomId: string;
   filename: string;
 }) {
   const randomId = randomBytes(16).toString("hex");
-  return `workspaces/${input.workspaceId}/rooms/${input.projectId}/handoff/${randomId}-${safeFilename(input.filename)}`;
+  return `workspaces/${input.workspaceId}/rooms/${input.roomId}/handoff/${randomId}-${safeFilename(input.filename)}`;
 }
 
 /** @deprecated Prefer buildTenantObjectPath */
-export function buildObjectKey(workspaceId: string, projectId: string, filename: string) {
+export function buildObjectKey(workspaceId: string, roomId: string, filename: string) {
   const ext = path.extname(filename).slice(0, 12) || ".bin";
-  return `workspaces/${workspaceId}/rooms/${projectId}/${randomBytes(16).toString("hex")}${ext}`;
+  return `workspaces/${workspaceId}/rooms/${roomId}/${randomBytes(16).toString("hex")}${ext}`;
 }
 
 export async function writeAssetBytes(objectKey: string, bytes: Buffer, contentType = "application/octet-stream") {
@@ -213,8 +243,8 @@ export async function readAssetBytes(objectKey: string) {
   return getStorageAdapter().getBytes(objectKey);
 }
 
-export async function readAssetStream(objectKeyOrUrl: string) {
-  return getStorageAdapter().getStream(objectKeyOrUrl);
+export async function readAssetStream(objectKeyOrUrl: string, options?: { range?: string | null }) {
+  return getStorageAdapter().getStream(objectKeyOrUrl, options);
 }
 
 export async function deleteAssetBytes(objectKeyOrUrl: string) {
@@ -319,6 +349,57 @@ export async function verifyPrivateBlobObject(input: {
     url: input.pathname,
     contentType: streamed.contentType || input.expectedContentType,
     size,
+  };
+}
+
+/**
+ * Verify a private video from its trusted pathname and hash its stored bytes.
+ * The stream is consumed incrementally so large videos are never buffered in memory.
+ */
+export async function verifyPrivateVideoObject(input: {
+  pathname: string;
+  expectedContentType: string;
+  expectedSize: number;
+  expectedSha256: string;
+}) {
+  if (input.pathname.includes("..") || input.pathname.includes("\\")) {
+    throw new Error("Upload path is invalid.");
+  }
+  if (input.expectedSize <= 0) {
+    throw new Error("Uploaded object size mismatch.");
+  }
+  const stored = await getStorageAdapter().getStream(input.pathname);
+  if (!stored) {
+    throw new Error("Uploaded object was not found in private storage.");
+  }
+  if (stored.size !== null && stored.size !== input.expectedSize) {
+    throw new Error("Uploaded object size mismatch.");
+  }
+  assertContentTypeMatch(input.expectedContentType, stored.contentType);
+
+  const hash = createHash("sha256");
+  const reader = stored.stream.getReader();
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (!value) continue;
+    size += value.byteLength;
+    hash.update(value);
+  }
+  if (size !== input.expectedSize) {
+    throw new Error("Uploaded object size mismatch.");
+  }
+  const sha256 = hash.digest("hex");
+  if (sha256 !== input.expectedSha256.toLowerCase()) {
+    throw new Error("Video checksum mismatch.");
+  }
+  return {
+    pathname: input.pathname,
+    url: null,
+    contentType: stored.contentType || input.expectedContentType,
+    size,
+    sha256,
   };
 }
 

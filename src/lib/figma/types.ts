@@ -34,6 +34,9 @@ export type FigmaInteraction = {
 export type FigmaImportSource = "plugin" | "api" | "created" | "upload";
 
 export type FigmaImportResult = {
+  designId?: string;
+  designVersionId?: string;
+  versionNumber?: number;
   file: {
     key: string;
     name: string;
@@ -50,6 +53,9 @@ export type FigmaImportResult = {
 
 export type FigmaSavedImportSummary = {
   id: string;
+  designId: string;
+  designVersionId: string;
+  versionNumber: number;
   fileKey: string;
   fileName: string;
   version: string;
@@ -76,6 +82,9 @@ export type ProjectDesignBreakpoint = {
 /** One grid card on the project page — a single screen or a breakpoint set. */
 export type ProjectDesignSummary = {
   key: string;
+  designId: string;
+  designVersionId: string;
+  versionNumber: number;
   name: string;
   fileKey: string;
   fileName: string;
@@ -175,6 +184,8 @@ export type FigmaExplanationRecord = {
   figmaNodeName: string | null;
   x: number;
   y: number;
+  selectionWidth: number | null;
+  selectionHeight: number | null;
   category: FigmaExplanationCategory;
   title: string;
   body: string;
@@ -182,6 +193,7 @@ export type FigmaExplanationRecord = {
   authorName: string;
   authorUserId: string | null;
   canEdit: boolean;
+  canMoveToDraft: boolean;
   createdAt: string;
   updatedAt: string;
 };

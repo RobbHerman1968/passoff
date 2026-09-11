@@ -1,4 +1,5 @@
 import type { AdapterAccountType } from "@auth/core/adapters";
+import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import {
   boolean,
   index,
@@ -142,11 +143,32 @@ export const subscriptions = pgTable("subscriptions", {
   uniqueIndex("subscriptions_provider_subscription_unique").on(table.provider, table.providerSubscriptionId),
 ]);
 
-/** Client approval room. Status: DRAFT | SENT | VIEWED | CHANGES_REQUESTED | APPROVED | ARCHIVED */
-export const projects = pgTable("projects", {
+/** Durable client engagement containing design files and one or more approval rooms. */
+export const clientProjects = pgTable("projects", {
   id: uuid("id").defaultRandom().primaryKey(),
   organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
   workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  clientName: text("client_name").notNull().default(""),
+  slug: text("slug").notNull(),
+  status: text("status").notNull().default("ACTIVE"),
+  archivedAt: timestamp("archived_at", { withTimezone: true }),
+  figmaPluginKeyHash: text("figma_plugin_key_hash"),
+  figmaPluginKeyCreatedAt: timestamp("figma_plugin_key_created_at", { withTimezone: true }),
+  ...timestamps,
+}, (table) => [
+  uniqueIndex("client_projects_workspace_slug_unique").on(table.workspaceId, table.slug),
+  index("client_projects_organization_idx").on(table.organizationId),
+  index("client_projects_workspace_status_updated_idx").on(table.workspaceId, table.status, table.updatedAt),
+]);
+
+/** Client approval room. Status: DRAFT | SENT | VIEWED | CHANGES_REQUESTED | APPROVED | ARCHIVED */
+export const rooms = pgTable("rooms", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+  // Nullable in TypeScript only for compatibility with old direct inserts; the DB trigger fills it and enforces NOT NULL.
+  clientProjectId: uuid("project_id").references(() => clientProjects.id, { onDelete: "cascade" }),
   name: text("name").notNull(),
   clientName: text("client_name").notNull().default(""),
   slug: text("slug").notNull(),
@@ -157,16 +179,17 @@ export const projects = pgTable("projects", {
   archivedAt: timestamp("archived_at", { withTimezone: true }),
   ...timestamps,
 }, (table) => [
-  uniqueIndex("projects_workspace_slug_unique").on(table.workspaceId, table.slug),
-  index("projects_organization_idx").on(table.organizationId),
-  index("projects_workspace_status_updated_idx").on(table.workspaceId, table.status, table.updatedAt),
+  uniqueIndex("rooms_workspace_slug_unique").on(table.workspaceId, table.slug),
+  index("rooms_project_idx").on(table.clientProjectId),
+  index("rooms_organization_idx").on(table.organizationId),
+  index("rooms_workspace_status_updated_idx").on(table.workspaceId, table.status, table.updatedAt),
 ]);
 
 /** Revision status: DRAFT | PUBLISHED | SUPERSEDED | APPROVED */
 export const revisions = pgTable("revisions", {
   id: uuid("id").defaultRandom().primaryKey(),
   workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
-  projectId: uuid("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  roomId: uuid("project_id").notNull().references(() => rooms.id, { onDelete: "cascade" }),
   number: integer("number").notNull(),
   status: text("status").notNull().default("DRAFT"),
   contentDigest: text("content_digest"),
@@ -174,8 +197,8 @@ export const revisions = pgTable("revisions", {
   supersededAt: timestamp("superseded_at", { withTimezone: true }),
   ...timestamps,
 }, (table) => [
-  uniqueIndex("revisions_project_number_unique").on(table.projectId, table.number),
-  index("revisions_project_number_desc_idx").on(table.projectId, table.number),
+  uniqueIndex("revisions_project_number_unique").on(table.roomId, table.number),
+  index("revisions_project_number_desc_idx").on(table.roomId, table.number),
   index("revisions_workspace_idx").on(table.workspaceId),
 ]);
 
@@ -183,7 +206,7 @@ export const revisions = pgTable("revisions", {
 export const assets = pgTable("assets", {
   id: uuid("id").defaultRandom().primaryKey(),
   workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
-  projectId: uuid("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  roomId: uuid("project_id").notNull().references(() => rooms.id, { onDelete: "cascade" }),
   kind: text("kind").notNull(), // image | pdf | screenshot | url
   label: text("label").notNull(),
   objectKey: text("object_key"),
@@ -205,8 +228,8 @@ export const assets = pgTable("assets", {
   uploadedByUserId: uuid("uploaded_by_user_id").references(() => users.id, { onDelete: "set null" }),
   ...timestamps,
 }, (table) => [
-  index("assets_workspace_project_idx").on(table.workspaceId, table.projectId),
-  index("assets_project_idx").on(table.projectId),
+  index("assets_workspace_project_idx").on(table.workspaceId, table.roomId),
+  index("assets_project_idx").on(table.roomId),
   index("assets_upload_status_created_idx").on(table.uploadStatus, table.createdAt),
   uniqueIndex("assets_upload_session_unique").on(table.uploadSessionId),
 ]);
@@ -226,7 +249,7 @@ export const revisionAssets = pgTable("revision_assets", {
 export const shareLinks = pgTable("share_links", {
   id: uuid("id").defaultRandom().primaryKey(),
   workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
-  projectId: uuid("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  roomId: uuid("project_id").notNull().references(() => rooms.id, { onDelete: "cascade" }),
   tokenHash: text("token_hash").notNull(),
   scope: text("scope").notNull().default("review"), // review | view_only
   status: text("status").notNull().default("ACTIVE"), // ACTIVE | REVOKED | EXPIRED
@@ -238,13 +261,13 @@ export const shareLinks = pgTable("share_links", {
   ...timestamps,
 }, (table) => [
   uniqueIndex("share_links_token_hash_unique").on(table.tokenHash),
-  index("share_links_project_idx").on(table.projectId, table.revokedAt),
+  index("share_links_project_idx").on(table.roomId, table.revokedAt),
 ]);
 
 export const reviewers = pgTable("reviewers", {
   id: uuid("id").defaultRandom().primaryKey(),
   workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
-  projectId: uuid("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  roomId: uuid("project_id").notNull().references(() => rooms.id, { onDelete: "cascade" }),
   email: text("email").notNull(),
   name: text("name").notNull(),
   verifiedAt: timestamp("verified_at", { withTimezone: true }),
@@ -252,22 +275,28 @@ export const reviewers = pgTable("reviewers", {
 }, (table) => [
   // Email is display/contact only — identity is the signed reviewer session, not email uniqueness.
   // Future verified attribution can use OTP/magic-link and set verifiedAt.
-  index("reviewers_project_email_idx").on(table.projectId, table.email),
-  index("reviewers_project_idx").on(table.projectId),
+  index("reviewers_project_email_idx").on(table.roomId, table.email),
+  index("reviewers_project_idx").on(table.roomId),
 ]);
 
 /** Comment status: OPEN | RESOLVED | WONT_FIX */
 export const roomComments = pgTable("room_comments", {
   id: uuid("id").defaultRandom().primaryKey(),
   workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
-  projectId: uuid("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  roomId: uuid("project_id").notNull().references(() => rooms.id, { onDelete: "cascade" }),
   revisionId: uuid("revision_id").notNull().references(() => revisions.id, { onDelete: "cascade" }),
-  revisionAssetId: uuid("revision_asset_id").notNull().references(() => revisionAssets.id, { onDelete: "cascade" }),
+  revisionAssetId: uuid("revision_asset_id").references(() => revisionAssets.id, { onDelete: "cascade" }),
+  revisionDesignVersionId: uuid("revision_design_version_id").references(
+    (): AnyPgColumn => revisionDesignVersions.id,
+    { onDelete: "cascade" },
+  ),
+  designScreenId: text("design_screen_id"),
+  videoTimeMs: integer("video_time_ms"),
   reviewerId: uuid("reviewer_id").references(() => reviewers.id, { onDelete: "set null" }),
   authorUserId: uuid("author_user_id").references(() => users.id, { onDelete: "set null" }),
   parentCommentId: uuid("parent_comment_id"),
-  xPercent: numeric("x_percent", { precision: 8, scale: 5 }).notNull(),
-  yPercent: numeric("y_percent", { precision: 8, scale: 5 }).notNull(),
+  xPercent: numeric("x_percent", { precision: 8, scale: 5 }),
+  yPercent: numeric("y_percent", { precision: 8, scale: 5 }),
   body: text("body").notNull(),
   status: text("status").notNull().default("OPEN"),
   resolvedAt: timestamp("resolved_at", { withTimezone: true }),
@@ -275,14 +304,23 @@ export const roomComments = pgTable("room_comments", {
   ...timestamps,
 }, (table) => [
   index("room_comments_revision_asset_created_idx").on(table.revisionAssetId, table.createdAt),
-  index("room_comments_project_status_idx").on(table.projectId, table.status),
-  index("room_comments_revision_idx").on(table.revisionId),
+  index("room_comments_revision_design_screen_created_idx").on(
+    table.revisionDesignVersionId,
+    table.designScreenId,
+    table.createdAt,
+  ),
+  index("room_comments_revision_video_created_idx").on(
+    table.revisionDesignVersionId,
+    table.videoTimeMs,
+    table.createdAt,
+  ),
+  index("room_comments_revision_status_idx").on(table.revisionId, table.status),
 ]);
 
 export const approvals = pgTable("approvals", {
   id: uuid("id").defaultRandom().primaryKey(),
   workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
-  projectId: uuid("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  roomId: uuid("project_id").notNull().references(() => rooms.id, { onDelete: "cascade" }),
   revisionId: uuid("revision_id").notNull().references(() => revisions.id, { onDelete: "restrict" }),
   reviewerId: uuid("reviewer_id").notNull().references(() => reviewers.id, { onDelete: "restrict" }),
   acceptanceStatement: text("acceptance_statement").notNull(),
@@ -293,13 +331,13 @@ export const approvals = pgTable("approvals", {
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 }, (table) => [
   index("approvals_revision_idx").on(table.revisionId),
-  index("approvals_project_idx").on(table.projectId),
+  index("approvals_project_idx").on(table.roomId),
 ]);
 
 export const handoffItems = pgTable("handoff_items", {
   id: uuid("id").defaultRandom().primaryKey(),
   workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
-  projectId: uuid("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  roomId: uuid("project_id").notNull().references(() => rooms.id, { onDelete: "cascade" }),
   assetId: uuid("asset_id").references(() => assets.id, { onDelete: "set null" }),
   externalUrl: text("external_url"),
   label: text("label").notNull(),
@@ -309,7 +347,7 @@ export const handoffItems = pgTable("handoff_items", {
   createdByUserId: uuid("created_by_user_id").references(() => users.id, { onDelete: "set null" }),
   ...timestamps,
 }, (table) => [
-  index("handoff_items_project_sort_idx").on(table.projectId, table.sortOrder),
+  index("handoff_items_project_sort_idx").on(table.roomId, table.sortOrder),
   // Multiple NULLs are allowed — note/link rows without assets remain valid.
   uniqueIndex("handoff_items_asset_id_unique").on(table.assetId),
 ]);
@@ -317,7 +355,7 @@ export const handoffItems = pgTable("handoff_items", {
 export const auditEvents = pgTable("audit_events", {
   id: uuid("id").defaultRandom().primaryKey(),
   workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
-  projectId: uuid("project_id").references(() => projects.id, { onDelete: "set null" }),
+  roomId: uuid("project_id").references(() => rooms.id, { onDelete: "set null" }),
   actorType: text("actor_type").notNull(), // user | reviewer | system
   actorId: text("actor_id"),
   action: text("action").notNull(),
@@ -327,7 +365,7 @@ export const auditEvents = pgTable("audit_events", {
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 }, (table) => [
   index("audit_events_workspace_created_idx").on(table.workspaceId, table.createdAt),
-  index("audit_events_project_created_idx").on(table.projectId, table.createdAt),
+  index("audit_events_project_created_idx").on(table.roomId, table.createdAt),
 ]);
 
 export const outboxEvents = pgTable("outbox_events", {
@@ -406,9 +444,10 @@ export const figmaConnections = pgTable("figma_connections", {
 
 export const figmaQuestions = pgTable("figma_questions", {
   id: uuid("id").primaryKey(),
-  organizationId: uuid("organization_id").references(() => organizations.id, { onDelete: "cascade" }),
-  workspaceId: uuid("workspace_id").references(() => workspaces.id, { onDelete: "cascade" }),
-  projectId: uuid("project_id").references(() => projects.id, { onDelete: "cascade" }),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+  projectId: uuid("project_id").notNull().references(() => clientProjects.id, { onDelete: "cascade" }),
+  designVersionId: uuid("design_version_id").notNull().references(() => projectDesignVersions.id, { onDelete: "cascade" }),
   askedByUserId: uuid("asked_by_user_id").references(() => users.id, { onDelete: "set null" }),
   figmaConnectionId: uuid("figma_connection_id").references(() => figmaConnections.id, { onDelete: "set null" }),
   figmaFileKey: text("figma_file_key").notNull(),
@@ -423,6 +462,7 @@ export const figmaQuestions = pgTable("figma_questions", {
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 }, (table) => [
   index("figma_questions_project_created_idx").on(table.projectId, table.createdAt),
+  index("figma_questions_design_version_created_idx").on(table.designVersionId, table.createdAt),
   index("figma_questions_user_created_idx").on(table.askedByUserId, table.createdAt),
   index("figma_questions_file_idx").on(table.figmaConnectionId, table.figmaFileKey),
 ]);
@@ -431,7 +471,8 @@ export const figmaComments = pgTable("figma_comments", {
   id: uuid("id").primaryKey(),
   organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
   workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
-  projectId: uuid("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  projectId: uuid("project_id").notNull().references(() => clientProjects.id, { onDelete: "cascade" }),
+  designVersionId: uuid("design_version_id").notNull().references(() => projectDesignVersions.id, { onDelete: "cascade" }),
   authorUserId: uuid("author_user_id").references(() => users.id, { onDelete: "set null" }),
   figmaFileKey: text("figma_file_key").notNull(),
   figmaFileName: text("figma_file_name").notNull(),
@@ -445,6 +486,7 @@ export const figmaComments = pgTable("figma_comments", {
   ...timestamps,
 }, (table) => [
   index("figma_comments_screen_created_idx").on(table.organizationId, table.projectId, table.figmaFileKey, table.screenId, table.createdAt),
+  index("figma_comments_design_version_created_idx").on(table.designVersionId, table.createdAt),
   index("figma_comments_author_created_idx").on(table.authorUserId, table.createdAt),
 ]);
 
@@ -452,8 +494,11 @@ export const figmaExplanations = pgTable("figma_explanations", {
   id: uuid("id").primaryKey(),
   organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
   workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
-  projectId: uuid("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  projectId: uuid("project_id").notNull().references(() => clientProjects.id, { onDelete: "cascade" }),
+  designId: uuid("design_id").notNull().references(() => projectDesigns.id, { onDelete: "cascade" }),
+  designVersionId: uuid("design_version_id").notNull().references(() => projectDesignVersions.id, { onDelete: "cascade" }),
   authorUserId: uuid("author_user_id").references(() => users.id, { onDelete: "set null" }),
+  authorDisplayName: text("author_display_name").notNull().default("Former member"),
   figmaFileKey: text("figma_file_key").notNull(),
   figmaFileName: text("figma_file_name").notNull(),
   screenId: text("screen_id").notNull(),
@@ -462,6 +507,8 @@ export const figmaExplanations = pgTable("figma_explanations", {
   figmaNodeName: text("figma_node_name"),
   xBasisPoints: integer("x_basis_points").notNull(),
   yBasisPoints: integer("y_basis_points").notNull(),
+  selectionWidthBasisPoints: integer("selection_width_basis_points"),
+  selectionHeightBasisPoints: integer("selection_height_basis_points"),
   category: text("category").notNull(),
   title: text("title").notNull(),
   body: text("body").notNull(),
@@ -476,7 +523,135 @@ export const figmaExplanations = pgTable("figma_explanations", {
     table.screenId,
     table.createdAt,
   ),
+  index("figma_explanations_design_version_created_idx").on(
+    table.designVersionId,
+    table.createdAt,
+  ),
   index("figma_explanations_author_updated_idx").on(
+    table.organizationId,
+    table.workspaceId,
+    table.projectId,
+    table.authorUserId,
+    table.updatedAt,
+  ),
+]);
+
+/** Durable project-owned design identity. sourceType: figma | image | pdf | video | url */
+export const projectDesigns = pgTable("project_designs", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+  projectId: uuid("project_id").notNull().references(() => clientProjects.id, { onDelete: "cascade" }),
+  sourceType: text("source_type").notNull(),
+  sourceKey: text("source_key"),
+  name: text("name").notNull(),
+  currentVersionId: uuid("current_version_id").references(
+    (): AnyPgColumn => projectDesignVersions.id,
+    { onDelete: "set null" },
+  ),
+  archivedAt: timestamp("archived_at", { withTimezone: true }),
+  ...timestamps,
+}, (table) => [
+  uniqueIndex("project_designs_project_source_unique").on(table.projectId, table.sourceType, table.sourceKey),
+  index("project_designs_tenant_project_idx").on(table.organizationId, table.workspaceId, table.projectId),
+  index("project_designs_project_updated_idx").on(table.projectId, table.updatedAt),
+]);
+
+/** Immutable normalized content captured by one completed design import. */
+export const projectDesignVersions = pgTable("project_design_versions", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+  projectId: uuid("project_id").notNull().references(() => clientProjects.id, { onDelete: "cascade" }),
+  designId: uuid("design_id").notNull().references(() => projectDesigns.id, { onDelete: "cascade" }),
+  versionNumber: integer("version_number").notNull(),
+  sourceVersion: text("source_version"),
+  sourceLastModified: timestamp("source_last_modified", { withTimezone: true }),
+  contentSha256: text("content_sha256").notNull(),
+  payloadJson: text("payload_json").notNull(),
+  createdByUserId: uuid("created_by_user_id").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("project_design_versions_design_version_unique").on(table.designId, table.versionNumber),
+  index("project_design_versions_design_content_idx").on(table.designId, table.contentSha256),
+  index("project_design_versions_tenant_project_idx").on(table.organizationId, table.workspaceId, table.projectId),
+  index("project_design_versions_design_created_idx").on(table.designId, table.createdAt),
+]);
+
+/** Durable authorization and completion state for one project-owned video upload. */
+export const projectVideoUploadSessions = pgTable("project_video_upload_sessions", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+  projectId: uuid("project_id").notNull().references(() => clientProjects.id, { onDelete: "cascade" }),
+  existingDesignId: uuid("existing_design_id"),
+  createdByUserId: uuid("created_by_user_id").references(() => users.id, { onDelete: "set null" }),
+  pathname: text("pathname").notNull(),
+  originalFilename: text("original_filename").notNull(),
+  designName: text("design_name"),
+  mimeType: text("mime_type").notNull(),
+  byteSize: integer("byte_size").notNull(),
+  durationMs: integer("duration_ms").notNull(),
+  width: integer("width"),
+  height: integer("height"),
+  declaredSha256: text("declared_sha256").notNull(),
+  status: text("status").notNull().default("pending"),
+  resultDesignId: uuid("result_design_id"),
+  resultDesignVersionId: uuid("result_design_version_id"),
+  errorCode: text("error_code"),
+  errorMessage: text("error_message"),
+  completionAttemptId: uuid("completion_attempt_id"),
+  completionStartedAt: timestamp("completion_started_at", { withTimezone: true }),
+  completedAt: timestamp("completed_at", { withTimezone: true }),
+  ...timestamps,
+}, (table) => [
+  uniqueIndex("project_video_upload_sessions_pathname_unique").on(table.pathname),
+  index("project_video_upload_sessions_tenant_project_idx").on(
+    table.organizationId,
+    table.workspaceId,
+    table.projectId,
+    table.createdAt,
+  ),
+  index("project_video_upload_sessions_status_created_idx").on(table.status, table.createdAt),
+]);
+
+/** A room revision's ordered pins to immutable project design versions. */
+export const revisionDesignVersions = pgTable("revision_design_versions", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  roomRevisionId: uuid("room_revision_id").notNull().references(() => revisions.id, { onDelete: "cascade" }),
+  designVersionId: uuid("design_version_id").notNull().references(() => projectDesignVersions.id, { onDelete: "restrict" }),
+  sortOrder: integer("sort_order").notNull().default(0),
+  displayMetaJson: text("display_meta_json").notNull().default("{}"),
+}, (table) => [
+  uniqueIndex("revision_design_versions_revision_design_unique").on(table.roomRevisionId, table.designVersionId),
+  index("revision_design_versions_revision_sort_idx").on(table.roomRevisionId, table.sortOrder),
+  index("revision_design_versions_design_version_idx").on(table.designVersionId),
+]);
+
+/** Timestamped designer notes bound to one immutable project video version. */
+export const designVersionExplanations = pgTable("design_version_explanations", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+  projectId: uuid("project_id").notNull().references(() => clientProjects.id, { onDelete: "cascade" }),
+  designId: uuid("design_id").notNull().references(() => projectDesigns.id, { onDelete: "cascade" }),
+  designVersionId: uuid("design_version_id").notNull().references(() => projectDesignVersions.id, { onDelete: "cascade" }),
+  authorUserId: uuid("author_user_id").references(() => users.id, { onDelete: "set null" }),
+  authorDisplayName: text("author_display_name").notNull().default("Former member"),
+  targetType: text("target_type").notNull().default("video"),
+  videoTimeMs: integer("video_time_ms").notNull(),
+  category: text("category").notNull(),
+  title: text("title").notNull(),
+  body: text("body").notNull(),
+  status: text("status").notNull().default("draft"),
+  ...timestamps,
+}, (table) => [
+  index("design_version_explanations_version_time_idx").on(
+    table.designVersionId,
+    table.videoTimeMs,
+    table.createdAt,
+  ),
+  index("design_version_explanations_author_updated_idx").on(
     table.organizationId,
     table.workspaceId,
     table.projectId,
@@ -489,7 +664,7 @@ export const figmaImports = pgTable("figma_imports", {
   id: uuid("id").primaryKey(),
   organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
   workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
-  projectId: uuid("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  projectId: uuid("project_id").notNull().references(() => clientProjects.id, { onDelete: "cascade" }),
   figmaConnectionId: uuid("figma_connection_id").references(() => figmaConnections.id, { onDelete: "set null" }),
   importedByUserId: uuid("imported_by_user_id").references(() => users.id, { onDelete: "set null" }),
   figmaFileKey: text("figma_file_key").notNull(),
@@ -585,7 +760,8 @@ export const developerHandoffSnapshots = pgTable("developer_handoff_snapshots", 
   id: uuid("id").primaryKey(),
   organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
   workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
-  projectId: uuid("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  projectId: uuid("project_id").notNull().references(() => clientProjects.id, { onDelete: "cascade" }),
+  sourceRoomId: uuid("source_room_id").references(() => rooms.id, { onDelete: "set null" }),
   figmaFileKey: text("figma_file_key").notNull(),
   sourceImportId: uuid("source_import_id").references(() => figmaImports.id, { onDelete: "set null" }),
   version: integer("version").notNull(),
@@ -644,7 +820,7 @@ export const developerHandoffLinks = pgTable("developer_handoff_links", {
   id: uuid("id").primaryKey(),
   organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
   workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
-  projectId: uuid("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  projectId: uuid("project_id").notNull().references(() => clientProjects.id, { onDelete: "cascade" }),
   snapshotId: uuid("snapshot_id").notNull().references(() => developerHandoffSnapshots.id, { onDelete: "cascade" }),
   tokenHash: text("token_hash").notNull(),
   status: text("status").notNull().default("ACTIVE"),
@@ -664,7 +840,7 @@ export const openaiRuns = pgTable("openai_runs", {
   id: uuid("id").primaryKey(),
   organizationId: uuid("organization_id").references(() => organizations.id, { onDelete: "cascade" }),
   workspaceId: uuid("workspace_id").references(() => workspaces.id, { onDelete: "cascade" }),
-  projectId: uuid("project_id").references(() => projects.id, { onDelete: "cascade" }),
+  projectId: uuid("project_id").references(() => clientProjects.id, { onDelete: "cascade" }),
   userId: uuid("user_id").references(() => users.id, { onDelete: "set null" }),
   questionId: uuid("question_id").notNull(),
   figmaConnectionId: uuid("figma_connection_id").references(() => figmaConnections.id, { onDelete: "set null" }),

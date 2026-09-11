@@ -23,6 +23,14 @@ describe("approval receipt serialization", () => {
     reviewerName: "Alex Rivera",
     reviewerEmail: "alex.rivera@example.com",
     assetNames: ["Homepage hero", "Menu — mobile", "Contact page"],
+    designVersions: [{
+      designId: "design-1",
+      designVersionId: "design-version-3",
+      designName: "Checkout flow",
+      versionNumber: 3,
+      contentSha256: "design-content-sha256",
+      screenNames: ["Checkout", "Payment"],
+    }],
   };
 
   it("derives a short reference id from the approval uuid", () => {
@@ -38,6 +46,9 @@ describe("approval receipt serialization", () => {
     expect(receipt.reviewerEmail).toBe("alex.rivera@example.com");
     expect(receipt.assetCount).toBe(3);
     expect(receipt.assetNames).toEqual(source.assetNames);
+    expect(receipt.designCount).toBe(1);
+    expect(receipt.reviewedItemCount).toBe(4);
+    expect(receipt.designVersions).toEqual(source.designVersions);
     expect(receipt.contentDigest).toBe(source.contentDigest);
     expect(receipt.digestShort).toBe(shortenDigest(source.contentDigest));
     expect(receipt.boundToFrozenRevision).toBe(true);

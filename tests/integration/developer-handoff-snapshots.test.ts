@@ -31,7 +31,9 @@ describe.skipIf(!hasDb)("developer handoff snapshots (DB)", () => {
       figmaImportScreens,
       figmaImports,
       organizations,
-      projects,
+      projectDesigns,
+      projectDesignVersions,
+      rooms,
       reviewers,
       revisions,
       shareLinks,
@@ -70,7 +72,7 @@ describe.skipIf(!hasDb)("developer handoff snapshots (DB)", () => {
         .values({ organizationId: organization.id, name: "Main", slug: "main" })
         .returning();
       const [project] = await db
-        .insert(projects)
+        .insert(rooms)
         .values({
           organizationId: organization.id,
           workspaceId: workspace.id,
@@ -81,7 +83,7 @@ describe.skipIf(!hasDb)("developer handoff snapshots (DB)", () => {
         })
         .returning();
       const [otherProject] = await db
-        .insert(projects)
+        .insert(rooms)
         .values({
           organizationId: organization.id,
           workspaceId: workspace.id,
@@ -118,7 +120,7 @@ describe.skipIf(!hasDb)("developer handoff snapshots (DB)", () => {
         .insert(revisions)
         .values({
           workspaceId: workspace.id,
-          projectId: project.id,
+          roomId: project.id,
           number: 1,
           status: "APPROVED",
           contentDigest: `digest-${stamp}`,
@@ -128,7 +130,7 @@ describe.skipIf(!hasDb)("developer handoff snapshots (DB)", () => {
         .insert(reviewers)
         .values({
           workspaceId: workspace.id,
-          projectId: project.id,
+          roomId: project.id,
           email: `approver-${stamp}@example.com`,
           name: "Approved By Client",
         })
@@ -137,7 +139,7 @@ describe.skipIf(!hasDb)("developer handoff snapshots (DB)", () => {
         .insert(approvals)
         .values({
           workspaceId: workspace.id,
-          projectId: project.id,
+          roomId: project.id,
           revisionId: revision.id,
           reviewerId: reviewer.id,
           acceptanceStatement: "Approved",
@@ -146,9 +148,9 @@ describe.skipIf(!hasDb)("developer handoff snapshots (DB)", () => {
         })
         .returning();
       await db
-        .update(projects)
+        .update(rooms)
         .set({ approvedRevisionId: revision.id })
-        .where(eq(projects.id, project.id));
+        .where(eq(rooms.id, project.id));
 
       const figmaImportId = randomUUID();
       const desktopGroupId = `${stamp}-desktop`;
@@ -202,6 +204,39 @@ describe.skipIf(!hasDb)("developer handoff snapshots (DB)", () => {
           primaryScreenId: "1:2",
         },
       ]);
+      const designId = randomUUID();
+      const designVersionId = randomUUID();
+      await db.insert(projectDesigns).values({
+        id: designId,
+        organizationId: organization.id,
+        workspaceId: workspace.id,
+        projectId: project.id,
+        sourceType: "figma",
+        sourceKey: "file-key",
+        name: "Website",
+      });
+      await db.insert(projectDesignVersions).values({
+        id: designVersionId,
+        organizationId: organization.id,
+        workspaceId: workspace.id,
+        projectId: project.id,
+        designId,
+        versionNumber: 1,
+        contentSha256: "b".repeat(64),
+        payloadJson: JSON.stringify({
+          schemaVersion: 1,
+          file: { key: "file-key", name: "Website", sourceVersion: "42", sourceLastModified: null, mainScreenId: "1:2", thumbnailScreenId: null },
+          screens: [
+            { id: "1:2", name: "Home desktop", type: "FRAME", width: null, height: null, x: null, y: null, interactionCount: 0, sortOrder: 0, breakpointGroupId: desktopGroupId, preview: null },
+            { id: "1:3", name: "Home tablet", type: "FRAME", width: null, height: null, x: null, y: null, interactionCount: 0, sortOrder: 1, breakpointGroupId: tabletGroupId, preview: null },
+          ],
+          interactions: [],
+          breakpointGroups: [],
+          inspectTrees: [],
+          warnings: [],
+        }),
+      });
+      await db.update(projectDesigns).set({ currentVersionId: designVersionId }).where(eq(projectDesigns.id, designId));
       const secondImportId = randomUUID();
       await db.insert(figmaImports).values({
         id: secondImportId,
@@ -232,13 +267,18 @@ describe.skipIf(!hasDb)("developer handoff snapshots (DB)", () => {
           organizationId: organization.id,
           workspaceId: workspace.id,
           projectId: project.id,
+          designId,
+          designVersionId,
           authorUserId: publisher.id,
+          authorDisplayName: "Publisher",
           figmaFileKey: "file-key",
           figmaFileName: "Website",
           screenId: "1:2",
           screenName: "Home",
           xBasisPoints: 100,
           yBasisPoints: 200,
+          selectionWidthBasisPoints: null,
+          selectionHeightBasisPoints: null,
           category: "intent",
           title: "Published",
           body: "Freeze this guidance.",
@@ -249,13 +289,18 @@ describe.skipIf(!hasDb)("developer handoff snapshots (DB)", () => {
           organizationId: organization.id,
           workspaceId: workspace.id,
           projectId: project.id,
+          designId,
+          designVersionId,
           authorUserId: publisher.id,
+          authorDisplayName: "Publisher",
           figmaFileKey: "file-key",
           figmaFileName: "Website",
           screenId: "1:2",
           screenName: "Home",
           xBasisPoints: 300,
           yBasisPoints: 400,
+          selectionWidthBasisPoints: null,
+          selectionHeightBasisPoints: null,
           category: "developer_note",
           title: "Draft",
           body: "Do not disclose.",
@@ -282,9 +327,9 @@ describe.skipIf(!hasDb)("developer handoff snapshots (DB)", () => {
       await writePreviewPng(previewCleanup, "file-key", "1:2", previewBytes);
 
       await db
-        .update(projects)
+        .update(rooms)
         .set({ approvedRevisionId: null })
-        .where(eq(projects.id, project.id));
+        .where(eq(rooms.id, project.id));
       const optionalApprovalRelease = await publishDeveloperHandoffSnapshot(
         scope,
         project.id,
@@ -322,10 +367,10 @@ describe.skipIf(!hasDb)("developer handoff snapshots (DB)", () => {
         status: 404,
       });
 
-      await db
+      await expect(db
         .update(figmaExplanations)
         .set({ title: "Edited after release", body: "New implementation guidance." })
-        .where(eq(figmaExplanations.id, publishedExplanationId));
+        .where(eq(figmaExplanations.id, publishedExplanationId))).rejects.toThrow();
       await db
         .update(figmaImportScreens)
         .set({ name: "Replacement desktop" })
@@ -341,9 +386,9 @@ describe.skipIf(!hasDb)("developer handoff snapshots (DB)", () => {
         .where(eq(figmaImports.id, figmaImportId));
 
       await db
-        .update(projects)
+        .update(rooms)
         .set({ approvedRevisionId: revision.id })
-        .where(eq(projects.id, project.id));
+        .where(eq(rooms.id, project.id));
       const releases = await Promise.all([
         publishDeveloperHandoffSnapshot(scope, project.id, "file-key"),
         publishDeveloperHandoffSnapshot(scope, project.id, "file-key"),
@@ -357,14 +402,14 @@ describe.skipIf(!hasDb)("developer handoff snapshots (DB)", () => {
         name: "Replacement desktop",
         explanations: [
           expect.objectContaining({
-            title: "Edited after release",
-            body: "New implementation guidance.",
+            title: "Published",
+            body: "Freeze this guidance.",
           }),
         ],
       });
-      await db
+      await expect(db
         .delete(figmaExplanations)
-        .where(eq(figmaExplanations.id, publishedExplanationId));
+        .where(eq(figmaExplanations.id, publishedExplanationId))).rejects.toThrow();
       expect(
         (await resolveDeveloperHandoffToken(optionalApprovalRelease.link.token))
           .snapshot.payload.file.screens[0],
@@ -401,7 +446,7 @@ describe.skipIf(!hasDb)("developer handoff snapshots (DB)", () => {
       expect(releases[0].dto.file.screens[0]).not.toHaveProperty("inspectTree");
       expect(releases[0].dto.file.screens[0].explanations).toEqual([
         expect.objectContaining({
-          title: "Edited after release",
+          title: "Published",
           authorDisplayName: "Publisher",
         }),
       ]);
@@ -495,12 +540,12 @@ describe.skipIf(!hasDb)("developer handoff snapshots (DB)", () => {
 
       const clientToken = generateShareToken();
       await db
-        .update(projects)
+        .update(rooms)
         .set({ currentPublishedRevisionId: revision.id })
-        .where(eq(projects.id, project.id));
+        .where(eq(rooms.id, project.id));
       await db.insert(shareLinks).values({
         workspaceId: workspace.id,
-        projectId: project.id,
+        roomId: project.id,
         tokenHash: hashShareToken(clientToken),
         scope: "view_only",
         status: "ACTIVE",
@@ -526,7 +571,7 @@ describe.skipIf(!hasDb)("developer handoff snapshots (DB)", () => {
         key: "file-key",
         screenCount: 2,
         interactionCount: 0,
-        publishedExplanationCount: 0,
+        publishedExplanationCount: 1,
         draftExplanationCount: 1,
       });
       expect(summary.currentApprovedRevision).toMatchObject({
@@ -541,7 +586,7 @@ describe.skipIf(!hasDb)("developer handoff snapshots (DB)", () => {
         await db
           .select({ action: auditEvents.action })
           .from(auditEvents)
-          .where(eq(auditEvents.projectId, project.id))
+          .where(eq(auditEvents.roomId, project.id))
       ).map((event) => event.action);
       expect(actions.filter((action) => action === "developer_handoff.published")).toHaveLength(4);
       expect(actions.filter((action) => action === "developer_handoff.link_created")).toHaveLength(6);

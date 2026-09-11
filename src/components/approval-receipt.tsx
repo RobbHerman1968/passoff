@@ -108,21 +108,42 @@ export function ApprovalReceipt({
         </div>
         <div className="sm:col-span-2">
           <dt className="text-[10px] font-semibold uppercase tracking-[0.14em] text-black/35">
-            Approved assets
+            Reviewed items
           </dt>
           <dd className="mt-1 text-black/65">
-            {receipt.assetCount === 0 ? (
-              <span>No named assets on this revision.</span>
+            {receipt.reviewedItemCount === 0 ? (
+              <span>No named review items on this revision.</span>
             ) : (
               <>
                 <span className="font-semibold text-black/75">
-                  {receipt.assetCount} file{receipt.assetCount === 1 ? "" : "s"}
+                  {receipt.reviewedItemCount} item{receipt.reviewedItemCount === 1 ? "" : "s"}
                 </span>
                 <ul className="mt-1.5 space-y-0.5">
                   {receipt.assetNames.map((name) => (
                     <li key={name} className="flex items-start gap-1.5">
                       <Check className="mt-0.5 size-3 shrink-0 text-emerald-700" aria-hidden />
                       <span>{name}</span>
+                    </li>
+                  ))}
+                  {receipt.designVersions.map((design) => (
+                    <li key={design.designVersionId} className="rounded-lg bg-white/55 px-2 py-1.5">
+                      <div className="flex items-start gap-1.5">
+                        <Check className="mt-0.5 size-3 shrink-0 text-emerald-700" aria-hidden />
+                        <span className="font-semibold">
+                          {design.designName} · Version {design.versionNumber}
+                        </span>
+                      </div>
+                      <p className="mt-1 pl-[18px] text-[10px] text-black/50">
+                        {design.sourceType === "video" && design.video
+                          ? `${design.video.originalFilename} · ${design.video.mimeType} · ${Math.floor(design.video.durationMs / 60000)}:${String(Math.floor(design.video.durationMs / 1000) % 60).padStart(2, "0")} · ${design.video.byteSize.toLocaleString()} bytes`
+                          : `${design.screenNames.length} screen${design.screenNames.length === 1 ? "" : "s"}${design.screenNames.length ? `: ${design.screenNames.join(", ")}` : ""}`}
+                      </p>
+                      <p className="mt-0.5 break-all pl-[18px] font-mono text-[9px] text-black/40">
+                        Design version ID {design.designVersionId}
+                      </p>
+                      <p className="mt-0.5 break-all pl-[18px] font-mono text-[9px] text-black/40">
+                        Design digest {design.contentSha256}
+                      </p>
                     </li>
                   ))}
                 </ul>

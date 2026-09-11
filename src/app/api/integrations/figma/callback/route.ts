@@ -8,7 +8,8 @@ import {
   readOAuthAttemptCookies,
   setFigmaConnectionCookie,
 } from "@/lib/figma/session";
-import { getPrototypeTenantContext } from "@/lib/tenant/context";
+import { projectDesignsPath, projectRoomDesignsPath } from "@/lib/rooms/routes";
+import { getPrototypeTenantContext, getTenantContextForProjectKey } from "@/lib/tenant/context";
 
 function safeEqual(left: string, right: string) {
   const a = Buffer.from(left);
@@ -23,6 +24,12 @@ export async function GET(request: NextRequest) {
   const destination = new URL("/dashboard", request.nextUrl.origin);
 
   try {
+    const tenant = attempt.projectId
+      ? await getTenantContextForProjectKey(attempt.projectId)
+      : await getPrototypeTenantContext();
+    destination.pathname = tenant.roomId
+      ? projectRoomDesignsPath(tenant.projectId, tenant.roomId)
+      : projectDesignsPath(tenant.projectId);
     if (!code || !returnedState || !attempt.state || !attempt.verifier) {
       throw new Error("The Figma authorization response was incomplete or expired.");
     }
@@ -30,7 +37,6 @@ export async function GET(request: NextRequest) {
       throw new Error("The Figma authorization state did not match. Please try connecting again.");
     }
     const tokens = await exchangeAuthorizationCode(code, attempt.verifier);
-    const tenant = await getPrototypeTenantContext();
     const connectionId = await createConnection({
       organizationId: tenant.organizationId,
       workspaceId: tenant.workspaceId,

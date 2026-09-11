@@ -6,7 +6,8 @@ import {
   createPublicComment,
   createReviewer,
   getReviewerById,
-  listApprovalReceiptsForProject,
+  listApprovalReceiptsForRoom,
+  listPublishedDesignerNotes,
   listPublishedComments,
   listReleasedHandoffItems,
   recordShareView,
@@ -29,13 +30,65 @@ import { DEFAULT_APPROVAL_STATEMENT } from "@/lib/rooms/types";
 export const runtime = "nodejs";
 
 function sharePayload(token: string, resolved: Awaited<ReturnType<typeof resolveShareToken>>) {
+  const assetTargets = resolved.membership.map((row) => ({
+    type: "asset" as const,
+    revisionAssetId: row.revisionAssetId,
+    id: row.asset.id,
+    label: row.asset.label,
+    kind: row.asset.kind,
+    mime: row.asset.mime,
+    width: row.asset.width,
+    height: row.asset.height,
+    externalUrl: row.asset.externalUrl,
+    url: row.asset.objectKey
+      ? `${assetPublicUrl(row.asset.id)}?token=${encodeURIComponent(token)}`
+      : row.asset.externalUrl,
+  }));
+  const designTargets = resolved.designMembership.flatMap((item) =>
+    item.screens.map((screen) => ({
+      type: "design_screen" as const,
+      revisionDesignVersionId: item.id,
+      designId: item.designId,
+      designVersionId: item.designVersionId,
+      designName: item.designName,
+      versionNumber: item.versionNumber,
+      screenId: screen.id,
+      screenName: screen.name,
+      width: screen.width,
+      height: screen.height,
+      previewUrl: screen.imageUrl
+        ? `/api/public/${encodeURIComponent(token)}/design-previews/${encodeURIComponent(item.designVersionId)}/${encodeURIComponent(screen.id)}`
+        : null,
+    })),
+  );
+  const videoTargets = resolved.designMembership.flatMap((item) =>
+    item.sourceType === "video" && item.video
+      ? [{
+          type: "video" as const,
+          revisionDesignVersionId: item.id,
+          designId: item.designId,
+          designVersionId: item.designVersionId,
+          designName: item.designName,
+          versionNumber: item.versionNumber,
+          durationMs: item.video.durationMs,
+          width: item.video.width,
+          height: item.video.height,
+          mimeType: item.video.mimeType,
+          playbackUrl: `/api/public/${encodeURIComponent(token)}/videos/${encodeURIComponent(item.designVersionId)}`,
+        }]
+      : [],
+  );
   return {
     project: {
       id: resolved.project.id,
       name: resolved.project.name,
       clientName: resolved.project.clientName,
-      status: resolved.project.status,
-      handoffReleasedAt: resolved.project.handoffReleasedAt,
+    },
+    room: {
+      id: resolved.room.id,
+      name: resolved.room.name,
+      status: resolved.room.status,
+      handoffReleasedAt: resolved.room.handoffReleasedAt,
     },
     revision: {
       id: resolved.revision.id,
@@ -58,17 +111,34 @@ function sharePayload(token: string, resolved: Awaited<ReturnType<typeof resolve
         ? `${assetPublicUrl(row.asset.id)}?token=${encodeURIComponent(token)}`
         : row.asset.externalUrl,
     })),
+    designs: resolved.designMembership.map((item) => ({
+      id: item.id,
+      designId: item.designId,
+      designVersionId: item.designVersionId,
+      name: item.designName,
+      versionNumber: item.versionNumber,
+      screens: item.screens.map((screen) => ({
+        id: screen.id,
+        name: screen.name,
+        width: screen.width,
+        height: screen.height,
+        url: screen.imageUrl
+          ? `/api/public/${encodeURIComponent(token)}/design-previews/${encodeURIComponent(item.designVersionId)}/${encodeURIComponent(screen.id)}`
+          : null,
+      })),
+    })),
+    targets: [...assetTargets, ...designTargets, ...videoTargets],
     approvalStatement: DEFAULT_APPROVAL_STATEMENT,
   };
 }
 
 function attachReviewerSession(
   response: NextResponse,
-  input: { shareToken: string; reviewerId: string; projectId: string },
+  input: { shareToken: string; reviewerId: string; roomId: string },
 ) {
   const value = createReviewerSessionToken({
     reviewerId: input.reviewerId,
-    projectId: input.projectId,
+    roomId: input.roomId,
     shareToken: input.shareToken,
   });
   response.cookies.set(REVIEWER_SESSION_COOKIE, value, reviewerSessionCookieOptions(input.shareToken));
@@ -94,11 +164,11 @@ function statusFromError(error: unknown, fallback = 400) {
 
 function requireReviewerSession(
   request: Request,
-  input: { projectId: string; shareToken: string },
+  input: { roomId: string; shareToken: string },
 ) {
   const sessionToken = readReviewerSessionCookie(request.headers.get("cookie"));
   return verifyReviewerSessionToken(sessionToken, {
-    projectId: input.projectId,
+    roomId: input.roomId,
     shareToken: input.shareToken,
   });
 }
@@ -110,10 +180,11 @@ export async function GET(
   try {
     const { token } = await params;
     const resolved = await resolveShareToken(token);
-    const [comments, handoff, approvalReceipts] = await Promise.all([
+    const [comments, designerNotes, handoff, approvalReceipts] = await Promise.all([
       listPublishedComments(resolved.revision.id),
-      listReleasedHandoffItems(resolved.project.id),
-      listApprovalReceiptsForProject(resolved.project.id, {
+      listPublishedDesignerNotes(resolved.room, resolved.designMembership),
+      listReleasedHandoffItems(resolved.room.id),
+      listApprovalReceiptsForRoom(resolved.room.id, {
         includeReviewerEmail: false,
         decision: "approved",
       }),
@@ -126,13 +197,17 @@ export async function GET(
         comments: comments.map((c) => ({
           id: c.id,
           revisionAssetId: c.revisionAssetId,
+          revisionDesignVersionId: c.revisionDesignVersionId,
+          screenId: c.designScreenId,
+          videoTimeMs: c.videoTimeMs,
           reviewerId: c.reviewerId,
-          xPercent: Number(c.xPercent),
-          yPercent: Number(c.yPercent),
+          xPercent: c.xPercent === null ? null : Number(c.xPercent),
+          yPercent: c.yPercent === null ? null : Number(c.yPercent),
           body: c.body,
           status: c.status,
           createdAt: c.createdAt,
         })),
+        designerNotes,
         handoff: handoff.map((item) => ({
           ...item,
           downloadUrl: item.assetId
@@ -170,9 +245,11 @@ export async function POST(
       name?: unknown;
       email?: unknown;
       revisionAssetId?: unknown;
+      target?: unknown;
       commentId?: unknown;
       xPercent?: unknown;
       yPercent?: unknown;
+      videoTimeMs?: unknown;
       body?: unknown;
       decision?: unknown;
       acceptanceStatement?: unknown;
@@ -184,7 +261,7 @@ export async function POST(
     const ownerNotify = await getWorkspaceNotificationEmail(resolved.link.workspaceId);
 
     if (action === "view") {
-      await recordShareView(resolved.link.id, resolved.project.id, resolved.link.workspaceId);
+      await recordShareView(resolved.link.id, resolved.room.id, resolved.link.workspaceId);
       return NextResponse.json({ ok: true });
     }
 
@@ -202,7 +279,7 @@ export async function POST(
       if (sessionToken) {
         try {
           const session = verifyReviewerSessionToken(sessionToken, {
-            projectId: resolved.project.id,
+            roomId: resolved.room.id,
             shareToken: token,
           });
           sessionReviewerId = session.reviewerId;
@@ -217,7 +294,7 @@ export async function POST(
         if (name.trim() && email.trim()) {
           reviewer = await updateSessionReviewerProfile({
             workspaceId: resolved.link.workspaceId,
-            projectId: resolved.project.id,
+            roomId: resolved.room.id,
             reviewerId: sessionReviewerId,
             name,
             email,
@@ -225,14 +302,14 @@ export async function POST(
         } else {
           reviewer = await getReviewerById({
             workspaceId: resolved.link.workspaceId,
-            projectId: resolved.project.id,
+            roomId: resolved.room.id,
             reviewerId: sessionReviewerId,
           });
         }
       } else {
         reviewer = await createReviewer({
           workspaceId: resolved.link.workspaceId,
-          projectId: resolved.project.id,
+          roomId: resolved.room.id,
           name: typeof body.name === "string" ? body.name : "",
           email: typeof body.email === "string" ? body.email : "",
         });
@@ -246,25 +323,25 @@ export async function POST(
       return attachReviewerSession(response, {
         shareToken: token,
         reviewerId: reviewer.id,
-        projectId: resolved.project.id,
+        roomId: resolved.room.id,
       });
     }
 
     if (action === "edit_comment" || action === "comment" || action === "decision") {
       const session = requireReviewerSession(request, {
-        projectId: resolved.project.id,
+        roomId: resolved.room.id,
         shareToken: token,
       });
       const reviewer = await getReviewerById({
         workspaceId: resolved.link.workspaceId,
-        projectId: resolved.project.id,
+        roomId: resolved.room.id,
         reviewerId: session.reviewerId,
       });
 
       if (action === "edit_comment") {
         const comment = await updatePublicComment({
           workspaceId: resolved.link.workspaceId,
-          projectId: resolved.project.id,
+          roomId: resolved.room.id,
           revisionId: resolved.revision.id,
           commentId: typeof body.commentId === "string" ? body.commentId : "",
           reviewerId: session.reviewerId,
@@ -274,19 +351,45 @@ export async function POST(
         return attachReviewerSession(response, {
           shareToken: token,
           reviewerId: session.reviewerId,
-          projectId: resolved.project.id,
+          roomId: resolved.room.id,
         });
       }
 
       if (action === "comment") {
+        const targetValue =
+          body.target && typeof body.target === "object"
+            ? body.target as Record<string, unknown>
+            : null;
+        const target = targetValue?.type === "video"
+          && typeof targetValue.revisionDesignVersionId === "string"
+          && typeof targetValue.videoTimeMs === "number"
+          ? {
+              type: "video" as const,
+              revisionDesignVersionId: targetValue.revisionDesignVersionId,
+              videoTimeMs: targetValue.videoTimeMs,
+            }
+          : targetValue?.type === "design_screen"
+          && typeof targetValue.revisionDesignVersionId === "string"
+          && typeof targetValue.screenId === "string"
+          ? {
+              type: "design_screen" as const,
+              revisionDesignVersionId: targetValue.revisionDesignVersionId,
+              screenId: targetValue.screenId,
+            }
+          : typeof body.revisionAssetId === "string"
+            ? { type: "asset" as const, revisionAssetId: body.revisionAssetId }
+            : null;
+        if (!target) {
+          return NextResponse.json({ error: "A valid review target is required." }, { status: 400 });
+        }
         const comment = await createPublicComment({
           workspaceId: resolved.link.workspaceId,
-          projectId: resolved.project.id,
+          roomId: resolved.room.id,
           revisionId: resolved.revision.id,
-          revisionAssetId: typeof body.revisionAssetId === "string" ? body.revisionAssetId : "",
+          target,
           reviewerId: session.reviewerId,
-          xPercent: typeof body.xPercent === "number" ? body.xPercent : Number(body.xPercent),
-          yPercent: typeof body.yPercent === "number" ? body.yPercent : Number(body.yPercent),
+          xPercent: typeof body.xPercent === "number" ? body.xPercent : undefined,
+          yPercent: typeof body.yPercent === "number" ? body.yPercent : undefined,
           body: typeof body.body === "string" ? body.body : "",
           projectName: resolved.project.name,
           clientName: resolved.project.clientName,
@@ -305,7 +408,7 @@ export async function POST(
         return attachReviewerSession(response, {
           shareToken: token,
           reviewerId: session.reviewerId,
-          projectId: resolved.project.id,
+          roomId: resolved.room.id,
         });
       }
 
@@ -322,7 +425,7 @@ export async function POST(
         }
         const result = await submitPublicDecision({
           workspaceId: resolved.link.workspaceId,
-          projectId: resolved.project.id,
+          roomId: resolved.room.id,
           revisionId: resolved.revision.id,
           reviewerId: session.reviewerId,
           decision,
@@ -341,7 +444,7 @@ export async function POST(
         return attachReviewerSession(response, {
           shareToken: token,
           reviewerId: session.reviewerId,
-          projectId: resolved.project.id,
+          roomId: resolved.room.id,
         });
       }
     }

@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 
 import { FigmaApiError, exportFigmaNodeImage, findWorkspaceConnectionId } from "@/lib/figma/data";
 import { getImportConnectionId } from "@/lib/figma/persistence";
-import { getPrototypeTenantContext } from "@/lib/tenant/context";
+import { resolveTenantFromRequest } from "@/lib/tenant/context";
 
 export const runtime = "nodejs";
 
@@ -12,7 +12,7 @@ function validFileKey(value: unknown): value is string {
 
 export async function GET(request: Request) {
   try {
-    const tenant = await getPrototypeTenantContext();
+    const tenant = await resolveTenantFromRequest(request);
     const url = new URL(request.url);
     const fileKey = url.searchParams.get("fileKey");
     const nodeId = url.searchParams.get("nodeId");

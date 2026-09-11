@@ -6,9 +6,10 @@ import { redirect } from "next/navigation";
 import { auth } from "@/auth";
 import { db } from "@/db";
 import {
+  clientProjects,
   organizationMemberships,
   organizations,
-  projects,
+  rooms,
   users,
   workspaceMemberships,
   workspaces,
@@ -17,17 +18,23 @@ import { AuthzError, requireActiveWorkspaceMembership } from "@/lib/auth/authori
 import type { WorkspaceScope } from "@/lib/tenant/scope";
 
 export type { WorkspaceScope } from "@/lib/tenant/scope";
-export { allocateUniqueProjectSlug, slugifyProjectName } from "@/lib/tenant/scope";
+export { allocateUniqueRoomSlug, slugifyProjectName } from "@/lib/tenant/scope";
 
 export type TenantContext = {
   organizationId: string;
   workspaceId: string;
+  /** Durable client-project identity. */
   projectId: string;
+  /** Present only when the context was resolved from an approval room. */
+  roomId?: string;
+  /** Present only when the context was resolved from an approval room. */
+  roomName?: string;
   projectSlug: string;
   userId: string;
   organizationName: string;
   workspaceName: string;
   projectName: string;
+  clientName?: string;
   userName: string;
   userEmail: string;
 };
@@ -97,10 +104,11 @@ export function normalizeProjectKey(value: unknown): string {
   return key.trim();
 }
 
-async function tenantFromProject(
-  project: typeof projects.$inferSelect,
+async function requireTenantMembership(
+  organizationId: string,
+  workspaceId: string,
   user: typeof users.$inferSelect,
-): Promise<TenantContext> {
+) {
   const membership = (
     await db
       .select({ id: workspaceMemberships.id })
@@ -116,8 +124,8 @@ async function tenantFromProject(
       .where(
         and(
           eq(workspaceMemberships.userId, user.id),
-          eq(workspaceMemberships.workspaceId, project.workspaceId),
-          eq(organizationMemberships.organizationId, project.organizationId),
+          eq(workspaceMemberships.workspaceId, workspaceId),
+          eq(organizationMemberships.organizationId, organizationId),
         ),
       )
       .limit(1)
@@ -126,10 +134,29 @@ async function tenantFromProject(
     throw new AuthzError("Not found.", 404);
   }
 
-  const organization = (await db.select().from(organizations).where(eq(organizations.id, project.organizationId)).limit(1))[0];
+  const organization = (await db.select().from(organizations).where(eq(organizations.id, organizationId)).limit(1))[0];
   if (!organization) throw new AuthzError("Not found.", 404);
-  const workspace = (await db.select().from(workspaces).where(eq(workspaces.id, project.workspaceId)).limit(1))[0];
+  const workspace = (
+    await db
+      .select()
+      .from(workspaces)
+      .where(and(eq(workspaces.id, workspaceId), eq(workspaces.organizationId, organizationId)))
+      .limit(1)
+  )[0];
   if (!workspace) throw new AuthzError("Not found.", 404);
+
+  return { organization, workspace };
+}
+
+async function tenantFromClientProject(
+  project: typeof clientProjects.$inferSelect,
+  user: typeof users.$inferSelect,
+): Promise<TenantContext> {
+  const { organization, workspace } = await requireTenantMembership(
+    project.organizationId,
+    project.workspaceId,
+    user,
+  );
 
   return {
     organizationId: organization.id,
@@ -140,6 +167,42 @@ async function tenantFromProject(
     organizationName: organization.name,
     workspaceName: workspace.name,
     projectName: project.name,
+    clientName: project.clientName,
+    userName: user.name || user.email,
+    userEmail: user.email,
+  };
+}
+
+async function tenantFromRoom(
+  room: typeof rooms.$inferSelect,
+  project: typeof clientProjects.$inferSelect,
+  user: typeof users.$inferSelect,
+): Promise<TenantContext> {
+  if (
+    room.clientProjectId !== project.id
+    || room.organizationId !== project.organizationId
+    || room.workspaceId !== project.workspaceId
+  ) {
+    throw new AuthzError("Not found.", 404);
+  }
+  const { organization, workspace } = await requireTenantMembership(
+    project.organizationId,
+    project.workspaceId,
+    user,
+  );
+
+  return {
+    organizationId: organization.id,
+    workspaceId: workspace.id,
+    projectId: project.id,
+    roomId: room.id,
+    roomName: room.name,
+    projectSlug: project.slug,
+    userId: user.id,
+    organizationName: organization.name,
+    workspaceName: workspace.name,
+    projectName: project.name,
+    clientName: project.clientName,
     userName: user.name || user.email,
     userEmail: user.email,
   };
@@ -154,19 +217,26 @@ export async function getDefaultWorkspaceScope(): Promise<WorkspaceScope> {
 }
 
 export async function listWorkspaceProjects(workspaceId: string): Promise<ProjectSummary[]> {
+  const user = await requireAuthenticatedUser();
+  const workspace = (
+    await db.select().from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1)
+  )[0];
+  if (!workspace) throw new AuthzError("Not found.", 404);
+  await requireTenantMembership(workspace.organizationId, workspace.id, user);
+
   const rows = await db
     .select({
-      id: projects.id,
-      name: projects.name,
-      clientName: projects.clientName,
-      slug: projects.slug,
-      status: projects.status,
-      createdAt: projects.createdAt,
-      updatedAt: projects.updatedAt,
+      id: clientProjects.id,
+      name: clientProjects.name,
+      clientName: clientProjects.clientName,
+      slug: clientProjects.slug,
+      status: clientProjects.status,
+      createdAt: clientProjects.createdAt,
+      updatedAt: clientProjects.updatedAt,
     })
-    .from(projects)
-    .where(eq(projects.workspaceId, workspaceId))
-    .orderBy(asc(projects.name));
+    .from(clientProjects)
+    .where(eq(clientProjects.workspaceId, workspaceId))
+    .orderBy(asc(clientProjects.name));
   return rows;
 }
 
@@ -178,16 +248,16 @@ export async function getPrototypeTenantContext(): Promise<TenantContext> {
   const project = (
     await db
       .select()
-      .from(projects)
-      .where(and(eq(projects.workspaceId, scope.workspaceId), eq(projects.slug, projectSlug)))
+      .from(clientProjects)
+      .where(and(eq(clientProjects.workspaceId, scope.workspaceId), eq(clientProjects.slug, projectSlug)))
       .limit(1)
   )[0];
   if (!project) {
     throw new Error(
-      "No prototype project found in your workspace. Create an approval room from the dashboard, or seed the owner workspace for local Figma prototypes.",
+      "No prototype client project found in your workspace. Create a project from the dashboard, or seed the owner workspace for local Figma prototypes.",
     );
   }
-  return tenantFromProject(project, user);
+  return tenantFromClientProject(project, user);
 }
 
 async function tenantContextForProjectKey(
@@ -198,9 +268,11 @@ async function tenantContextForProjectKey(
   if (!projectKey) throw new Error("A Pass-Off project key is required.");
 
   if (uuidPattern.test(projectKey)) {
-    const project = (await db.select().from(projects).where(eq(projects.id, projectKey)).limit(1))[0];
-    if (!project) throw new AuthzError("Not found.", 404);
-    return tenantFromProject(project, user);
+    const project = (
+      await db.select().from(clientProjects).where(eq(clientProjects.id, projectKey)).limit(1)
+    )[0];
+    if (project) return tenantFromClientProject(project, user);
+    throw new AuthzError("Not found.", 404);
   }
 
   if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/i.test(projectKey) || projectKey.length > 80) {
@@ -223,11 +295,11 @@ async function tenantContextForProjectKey(
     const project = (
       await db
         .select()
-        .from(projects)
-        .where(and(eq(projects.workspaceId, membership.workspaceId), eq(projects.slug, projectKey)))
+        .from(clientProjects)
+        .where(and(eq(clientProjects.workspaceId, membership.workspaceId), eq(clientProjects.slug, projectKey)))
         .limit(1)
     )[0];
-    if (project) return tenantFromProject(project, user);
+    if (project) return tenantFromClientProject(project, user);
   }
 
   throw new AuthzError("Not found.", 404);
@@ -235,6 +307,64 @@ async function tenantContextForProjectKey(
 
 export async function getTenantContextForProjectKey(projectKeyInput: unknown): Promise<TenantContext> {
   return tenantContextForProjectKey(projectKeyInput, await requireAuthenticatedUser());
+}
+
+export async function getTenantContextForClientProjectKey(projectKeyInput: unknown): Promise<TenantContext> {
+  return getTenantContextForProjectKey(projectKeyInput);
+}
+
+export async function getTenantContextForRoomKey(roomKeyInput: unknown): Promise<TenantContext> {
+  const roomKey = normalizeProjectKey(roomKeyInput);
+  if (
+    !roomKey
+    || (!uuidPattern.test(roomKey)
+      && (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/i.test(roomKey) || roomKey.length > 80))
+  ) {
+    throw new AuthzError("Not found.", 404);
+  }
+  const user = await requireAuthenticatedUser();
+  const memberships = await db
+    .select({ workspaceId: workspaceMemberships.workspaceId })
+    .from(workspaceMemberships)
+    .innerJoin(
+      organizationMemberships,
+      and(
+        eq(organizationMemberships.userId, user.id),
+        eq(organizationMemberships.status, "active"),
+      ),
+    )
+    .where(eq(workspaceMemberships.userId, user.id));
+
+  for (const membership of memberships) {
+    const room = (
+      await db
+        .select()
+        .from(rooms)
+        .where(
+          and(
+            eq(rooms.workspaceId, membership.workspaceId),
+            uuidPattern.test(roomKey) ? eq(rooms.id, roomKey) : eq(rooms.slug, roomKey),
+          ),
+        )
+        .limit(1)
+    )[0];
+    if (!room?.clientProjectId) continue;
+    const project = (
+      await db
+        .select()
+        .from(clientProjects)
+        .where(
+          and(
+            eq(clientProjects.id, room.clientProjectId),
+            eq(clientProjects.workspaceId, room.workspaceId),
+            eq(clientProjects.organizationId, room.organizationId),
+          ),
+        )
+        .limit(1)
+    )[0];
+    if (project) return tenantFromRoom(room, project, user);
+  }
+  throw new AuthzError("Not found.", 404);
 }
 
 /** Plugin/service auth only — resolves tenant as the seeded owner without a browser session. */

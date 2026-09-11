@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { authzResponse, requireProjectMembership } from "@/lib/auth/authorization";
+import { authzResponse, requireRoomMembership } from "@/lib/auth/authorization";
 import {
   createDeveloperHandoffLink,
   DeveloperHandoffError,
@@ -14,8 +14,8 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    const { id } = await params;
-    const { scope } = await requireProjectMembership(id);
+    const { id: roomId } = await params;
+    const { scope } = await requireRoomMembership(roomId);
     const body = (await request.json().catch(() => ({}))) as {
       snapshotId?: unknown;
       expiresInDays?: unknown;
@@ -26,7 +26,7 @@ export async function POST(
         { status: 400, headers: NO_STORE_HEADERS },
       );
     }
-    const result = await createDeveloperHandoffLink(scope, id, body.snapshotId, {
+    const result = await createDeveloperHandoffLink(scope, roomId, body.snapshotId, {
       expiresInDays:
         body.expiresInDays === null || typeof body.expiresInDays === "number"
           ? body.expiresInDays

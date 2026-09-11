@@ -9,6 +9,8 @@ export type DeveloperHandoffExplanationSnapshot = {
   figmaNodeName: string | null;
   xBasisPoints: number;
   yBasisPoints: number;
+  selectionWidthBasisPoints: number | null;
+  selectionHeightBasisPoints: number | null;
   category: string;
   title: string;
   body: string;

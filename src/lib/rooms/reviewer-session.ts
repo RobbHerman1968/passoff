@@ -9,10 +9,14 @@ export const REVIEWER_SESSION_MAX_AGE_SEC = 60 * 60 * 24 * 14; // 14 days
 
 export type ReviewerSessionPayload = {
   reviewerId: string;
-  projectId: string;
+  roomId: string;
   /** SHA-256 hex of the share token — binds credential to this share link. */
   shareTokenHash: string;
   exp: number;
+};
+
+type LegacyReviewerSessionPayload = Omit<ReviewerSessionPayload, "roomId"> & {
+  projectId: string;
 };
 
 export class ReviewerSessionError extends Error {
@@ -60,7 +64,7 @@ function sign(body: string, secret: string) {
 
 export function createReviewerSessionToken(input: {
   reviewerId: string;
-  projectId: string;
+  roomId: string;
   shareToken: string;
   maxAgeSec?: number;
   nowMs?: number;
@@ -69,7 +73,7 @@ export function createReviewerSessionToken(input: {
   const maxAgeSec = input.maxAgeSec ?? REVIEWER_SESSION_MAX_AGE_SEC;
   const payload: ReviewerSessionPayload = {
     reviewerId: input.reviewerId,
-    projectId: input.projectId,
+    roomId: input.roomId,
     shareTokenHash: hashShareToken(input.shareToken),
     exp: Math.floor(now / 1000) + maxAgeSec,
   };
@@ -80,7 +84,7 @@ export function createReviewerSessionToken(input: {
 
 export function verifyReviewerSessionToken(
   token: string | null | undefined,
-  expected: { projectId: string; shareToken: string },
+  expected: { roomId: string; shareToken: string },
   nowMs = Date.now(),
 ): ReviewerSessionPayload {
   if (!token || typeof token !== "string" || !token.includes(".")) {
@@ -106,28 +110,45 @@ export function verifyReviewerSessionToken(
     throw new ReviewerSessionError("Invalid reviewer session.", 401);
   }
 
-  let payload: ReviewerSessionPayload;
+  let rawPayload: ReviewerSessionPayload | LegacyReviewerSessionPayload;
   try {
-    payload = JSON.parse(fromB64url(body).toString("utf8")) as ReviewerSessionPayload;
+    rawPayload = JSON.parse(fromB64url(body).toString("utf8")) as
+      | ReviewerSessionPayload
+      | LegacyReviewerSessionPayload;
   } catch {
     throw new ReviewerSessionError("Invalid reviewer session.", 401);
   }
 
+  if (!rawPayload || typeof rawPayload !== "object") {
+    throw new ReviewerSessionError("Invalid reviewer session.", 401);
+  }
+  const roomId =
+    "roomId" in rawPayload && typeof rawPayload.roomId === "string"
+      ? rawPayload.roomId
+      : "projectId" in rawPayload && typeof rawPayload.projectId === "string"
+        ? rawPayload.projectId
+        : null;
   if (
-    typeof payload.reviewerId !== "string" ||
-    typeof payload.projectId !== "string" ||
-    typeof payload.shareTokenHash !== "string" ||
-    typeof payload.exp !== "number"
+    typeof rawPayload.reviewerId !== "string" ||
+    roomId === null ||
+    typeof rawPayload.shareTokenHash !== "string" ||
+    typeof rawPayload.exp !== "number"
   ) {
     throw new ReviewerSessionError("Invalid reviewer session.", 401);
   }
+  const payload: ReviewerSessionPayload = {
+    reviewerId: rawPayload.reviewerId,
+    roomId,
+    shareTokenHash: rawPayload.shareTokenHash,
+    exp: rawPayload.exp,
+  };
 
   if (payload.exp * 1000 <= nowMs) {
     throw new ReviewerSessionError("Reviewer session expired.", 401);
   }
 
-  if (payload.projectId !== expected.projectId) {
-    throw new ReviewerSessionError("Reviewer session does not match this project.", 403);
+  if (payload.roomId !== expected.roomId) {
+    throw new ReviewerSessionError("Reviewer session does not match this room.", 403);
   }
 
   const expectedHash = hashShareToken(expected.shareToken);

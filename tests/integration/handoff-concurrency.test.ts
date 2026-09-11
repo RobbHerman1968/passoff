@@ -17,7 +17,7 @@ async function seedApprovedRoom(stamp: string) {
   const { createPasswordUser } = await import("@/lib/auth/password");
   const { createPrivateTenantForUser } = await import("@/lib/auth/tenant-membership");
   const { db } = await import("@/db");
-  const { projects, revisions, workspaces } = await import("@/db/schema");
+  const { revisions, rooms, workspaces } = await import("@/db/schema");
 
   const user = await createPasswordUser({
     email: `handoff-conc-${stamp}@example.com`,
@@ -39,7 +39,7 @@ async function seedApprovedRoom(stamp: string) {
   };
 
   const [room] = await db
-    .insert(projects)
+    .insert(rooms)
     .values({
       organizationId: workspace.organizationId,
       workspaceId: tenant.workspaceId,
@@ -52,7 +52,7 @@ async function seedApprovedRoom(stamp: string) {
 
   await db.insert(revisions).values({
     workspaceId: tenant.workspaceId,
-    projectId: room.id,
+    roomId: room.id,
     number: 1,
     status: "APPROVED",
     contentDigest: "abc",
@@ -81,7 +81,7 @@ describe.skipIf(!hasDb)("handoff release concurrency", () => {
 
     const first = await addHandoffItem({
       scope,
-      projectId: room.id,
+      roomId: room.id,
       label: "Spec PDF",
       category: "file",
     });
@@ -95,7 +95,7 @@ describe.skipIf(!hasDb)("handoff release concurrency", () => {
 
     const second = await addHandoffItem({
       scope,
-      projectId: room.id,
+      roomId: room.id,
       label: "Extra ZIP",
       category: "file",
     });
@@ -120,11 +120,11 @@ describe.skipIf(!hasDb)("handoff release concurrency", () => {
       releaseHandoff,
     } = await import("@/lib/rooms/service");
     const { db } = await import("@/db");
-    const { handoffItems, projects } = await import("@/db/schema");
+    const { handoffItems, rooms } = await import("@/db/schema");
 
     await addHandoffItem({
       scope,
-      projectId: room.id,
+      roomId: room.id,
       label: "Base item",
       category: "file",
     });
@@ -132,23 +132,23 @@ describe.skipIf(!hasDb)("handoff release concurrency", () => {
     const rounds = 12;
     for (let i = 0; i < rounds; i++) {
       await db
-        .update(projects)
+        .update(rooms)
         .set({ handoffReleasedAt: null, updatedAt: new Date() })
-        .where(eq(projects.id, room.id));
+        .where(eq(rooms.id, room.id));
 
       const label = `Raced ${i}`;
       await Promise.all([
         releaseHandoff(scope, room.id),
-        addHandoffItem({ scope, projectId: room.id, label, category: "file" }),
+        addHandoffItem({ scope, roomId: room.id, label, category: "file" }),
       ]);
 
       const visible = await listReleasedHandoffItems(room.id);
       const allItems = await db
         .select()
         .from(handoffItems)
-        .where(eq(handoffItems.projectId, room.id));
+        .where(eq(handoffItems.roomId, room.id));
       const project = (
-        await db.select().from(projects).where(eq(projects.id, room.id)).limit(1)
+        await db.select().from(rooms).where(eq(rooms.id, room.id)).limit(1)
       )[0]!;
 
       if (project.handoffReleasedAt) {
@@ -170,17 +170,17 @@ describe.skipIf(!hasDb)("handoff release concurrency", () => {
       releaseHandoff,
     } = await import("@/lib/rooms/service");
     const { db } = await import("@/db");
-    const { handoffItems, projects } = await import("@/db/schema");
+    const { handoffItems, rooms } = await import("@/db/schema");
 
     const keep = await addHandoffItem({
       scope,
-      projectId: room.id,
+      roomId: room.id,
       label: "Keep",
       category: "file",
     });
     const drop = await addHandoffItem({
       scope,
-      projectId: room.id,
+      roomId: room.id,
       label: "Drop",
       category: "file",
     });
@@ -191,12 +191,12 @@ describe.skipIf(!hasDb)("handoff release concurrency", () => {
     ]);
 
     const project = (
-      await db.select().from(projects).where(eq(projects.id, room.id)).limit(1)
+      await db.select().from(rooms).where(eq(rooms.id, room.id)).limit(1)
     )[0]!;
     const remaining = await db
       .select()
       .from(handoffItems)
-      .where(eq(handoffItems.projectId, room.id));
+      .where(eq(handoffItems.roomId, room.id));
     const visible = await listReleasedHandoffItems(room.id);
 
     expect(remaining.some((row) => row.id === drop.item.id)).toBe(false);
@@ -221,7 +221,7 @@ describe.skipIf(!hasDb)("handoff release concurrency", () => {
 
     await addHandoffItem({
       scope: a.scope,
-      projectId: a.room.id,
+      roomId: a.room.id,
       label: "A only",
       category: "file",
     });
@@ -230,7 +230,7 @@ describe.skipIf(!hasDb)("handoff release concurrency", () => {
     await expect(
       addHandoffItem({
         scope: b.scope,
-        projectId: a.room.id,
+        roomId: a.room.id,
         label: "Cross tenant",
         category: "file",
       }),

@@ -31,6 +31,27 @@ describe("revision digests", () => {
     expect(a).not.toBe(b);
     expect(a).not.toBe(c);
   });
+
+  it("binds selected screens while preserving legacy whole-design digests", () => {
+    const design = { designVersionId: "version-1", contentSha256: "abc", sortOrder: 0 };
+    const wholeDesign = computeRevisionDigest([], [design]);
+    const legacyMetadata = computeRevisionDigest([], [{
+      ...design,
+      displayMetaJson: JSON.stringify({ designName: "Website" }),
+    }]);
+    const selectedScreens = computeRevisionDigest([], [{
+      ...design,
+      displayMetaJson: JSON.stringify({ selectedScreenIds: ["screen-b", "screen-a"] }),
+    }]);
+    const reorderedScreens = computeRevisionDigest([], [{
+      ...design,
+      displayMetaJson: JSON.stringify({ selectedScreenIds: ["screen-a", "screen-b"] }),
+    }]);
+
+    expect(legacyMetadata).toBe(wholeDesign);
+    expect(selectedScreens).not.toBe(wholeDesign);
+    expect(reorderedScreens).toBe(selectedScreens);
+  });
 });
 
 describe("share token hashing", () => {
@@ -52,7 +73,7 @@ describe("upload constraints", () => {
   it("builds tenant-scoped non-guessable pathnames", () => {
     const path = buildTenantObjectPath({
       workspaceId: "ws-1",
-      projectId: "room-1",
+      roomId: "room-1",
       revisionId: "rev-1",
       filename: "Hero Draft.png",
     });

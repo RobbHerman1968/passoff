@@ -6,9 +6,11 @@ import { db } from "@/db";
 import { figmaQuestions } from "@/db/schema";
 import { getFigmaConnectionId } from "@/lib/figma/session";
 import type { FigmaInteraction, FigmaQuestionRecord, FigmaQuestionResponse, FigmaScreen } from "@/lib/figma/types";
-import { getPrototypeTenantContext } from "@/lib/tenant/context";
+import { resolveTenantFromRequest } from "@/lib/tenant/context";
 
 type QuestionBody = {
+  projectKey?: unknown;
+  designVersionId?: unknown;
   question?: unknown;
   fileKey?: unknown;
   fileName?: unknown;
@@ -99,12 +101,12 @@ export async function POST(request: Request) {
   }
 
   try {
-    const tenant = await getPrototypeTenantContext();
     const body = await request.json() as QuestionBody;
+    const tenant = await resolveTenantFromRequest(request, body.projectKey);
     if (typeof body.question !== "string" || !body.question.trim() || body.question.length > 1_000) {
       return NextResponse.json({ error: "Enter a question of 1,000 characters or fewer." }, { status: 400 });
     }
-    if (typeof body.fileKey !== "string" || !/^[A-Za-z0-9_-]+$/.test(body.fileKey) || typeof body.fileName !== "string" || !isScreen(body.screen) || !Array.isArray(body.screens) || !body.screens.every(isScreen) || !Array.isArray(body.interactions) || !body.interactions.every(isInteraction)) {
+    if (typeof body.designVersionId !== "string" || typeof body.fileKey !== "string" || !/^[A-Za-z0-9_-]+$/.test(body.fileKey) || typeof body.fileName !== "string" || !isScreen(body.screen) || !Array.isArray(body.screens) || !body.screens.every(isScreen) || !Array.isArray(body.interactions) || !body.interactions.every(isInteraction)) {
       return NextResponse.json({ error: "The imported Figma context is incomplete." }, { status: 400 });
     }
     const response = analyzeQuestion(body.question.trim(), body.fileName.slice(0, 200), body.screen, body.screens.slice(0, 50), body.interactions.slice(0, 500));
@@ -122,6 +124,7 @@ export async function POST(request: Request) {
       organizationId: tenant.organizationId,
       workspaceId: tenant.workspaceId,
       projectId: tenant.projectId,
+      designVersionId: body.designVersionId,
       askedByUserId: tenant.userId,
       figmaConnectionId: connectionId,
       figmaFileKey: body.fileKey,
@@ -142,12 +145,14 @@ export async function POST(request: Request) {
 }
 
 export async function GET(request: Request) {
-  const tenant = await getPrototypeTenantContext();
-  const fileKey = new URL(request.url).searchParams.get("fileKey");
-  if (!fileKey || !/^[A-Za-z0-9_-]+$/.test(fileKey)) {
+  const tenant = await resolveTenantFromRequest(request);
+  const url = new URL(request.url);
+  const fileKey = url.searchParams.get("fileKey");
+  const designVersionId = url.searchParams.get("designVersionId");
+  if (!fileKey || !/^[A-Za-z0-9_-]+$/.test(fileKey) || !designVersionId) {
     return NextResponse.json({ error: "A valid Figma file key is required." }, { status: 400 });
   }
-  const rows = await db.select().from(figmaQuestions).where(and(eq(figmaQuestions.organizationId, tenant.organizationId), eq(figmaQuestions.projectId, tenant.projectId), eq(figmaQuestions.figmaFileKey, fileKey))).orderBy(asc(figmaQuestions.createdAt));
+  const rows = await db.select().from(figmaQuestions).where(and(eq(figmaQuestions.organizationId, tenant.organizationId), eq(figmaQuestions.projectId, tenant.projectId), eq(figmaQuestions.designVersionId, designVersionId), eq(figmaQuestions.figmaFileKey, fileKey))).orderBy(asc(figmaQuestions.createdAt));
   const records: FigmaQuestionRecord[] = rows.map((row) => ({
     id: row.id,
     screenId: row.screenId,

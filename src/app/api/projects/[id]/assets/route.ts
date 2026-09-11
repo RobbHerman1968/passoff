@@ -18,8 +18,8 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    const { id: projectId } = await params;
-    if (!uuidPattern.test(projectId)) {
+    const { id: roomId } = await params;
+    if (!uuidPattern.test(roomId)) {
       return NextResponse.json({ error: "Invalid room id." }, { status: 400 });
     }
 
@@ -39,7 +39,7 @@ export async function PATCH(
       );
     }
 
-    const result = await reorderDraftRevisionAssets(scope, projectId, ordered);
+    const result = await reorderDraftRevisionAssets(scope, roomId, ordered);
     return NextResponse.json(result);
   } catch (error) {
     return NextResponse.json(
@@ -54,8 +54,8 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    const { id: projectId } = await params;
-    if (!uuidPattern.test(projectId)) {
+    const { id: roomId } = await params;
+    if (!uuidPattern.test(roomId)) {
       return NextResponse.json({ error: "Invalid room id." }, { status: 400 });
     }
 
@@ -76,7 +76,7 @@ export async function POST(
       if (!label) {
         return NextResponse.json({ error: "A name is required for review URLs." }, { status: 400 });
       }
-      const asset = await addExternalUrlAsset({ scope, projectId, url, label });
+      const asset = await addExternalUrlAsset({ scope, roomId, url, label });
       return NextResponse.json({ asset }, { status: 201 });
     }
 
@@ -92,7 +92,7 @@ export async function POST(
     if (mime.toLowerCase() === "application/pdf") {
       const result = await uploadRoomAsset({
         scope,
-        projectId,
+        roomId,
         fileName: file.name || "document.pdf",
         mime,
         bytes: buffer,
@@ -108,7 +108,7 @@ export async function POST(
     const normalized = await normalizeUploadToPng(buffer);
     const result = await uploadRoomAsset({
       scope,
-      projectId,
+      roomId,
       fileName: (file.name || "image").replace(/\.[^.]+$/, "") + ".png",
       mime: "image/png",
       bytes: normalized.png,

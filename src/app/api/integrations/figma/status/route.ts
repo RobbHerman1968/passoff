@@ -13,7 +13,7 @@ export async function GET() {
   const tenant = await getPrototypeTenantContext().catch(() => null);
   const status: FigmaConnectionStatus = {
     configured,
-    pluginConfigured: Boolean(process.env.PASSOFF_FIGMA_PLUGIN_KEY),
+    pluginConfigured: process.env.NODE_ENV === "development",
     connected: Boolean(connection),
     figmaUserId: connection?.figmaUserId ?? null,
     expiresAt: connection?.expiresAt.toISOString() ?? null,

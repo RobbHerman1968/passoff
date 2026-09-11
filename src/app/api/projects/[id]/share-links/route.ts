@@ -15,8 +15,8 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    const { id } = await params;
-    if (!uuidPattern.test(id)) {
+    const { id: roomId } = await params;
+    if (!uuidPattern.test(roomId)) {
       return NextResponse.json({ error: "Not found." }, { status: 404 });
     }
     const body = (await request.json().catch(() => ({}))) as {
@@ -31,7 +31,7 @@ export async function POST(
     if (body.action === "revoke") {
       const result = await revokeShareLink(
         scope,
-        id,
+        roomId,
         typeof body.shareLinkId === "string" ? body.shareLinkId : undefined,
       );
       return NextResponse.json(result);
@@ -48,7 +48,7 @@ export async function POST(
       );
     }
 
-    const result = await createOrRotateShareLink(scope, id, {
+    const result = await createOrRotateShareLink(scope, roomId, {
       expiresInDays:
         typeof body.expiresInDays === "number" ? body.expiresInDays : undefined,
       notifyEmail,

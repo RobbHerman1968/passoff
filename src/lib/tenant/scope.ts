@@ -3,7 +3,7 @@ import "server-only";
 import { and, eq } from "drizzle-orm";
 
 import { db } from "@/db";
-import { projects } from "@/db/schema";
+import { rooms } from "@/db/schema";
 
 export type WorkspaceScope = {
   organizationId: string;
@@ -15,7 +15,7 @@ export type WorkspaceScope = {
   userEmail: string;
 };
 
-/** Kebab-case slug from a display name; falls back to `project` when empty. */
+/** Kebab-case slug from a display name. */
 export function slugifyProjectName(name: string): string {
   const slug = name
     .trim()
@@ -28,18 +28,18 @@ export function slugifyProjectName(name: string): string {
   return slug || "project";
 }
 
-export async function allocateUniqueProjectSlug(workspaceId: string, name: string): Promise<string> {
+export async function allocateUniqueRoomSlug(workspaceId: string, name: string): Promise<string> {
   const base = slugifyProjectName(name).slice(0, 72);
   for (let attempt = 0; attempt < 50; attempt += 1) {
     const candidate = attempt === 0 ? base : `${base}-${attempt + 1}`;
     const existing = (
       await db
-        .select({ id: projects.id })
-        .from(projects)
-        .where(and(eq(projects.workspaceId, workspaceId), eq(projects.slug, candidate)))
+        .select({ id: rooms.id })
+        .from(rooms)
+        .where(and(eq(rooms.workspaceId, workspaceId), eq(rooms.slug, candidate)))
         .limit(1)
     )[0];
     if (!existing) return candidate;
   }
-  throw new Error("Unable to allocate a unique project slug.");
+  throw new Error("Unable to allocate a unique room slug.");
 }

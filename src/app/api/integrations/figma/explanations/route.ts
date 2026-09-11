@@ -8,6 +8,7 @@ import {
 } from "@/lib/figma/explanation-contract";
 import {
   createFigmaExplanation,
+  copyFigmaExplanations,
   deleteFigmaExplanation,
   FigmaExplanationTargetNotFoundError,
   listFigmaExplanations,
@@ -43,10 +44,12 @@ export async function GET(request: Request) {
     const projectKey = url.searchParams.get("projectKey")?.trim();
     const fileKey = url.searchParams.get("fileKey");
     const screenId = url.searchParams.get("screenId")?.trim();
+    const designVersionId = url.searchParams.get("designVersionId")?.trim();
     if (
       !projectKey
       || !isValidFigmaFileKey(fileKey)
       || !screenId
+      || !designVersionId
       || screenId.length > 200
     ) {
       return NextResponse.json(
@@ -55,7 +58,7 @@ export async function GET(request: Request) {
       );
     }
     const tenant = await getTenantContextForProjectKey(projectKey);
-    const explanations = await listFigmaExplanations(tenant, fileKey, screenId);
+    const explanations = await listFigmaExplanations(tenant, fileKey, screenId, designVersionId);
     return NextResponse.json({ explanations }, { headers: noStore });
   } catch (error) {
     return safeError(error, "Unable to load screen explanations.");
@@ -71,7 +74,23 @@ export async function POST(request: Request) {
     );
   }
   try {
-    const input = parseCreateFigmaExplanation(await bodyPromise);
+    const body = await bodyPromise;
+    if (body.action === "copy") {
+      const projectKey = typeof body.projectKey === "string" ? body.projectKey.trim() : "";
+      const sourceDesignVersionId = typeof body.sourceDesignVersionId === "string"
+        ? body.sourceDesignVersionId.trim()
+        : "";
+      const targetDesignVersionId = typeof body.targetDesignVersionId === "string"
+        ? body.targetDesignVersionId.trim()
+        : "";
+      if (!projectKey || !sourceDesignVersionId || !targetDesignVersionId) {
+        return NextResponse.json({ error: "Source and target design versions are required." }, { status: 400, headers: noStore });
+      }
+      const tenant = await getTenantContextForProjectKey(projectKey);
+      const explanations = await copyFigmaExplanations(tenant, sourceDesignVersionId, targetDesignVersionId);
+      return NextResponse.json({ explanations }, { status: 201, headers: noStore });
+    }
+    const input = parseCreateFigmaExplanation(body);
     if (!input) {
       return NextResponse.json(
         { error: "The explanation or its screen position is invalid." },

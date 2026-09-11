@@ -34,8 +34,8 @@ export async function POST(request: Request) {
     };
 
     const tenant = await resolveTenantFromRequest(request, body.projectKey);
-    await saveFigmaImport(tenant, null, result, { source: "created" });
-    return NextResponse.json(result, { status: 201, headers: { "Cache-Control": "no-store" } });
+    const version = await saveFigmaImport(tenant, null, result, { source: "created" });
+    return NextResponse.json({ ...result, ...version }, { status: 201, headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Unable to create the project file." }, { status: 400 });
   }

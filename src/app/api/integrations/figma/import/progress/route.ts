@@ -27,9 +27,9 @@ export async function POST(request: Request) {
           const extracted = await importFigmaFile(connectionId, rawUrl, (progress) => send({ type: "progress", ...progress }));
           const { inspectTrees, ...result } = extracted;
           send({ type: "progress", stage: "saving", message: `Saving ${result.screens.length} screens and ${result.interactions.length} interactions`, percent: 92, current: result.screens.length, total: result.screens.length });
-          await saveFigmaImport(tenant, connectionId, result, { source: "api", inspectTrees });
+          const version = await saveFigmaImport(tenant, connectionId, result, { source: "api", inspectTrees });
           send({ type: "progress", stage: "complete", message: "Import complete", percent: 100, current: result.screens.filter((screen) => Boolean(screen.imageUrl)).length, total: result.screens.length });
-          send({ type: "complete", result: { ...result, importSource: "api" } });
+          send({ type: "complete", result: { ...result, ...version, importSource: "api" } });
         } catch (error) {
           send({ type: "error", error: error instanceof Error ? error.message : "Unable to import the Figma file.", status: error instanceof FigmaApiError ? error.status : 400, rateLimit: error instanceof FigmaApiError ? error.rateLimit : null });
         } finally {

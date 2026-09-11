@@ -32,7 +32,7 @@ describe.skipIf(!hasDb)("release hardening (DB)", () => {
     const { createPasswordUser } = await import("@/lib/auth/password");
     const { createPrivateTenantForUser } = await import("@/lib/auth/tenant-membership");
     const { db } = await import("@/db");
-    const { projects, workspaces } = await import("@/db/schema");
+    const { rooms, workspaces } = await import("@/db/schema");
     const { createReviewer } = await import("@/lib/rooms/service");
 
     const stamp = randomBytes(4).toString("hex");
@@ -46,7 +46,7 @@ describe.skipIf(!hasDb)("release hardening (DB)", () => {
       await db.select().from(workspaces).where(eq(workspaces.id, tenant.workspaceId)).limit(1)
     )[0]!;
     const [room] = await db
-      .insert(projects)
+      .insert(rooms)
       .values({
         organizationId: workspace.organizationId,
         workspaceId: tenant.workspaceId,
@@ -60,13 +60,13 @@ describe.skipIf(!hasDb)("release hardening (DB)", () => {
     const email = `shared-${stamp}@example.com`;
     const a = await createReviewer({
       workspaceId: tenant.workspaceId,
-      projectId: room.id,
+      roomId: room.id,
       name: "A",
       email,
     });
     const b = await createReviewer({
       workspaceId: tenant.workspaceId,
-      projectId: room.id,
+      roomId: room.id,
       name: "B",
       email,
     });

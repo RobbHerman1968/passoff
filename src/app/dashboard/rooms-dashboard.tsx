@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { toast } from "@/components/ui/toast";
 import { track } from "@/lib/analytics/events";
+import { roomPath } from "@/lib/rooms/routes";
 
 const ACTIVE_ROOM_STATUSES = new Set([
   "DRAFT",
@@ -149,7 +150,7 @@ export function RoomsDashboard({
       setCreateClient("");
       track("approval_room_created", { roomId: payload.id });
       router.refresh();
-      router.push(`/rooms/${encodeURIComponent(payload.id)}`);
+      router.push(roomPath(payload.id));
     } catch (error) {
       setCreateError(error instanceof Error ? error.message : "Unable to create the room.");
     } finally {
@@ -196,7 +197,7 @@ export function RoomsDashboard({
     const name = renameName.trim();
     const clientName = renameClient.trim();
     if (!name || !clientName) {
-      setRenameError("Project name and client name are required.");
+      setRenameError("Room name and client name are required.");
       return;
     }
     setBusy(true);
@@ -275,7 +276,7 @@ export function RoomsDashboard({
             key={room.id}
             className="group relative rounded-2xl border border-[#a594f5]/30 bg-white p-5 shadow-[0_1px_0_rgba(99,84,212,0.06)]"
           >
-            <Link href={`/rooms/${encodeURIComponent(room.id)}`} className="block pr-16">
+            <Link href={roomPath(room.id)} className="block pr-16">
               <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-[#7c6cf0]">
                 <FolderKanban className="size-3.5" />
                 {room.status}
@@ -334,7 +335,7 @@ export function RoomsDashboard({
                 <h2 id={createTitleId} className="text-lg font-semibold tracking-[-0.03em]">
                   New Approval Room
                 </h2>
-                <p className="mt-1 text-sm text-black/45">Name the client and project.</p>
+                <p className="mt-1 text-sm text-black/45">Name the client and room.</p>
               </div>
               <button
                 type="button"
@@ -356,7 +357,7 @@ export function RoomsDashboard({
               />
             </label>
             <label className="mt-4 block text-[11px] font-semibold uppercase tracking-[0.14em] text-black/40">
-              Project name
+              Room name
               <input
                 value={createName}
                 onChange={(e) => setCreateName(e.target.value)}
@@ -390,7 +391,7 @@ export function RoomsDashboard({
                 <h2 id={renameTitleId} className="text-lg font-semibold tracking-[-0.03em]">
                   Rename room
                 </h2>
-                <p className="mt-1 text-sm text-black/45">Update the client and project name.</p>
+                <p className="mt-1 text-sm text-black/45">Update the client and room name.</p>
               </div>
               <button
                 type="button"
@@ -414,7 +415,7 @@ export function RoomsDashboard({
               />
             </label>
             <label className="mt-4 block text-[11px] font-semibold uppercase tracking-[0.14em] text-black/40">
-              Project name
+              Room name
               <input
                 value={renameName}
                 onChange={(e) => setRenameName(e.target.value)}

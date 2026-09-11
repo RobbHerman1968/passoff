@@ -4,32 +4,12 @@ const exportableTypes = new Set(["FRAME", "COMPONENT", "SECTION"]);
 const maxFrames = 1000;
 const pluginKeyStorage = "passoff-plugin-key";
 const projectKeyStorage = "passoff-project-key";
-const scopeStorage = "passoff-export-scope";
 
 function isExportable(node) {
   return exportableTypes.has(node.type);
 }
 
-function collectDeep(roots) {
-  const found = [];
-  const seen = new Set();
-
-  function visit(node) {
-    if (!node || seen.has(node.id)) return;
-    if (isExportable(node)) {
-      seen.add(node.id);
-      found.push(node);
-    }
-    if ("children" in node && Array.isArray(node.children)) {
-      for (const child of node.children) visit(child);
-    }
-  }
-
-  for (const root of roots) visit(root);
-  return found;
-}
-
-function collectHighLevel(roots) {
+function collectScreens(roots) {
   const found = [];
   const seen = new Set();
   for (const node of roots) {
@@ -40,10 +20,10 @@ function collectHighLevel(roots) {
   return found;
 }
 
-function framesForScope(scope) {
+function framesForExport() {
   const selected = figma.currentPage.selection.filter(isExportable);
   const roots = selected.length ? selected : figma.currentPage.children;
-  return scope === "all" ? collectDeep(roots) : collectHighLevel(roots);
+  return collectScreens(roots);
 }
 
 function resolveFileKey() {
@@ -73,16 +53,12 @@ function asRestJson(value) {
 Promise.all([
   figma.clientStorage.getAsync(pluginKeyStorage),
   figma.clientStorage.getAsync(projectKeyStorage),
-  figma.clientStorage.getAsync(scopeStorage),
-]).then(([pluginKey, projectKey, scope]) => {
+]).then(([pluginKey, projectKey]) => {
   if (typeof pluginKey === "string" && pluginKey) {
     figma.ui.postMessage({ type: "plugin-key", pluginKey });
   }
   if (typeof projectKey === "string" && projectKey) {
     figma.ui.postMessage({ type: "project-key", projectKey });
-  }
-  if (scope === "all" || scope === "high-level") {
-    figma.ui.postMessage({ type: "export-scope", scope });
   }
 }).catch(() => {});
 
@@ -98,24 +74,14 @@ figma.ui.onmessage = async (message) => {
     if (projectKey) await figma.clientStorage.setAsync(projectKeyStorage, projectKey);
     return;
   }
-  if (message?.type === "save-export-scope") {
-    const scope = message.scope === "all" ? "all" : "high-level";
-    await figma.clientStorage.setAsync(scopeStorage, scope);
-    return;
-  }
   if (message?.type !== "export") return;
   try {
-    const scope = message.scope === "all" ? "all" : "high-level";
-    const frames = framesForScope(scope);
+    const frames = framesForExport();
     if (!frames.length) {
-      throw new Error(
-        scope === "all"
-          ? "No frames, components, or sections found on this page (or in the selection)."
-          : "Select at least one frame, component, or section—or place one at the top level of the current page.",
-      );
+      throw new Error("Select at least one frame, component, or section—or place one at the top level of the current page.");
     }
     if (frames.length > maxFrames) {
-      throw new Error(`Select at most ${maxFrames} frames at a time. You currently have ${frames.length} exportable items. Try High level, or select a smaller area.`);
+      throw new Error(`Select at most ${maxFrames} screens at a time. You currently have ${frames.length} exportable items. Select a smaller set and try again.`);
     }
 
     const file = {
@@ -125,7 +91,7 @@ figma.ui.onmessage = async (message) => {
     };
     // Keep large page exports under the development import size budget.
     const previewWidth = frames.length > 200 ? 720 : frames.length > 100 ? 900 : 1200;
-    figma.ui.postMessage({ type: "started", total: frames.length, file, scope });
+    figma.ui.postMessage({ type: "started", total: frames.length, file });
 
     for (let index = 0; index < frames.length; index += 1) {
       const frame = frames[index];
@@ -153,7 +119,7 @@ figma.ui.onmessage = async (message) => {
       });
     }
 
-    figma.ui.postMessage({ type: "ready", total: frames.length, file, scope });
+    figma.ui.postMessage({ type: "ready", total: frames.length, file });
   } catch (error) {
     figma.ui.postMessage({ type: "error", message: error instanceof Error ? error.message : String(error) });
   }

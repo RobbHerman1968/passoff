@@ -69,13 +69,21 @@ function scopeFromMeta(meta: HandoffUploadTokenMeta): WorkspaceScope {
 function parseTokenPayload(raw: unknown): HandoffUploadTokenMeta | null {
   if (typeof raw !== "string" || !raw.trim()) return null;
   try {
-    const parsed = JSON.parse(raw) as HandoffUploadTokenMeta;
+    const parsed = JSON.parse(raw) as Partial<HandoffUploadTokenMeta> & {
+      projectId?: unknown;
+    };
+    if (!parsed || typeof parsed !== "object") return null;
+    const roomId =
+      typeof parsed.roomId === "string"
+        ? parsed.roomId
+        : typeof parsed.projectId === "string"
+          ? parsed.projectId
+          : null;
     if (
-      !parsed ||
       typeof parsed.workspaceId !== "string" ||
       typeof parsed.organizationId !== "string" ||
       typeof parsed.userId !== "string" ||
-      typeof parsed.projectId !== "string" ||
+      !roomId ||
       typeof parsed.pathname !== "string" ||
       typeof parsed.uploadSessionId !== "string" ||
       typeof parsed.contentType !== "string" ||
@@ -84,7 +92,17 @@ function parseTokenPayload(raw: unknown): HandoffUploadTokenMeta | null {
     ) {
       return null;
     }
-    return parsed;
+    return {
+      workspaceId: parsed.workspaceId,
+      organizationId: parsed.organizationId,
+      userId: parsed.userId,
+      roomId,
+      pathname: parsed.pathname,
+      uploadSessionId: parsed.uploadSessionId,
+      contentType: parsed.contentType,
+      size: parsed.size,
+      fileName: parsed.fileName,
+    };
   } catch {
     return null;
   }
@@ -95,8 +113,8 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    const { id } = await params;
-    if (!uuidPattern.test(id)) {
+    const { id: roomId } = await params;
+    if (!uuidPattern.test(roomId)) {
       return NextResponse.json({ error: "Invalid room id." }, { status: 400 });
     }
 
@@ -122,7 +140,7 @@ export async function POST(
             // PutBlobResult has no size — always re-verify via Blob head inside complete.
             await completeHandoffDirectUpload({
               scope: scopeFromMeta(meta),
-              projectId: id,
+              roomId,
               meta,
               pathname: blob.pathname,
               blobUrl: blob.url,
@@ -171,7 +189,7 @@ export async function POST(
 
       const result = await uploadHandoffFile({
         scope,
-        projectId: id,
+        roomId,
         fileName: file.name || "handoff.bin",
         mime: file.type || "application/octet-stream",
         bytes: Buffer.from(await file.arrayBuffer()),
@@ -200,19 +218,19 @@ export async function POST(
     };
 
     if (body.action === "reopen") {
-      const draft = await reopenRoom(scope, id);
+      const draft = await reopenRoom(scope, roomId);
       return NextResponse.json({ revision: draft }, { status: 201 });
     }
 
     if (body.action === "release") {
-      const result = await releaseHandoff(scope, id);
+      const result = await releaseHandoff(scope, roomId);
       return NextResponse.json(result);
     }
 
     if (body.action === "delete") {
       const itemId = typeof body.itemId === "string" ? body.itemId : "";
       if (!itemId) return NextResponse.json({ error: "itemId is required." }, { status: 400 });
-      const result = await deleteHandoffItem(scope, id, itemId);
+      const result = await deleteHandoffItem(scope, roomId, itemId);
       return NextResponse.json(result);
     }
 
@@ -222,7 +240,7 @@ export async function POST(
 
       const meta = await prepareHandoffDirectUpload({
         scope,
-        projectId: id,
+        roomId,
         fileName: typeof body.fileName === "string" ? body.fileName : "handoff.bin",
         contentType: String(body.contentType || ""),
         size: typeof body.size === "number" ? body.size : 0,
@@ -234,7 +252,7 @@ export async function POST(
         token: process.env.BLOB_READ_WRITE_TOKEN,
         ...tokenConstraints,
         onUploadCompleted: {
-          callbackUrl: `${getSiteUrl()}/api/projects/${id}/handoff`,
+          callbackUrl: `${getSiteUrl()}/api/projects/${roomId}/handoff`,
           tokenPayload,
         },
       });
@@ -265,7 +283,7 @@ export async function POST(
 
       const result = await completeHandoffDirectUpload({
         scope,
-        projectId: id,
+        roomId,
         meta,
         pathname: typeof body.pathname === "string" ? body.pathname : undefined,
         blobUrl,
@@ -286,7 +304,7 @@ export async function POST(
 
     const result = await addHandoffItem({
       scope,
-      projectId: id,
+      roomId,
       label,
       category: typeof body.category === "string" ? body.category : undefined,
       notes: typeof body.notes === "string" ? body.notes : undefined,

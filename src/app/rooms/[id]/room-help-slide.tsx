@@ -38,7 +38,7 @@ const TIPS = [
 ] as const;
 
 export function RoomHelpSlide() {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(false);
   const panelId = useId();
   const titleId = useId();
 

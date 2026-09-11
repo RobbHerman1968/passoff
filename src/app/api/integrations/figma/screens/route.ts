@@ -4,6 +4,7 @@ import {
   combineFigmaImportScreens,
   deleteFigmaImportBreakpointGroup,
   deleteFigmaImportScreen,
+  deleteProjectDesignScreens,
   renameFigmaImportBreakpointGroup,
   setFigmaImportGroupPrimary,
   setFigmaImportMainScreen,
@@ -25,16 +26,34 @@ function validGroupId(value: unknown): value is string {
   return typeof value === "string" && /^[A-Za-z0-9_-]+$/.test(value) && value.length <= 64;
 }
 
+const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 export async function DELETE(request: Request) {
   try {
     const url = new URL(request.url);
     const fileKey = url.searchParams.get("fileKey");
     const screenId = url.searchParams.get("screenId");
+    const screenIds = url.searchParams.getAll("screenId").filter(validScreenId);
     const groupId = url.searchParams.get("groupId");
+    const designId = url.searchParams.get("designId");
+    const designVersionId = url.searchParams.get("designVersionId");
     if (!validFileKey(fileKey)) {
       return NextResponse.json({ error: "A valid file is required." }, { status: 400 });
     }
     const tenant = await resolveTenantFromRequest(request);
+    if (designId || designVersionId) {
+      if (
+        !designId
+        || !designVersionId
+        || !uuidPattern.test(designId)
+        || !uuidPattern.test(designVersionId)
+        || !screenIds.length
+      ) {
+        return NextResponse.json({ error: "Valid design, version, and screen identifiers are required." }, { status: 400 });
+      }
+      const result = await deleteProjectDesignScreens(tenant, designId, designVersionId, screenIds);
+      return NextResponse.json(result, { headers: { "Cache-Control": "no-store" } });
+    }
     if (validGroupId(groupId)) {
       const result = await deleteFigmaImportBreakpointGroup(tenant, fileKey, groupId);
       return NextResponse.json(result, { headers: { "Cache-Control": "no-store" } });

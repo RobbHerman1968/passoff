@@ -13,14 +13,14 @@ export async function GET() {
       {
         organizationName: scope.organizationName,
         workspaceName: scope.workspaceName,
-        projects: rows.map((project) => ({
-          id: project.id,
-          name: project.name,
-          clientName: project.clientName,
-          slug: project.slug,
-          status: project.status,
-          createdAt: project.createdAt.toISOString(),
-          updatedAt: project.updatedAt.toISOString(),
+        projects: rows.map((room) => ({
+          id: room.id,
+          name: room.name,
+          clientName: room.clientName,
+          slug: room.slug,
+          status: room.status,
+          createdAt: room.createdAt.toISOString(),
+          updatedAt: room.updatedAt.toISOString(),
         })),
       },
       { headers: { "Cache-Control": "no-store" } },
@@ -46,23 +46,23 @@ export async function POST(request: Request) {
     const name = typeof body.name === "string" ? body.name.trim().slice(0, 120) : "";
     const clientName =
       typeof body.clientName === "string" ? body.clientName.trim().slice(0, 120) : "";
-    if (!name) return NextResponse.json({ error: "A project name is required." }, { status: 400 });
+    if (!name) return NextResponse.json({ error: "A room name is required." }, { status: 400 });
     if (!clientName) {
       return NextResponse.json({ error: "A client name is required." }, { status: 400 });
     }
 
     const scope = await getDefaultWorkspaceScope();
-    const { project } = await createRoom(scope, { name, clientName });
+    const { project: room } = await createRoom(scope, { name, clientName });
 
     return NextResponse.json(
       {
-        id: project.id,
-        name: project.name,
-        clientName: project.clientName,
-        slug: project.slug,
-        status: project.status,
-        createdAt: project.createdAt.toISOString(),
-        updatedAt: project.updatedAt.toISOString(),
+        id: room.id,
+        name: room.name,
+        clientName: room.clientName,
+        slug: room.slug,
+        status: room.status,
+        createdAt: room.createdAt.toISOString(),
+        updatedAt: room.updatedAt.toISOString(),
       },
       { status: 201, headers: { "Cache-Control": "no-store" } },
     );

@@ -3,7 +3,7 @@ import "server-only";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 
 import { db } from "@/db";
-import { assets, projects, subscriptions } from "@/db/schema";
+import { rooms, subscriptions } from "@/db/schema";
 import { pricingPlans, type PricingPlan } from "@/lib/pricing";
 
 export { formatStorageBytes } from "@/lib/rooms/entitlements-format";
@@ -136,12 +136,33 @@ export async function assertCanMutate(organizationId: string) {
 }
 
 export async function getWorkspaceStorageUsageBytes(workspaceId: string) {
-  const row = (
-    await db
-      .select({ total: sql<number>`coalesce(sum(${assets.bytes}), 0)` })
-      .from(assets)
-      .where(and(eq(assets.workspaceId, workspaceId), eq(assets.uploadStatus, "ready")))
-  )[0];
+  const result = await db.execute(sql`
+    WITH stored_objects AS (
+      SELECT object_key, max(bytes)::bigint AS bytes
+      FROM assets
+      WHERE workspace_id = ${workspaceId}
+        AND upload_status = 'ready'
+        AND object_key IS NOT NULL
+      GROUP BY object_key
+      UNION
+      SELECT payload_json::jsonb->'video'->>'objectKey' AS object_key,
+             max((payload_json::jsonb->'video'->>'byteSize')::bigint) AS bytes
+      FROM project_design_versions
+      WHERE workspace_id = ${workspaceId}
+        AND payload_json::jsonb->>'sourceType' = 'video'
+      GROUP BY payload_json::jsonb->'video'->>'objectKey'
+      UNION
+      SELECT payload_json::jsonb->'video'->'poster'->>'objectKey' AS object_key,
+             max((payload_json::jsonb->'video'->'poster'->>'byteSize')::bigint) AS bytes
+      FROM project_design_versions
+      WHERE workspace_id = ${workspaceId}
+        AND payload_json::jsonb->>'sourceType' = 'video'
+        AND payload_json::jsonb->'video'->'poster' IS NOT NULL
+      GROUP BY payload_json::jsonb->'video'->'poster'->>'objectKey'
+    )
+    SELECT coalesce(sum(bytes), 0)::bigint AS total FROM stored_objects
+  `);
+  const row = ((result as unknown as { rows?: Array<{ total?: unknown }> }).rows ?? [])[0];
   return Number(row?.total || 0);
 }
 
@@ -149,12 +170,12 @@ export async function getWorkspaceUsageSummary(organizationId: string, workspace
   const entitlements = await getOrganizationEntitlements(organizationId);
   const usedBytes = await getWorkspaceStorageUsageBytes(workspaceId);
   const roomRows = await db
-    .select({ id: projects.id })
-    .from(projects)
+    .select({ id: rooms.id })
+    .from(rooms)
     .where(
       and(
-        eq(projects.workspaceId, workspaceId),
-        inArray(projects.status, [...ACTIVE_ROOM_STATUSES]),
+        eq(rooms.workspaceId, workspaceId),
+        inArray(rooms.status, [...ACTIVE_ROOM_STATUSES]),
       ),
     );
   return {

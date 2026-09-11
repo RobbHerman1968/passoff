@@ -91,9 +91,15 @@ export function HandoffWorkspace({
   }, [screen.id]);
 
   useEffect(() => {
+    if (!result.designVersionId) return;
     let cancelled = false;
     async function loadQuestions() {
-      const response = await fetch(`/api/integrations/figma/ask?fileKey=${encodeURIComponent(result.file.key)}`, { cache: "no-store" });
+      const params = new URLSearchParams({
+        fileKey: result.file.key,
+        projectKey,
+        designVersionId: result.designVersionId!,
+      });
+      const response = await fetch(`/api/integrations/figma/ask?${params}`, { cache: "no-store" });
       const payload = await response.json() as { questions?: FigmaQuestionRecord[] };
       if (!cancelled && response.ok) setQuestions(payload.questions ?? []);
     }
@@ -101,15 +107,21 @@ export function HandoffWorkspace({
     return () => {
       cancelled = true;
     };
-  }, [result.file.key]);
+  }, [projectKey, result.designVersionId, result.file.key]);
 
   useEffect(() => {
+    if (!result.designVersionId) return;
     let cancelled = false;
     async function loadTree() {
       setInspectLoading(true);
       setInspectError(null);
       try {
-        const params = new URLSearchParams({ fileKey: result.file.key, screenId: screen.id });
+        const params = new URLSearchParams({
+          fileKey: result.file.key,
+          screenId: screen.id,
+          projectKey,
+          designVersionId: result.designVersionId!,
+        });
         const response = await fetch(`/api/integrations/figma/nodes?${params}`, { cache: "no-store" });
         const payload = await response.json() as { tree?: InspectNode | null; error?: string };
         if (!response.ok) throw new Error(payload.error || "Unable to load inspect tree.");
@@ -127,7 +139,7 @@ export function HandoffWorkspace({
     return () => {
       cancelled = true;
     };
-  }, [result.file.key, screen.id]);
+  }, [projectKey, result.designVersionId, result.file.key, screen.id]);
 
   async function ask(value: string) {
     const trimmed = value.trim();
@@ -139,6 +151,8 @@ export function HandoffWorkspace({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          projectKey,
+          designVersionId: result.designVersionId,
           fileKey: result.file.key,
           fileName: result.file.name,
           screenId: screen.id,
@@ -265,6 +279,8 @@ export function HandoffWorkspace({
               <InteractiveScreenCanvas
                 key={screen.id}
                 projectKey={projectKey}
+                designId={result.designId}
+                designVersionId={result.designVersionId}
                 file={result.file}
                 screen={screen}
                 outgoing={outgoing}

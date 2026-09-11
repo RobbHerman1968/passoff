@@ -267,10 +267,12 @@ export function InspectPanel({
 }
 
 export function AssetsPanel({
+  projectKey,
   fileKey,
   screen,
   selectedNode,
 }: {
+  projectKey: string;
   fileKey: string;
   screen: FigmaScreen;
   selectedNode: InspectNode | null;
@@ -283,7 +285,7 @@ export function AssetsPanel({
     setBusy(`${format}-${scale}`);
     setError(null);
     try {
-      const params = new URLSearchParams({ fileKey, nodeId, format, scale: String(scale) });
+      const params = new URLSearchParams({ projectKey, fileKey, nodeId, format, scale: String(scale) });
       const response = await fetch(`/api/integrations/figma/assets?${params}`, { cache: "no-store" });
       if (!response.ok) {
         const payload = await response.json().catch(() => null) as { error?: string } | null;
@@ -347,10 +349,12 @@ function ExportButton({ label, busy, onClick }: { label: string; busy: boolean; 
 
 export function ScreenExplanationsPanel({
   projectKey,
+  designVersionId,
   file,
   screen,
 }: {
   projectKey: string;
+  designVersionId: string;
   file: FigmaImportResult["file"];
   screen: FigmaScreen;
 }) {
@@ -363,7 +367,7 @@ export function ScreenExplanationsPanel({
     async function loadExplanations() {
       try {
         const response = await fetch(
-          buildFigmaExplanationsUrl(projectKey, file.key, screen.id),
+          buildFigmaExplanationsUrl(projectKey, file.key, screen.id, designVersionId),
           { cache: "no-store" },
         );
         const payload = await response.json() as { explanations?: FigmaExplanationRecord[]; error?: string };
@@ -388,7 +392,7 @@ export function ScreenExplanationsPanel({
       active = false;
       window.removeEventListener(explanationsUpdatedEvent, explanationsChanged);
     };
-  }, [file.key, projectKey, screen.id]);
+  }, [designVersionId, file.key, projectKey, screen.id]);
 
   const published = explanations.filter((item) => item.status === "published");
   const drafts = explanations.filter((item) => item.status === "draft");
@@ -540,8 +544,8 @@ export function HandoffRail({
           />
         )}
         {tab === "behavior" && <BehaviorPanel screen={screen} interaction={interaction} destinationName={destination} />}
-        {tab === "comments" && <ScreenCommentsPanel file={result.file} screen={screen} />}
-        {tab === "notes" && <ScreenExplanationsPanel projectKey={projectKey} file={result.file} screen={screen} />}
+        {tab === "comments" && result.designVersionId && <ScreenCommentsPanel projectKey={projectKey} designVersionId={result.designVersionId} file={result.file} screen={screen} />}
+        {tab === "notes" && result.designVersionId && <ScreenExplanationsPanel projectKey={projectKey} designVersionId={result.designVersionId} file={result.file} screen={screen} />}
         {tab === "ask" && (
           <AskPanel
             inputId="handoff-ask"
@@ -555,7 +559,7 @@ export function HandoffRail({
             onAsk={onAsk}
           />
         )}
-        {tab === "assets" && <AssetsPanel fileKey={result.file.key} screen={screen} selectedNode={selectedNode} />}
+        {tab === "assets" && <AssetsPanel projectKey={projectKey} fileKey={result.file.key} screen={screen} selectedNode={selectedNode} />}
       </div>
     </aside>
   );

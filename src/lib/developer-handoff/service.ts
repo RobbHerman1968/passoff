@@ -15,9 +15,10 @@ import {
   figmaImportInteractions,
   figmaImportScreens,
   figmaImports,
-  projects,
+  projectDesigns,
   reviewers,
   revisions,
+  rooms,
   users,
 } from "@/db/schema";
 import { readPreviewPng } from "@/lib/figma/preview-storage";
@@ -53,12 +54,34 @@ function notFound(): never {
   throw new DeveloperHandoffError("Not found.", 404);
 }
 
-function tenantProjectWhere(scope: WorkspaceScope, projectId: string) {
+function tenantRoomWhere(scope: WorkspaceScope, roomId: string) {
   return and(
-    eq(projects.id, projectId),
-    eq(projects.organizationId, scope.organizationId),
-    eq(projects.workspaceId, scope.workspaceId),
+    eq(rooms.id, roomId),
+    eq(rooms.organizationId, scope.organizationId),
+    eq(rooms.workspaceId, scope.workspaceId),
   );
+}
+
+function requireRoomProjectId(room: typeof rooms.$inferSelect) {
+  if (!room.clientProjectId) {
+    throw new DeveloperHandoffError("Room is not attached to a project.", 409);
+  }
+  return room.clientProjectId;
+}
+
+async function loadRoomProjectId(scope: WorkspaceScope, roomId: string) {
+  const room = (
+    await db
+      .select({ clientProjectId: rooms.clientProjectId })
+      .from(rooms)
+      .where(tenantRoomWhere(scope, roomId))
+      .limit(1)
+  )[0];
+  if (!room) notFound();
+  if (!room.clientProjectId) {
+    throw new DeveloperHandoffError("Room is not attached to a project.", 409);
+  }
+  return room.clientProjectId;
 }
 
 function parseJson(value: string): unknown {
@@ -77,13 +100,13 @@ function normalizeFileKey(fileKey: string) {
   return normalized;
 }
 
-async function loadApprovedIdentity(scope: WorkspaceScope, projectId: string) {
-  const project = (
-    await db.select().from(projects).where(tenantProjectWhere(scope, projectId)).limit(1)
+async function loadApprovedIdentity(scope: WorkspaceScope, roomId: string) {
+  const room = (
+    await db.select().from(rooms).where(tenantRoomWhere(scope, roomId)).limit(1)
   )[0];
-  if (!project) notFound();
-  if (!project.approvedRevisionId) {
-    return { project, approvedRevision: null };
+  if (!room) notFound();
+  if (!room.approvedRevisionId) {
+    return { room, approvedRevision: null };
   }
 
   const row = (
@@ -99,7 +122,7 @@ async function loadApprovedIdentity(scope: WorkspaceScope, projectId: string) {
         approvals,
         and(
           eq(approvals.revisionId, revisions.id),
-          eq(approvals.projectId, project.id),
+          eq(approvals.roomId, room.id),
           eq(approvals.decision, "approved"),
           isNull(approvals.supersededAt),
         ),
@@ -107,8 +130,8 @@ async function loadApprovedIdentity(scope: WorkspaceScope, projectId: string) {
       .innerJoin(reviewers, eq(reviewers.id, approvals.reviewerId))
       .where(
         and(
-          eq(revisions.id, project.approvedRevisionId),
-          eq(revisions.projectId, project.id),
+          eq(revisions.id, room.approvedRevisionId),
+          eq(revisions.roomId, room.id),
           eq(revisions.workspaceId, scope.workspaceId),
         ),
       )
@@ -119,7 +142,7 @@ async function loadApprovedIdentity(scope: WorkspaceScope, projectId: string) {
     throw new DeveloperHandoffError("The approved revision receipt is unavailable.", 409);
   }
   return {
-    project,
+    room,
     approvedRevision: {
       revision: row.revision,
       approval: row.approval,
@@ -128,16 +151,21 @@ async function loadApprovedIdentity(scope: WorkspaceScope, projectId: string) {
   };
 }
 
-function previewTenant(scope: WorkspaceScope, project: typeof projects.$inferSelect): TenantContext {
+function previewTenant(
+  scope: WorkspaceScope,
+  room: typeof rooms.$inferSelect,
+  projectId: string,
+): TenantContext {
   return {
     organizationId: scope.organizationId,
     workspaceId: scope.workspaceId,
-    projectId: project.id,
-    projectSlug: project.slug,
+    projectId,
+    roomId: room.id,
+    projectSlug: room.slug,
     userId: scope.userId,
     organizationName: scope.organizationName,
     workspaceName: scope.workspaceName,
-    projectName: project.name,
+    projectName: room.name,
     userName: scope.userName,
     userEmail: scope.userEmail,
   };
@@ -145,7 +173,8 @@ function previewTenant(scope: WorkspaceScope, project: typeof projects.$inferSel
 
 async function loadSnapshotFiles(
   scope: WorkspaceScope,
-  project: typeof projects.$inferSelect,
+  room: typeof rooms.$inferSelect,
+  projectId: string,
   fileKey: string,
   snapshotId: string,
 ) {
@@ -157,7 +186,7 @@ async function loadSnapshotFiles(
       and(
         eq(figmaImports.organizationId, scope.organizationId),
         eq(figmaImports.workspaceId, scope.workspaceId),
-        eq(figmaImports.projectId, project.id),
+        eq(figmaImports.projectId, projectId),
         eq(figmaImports.figmaFileKey, fileKey),
       ),
     )
@@ -166,11 +195,19 @@ async function loadSnapshotFiles(
   if (!imported) {
     throw new DeveloperHandoffError("Figma file not found.", 404);
   }
+  const design = (await db
+    .select({ currentVersionId: projectDesigns.currentVersionId })
+    .from(projectDesigns)
+    .where(and(
+      eq(projectDesigns.projectId, projectId),
+      eq(projectDesigns.sourceKey, imported.figmaFileKey),
+    ))
+    .limit(1))[0];
 
   const storage = getStorageAdapter();
   const privateCopies: PrivateScreenCopy[] = [];
   const writtenObjects: string[] = [];
-  const tenant = previewTenant(scope, project);
+  const tenant = previewTenant(scope, room, projectId);
 
   try {
       const [screens, interactions, breakpointGroupRows, explanations] = await Promise.all([
@@ -200,8 +237,11 @@ async function loadSnapshotFiles(
             and(
               eq(figmaExplanations.organizationId, scope.organizationId),
               eq(figmaExplanations.workspaceId, scope.workspaceId),
-              eq(figmaExplanations.projectId, project.id),
+              eq(figmaExplanations.projectId, projectId),
               eq(figmaExplanations.figmaFileKey, imported.figmaFileKey),
+              design?.currentVersionId
+                ? eq(figmaExplanations.designVersionId, design.currentVersionId)
+                : sql`false`,
               eq(figmaExplanations.status, "published"),
             ),
           )
@@ -218,6 +258,8 @@ async function loadSnapshotFiles(
           figmaNodeName: row.explanation.figmaNodeName,
           xBasisPoints: row.explanation.xBasisPoints,
           yBasisPoints: row.explanation.yBasisPoints,
+          selectionWidthBasisPoints: row.explanation.selectionWidthBasisPoints,
+          selectionHeightBasisPoints: row.explanation.selectionHeightBasisPoints,
           category: row.explanation.category,
           title: row.explanation.title,
           body: row.explanation.body,
@@ -238,7 +280,7 @@ async function loadSnapshotFiles(
             );
           }
           const mediaId = randomUUID();
-          const objectKey = `workspaces/${scope.workspaceId}/developer-handoffs/${project.id}/${snapshotId}/${mediaId}.png`;
+          const objectKey = `workspaces/${scope.workspaceId}/developer-handoffs/${projectId}/${snapshotId}/${mediaId}.png`;
           const stored = await storage.put(objectKey, bytes, "image/png");
           writtenObjects.push(stored.pathname);
           const sha256 = checksumSha256(bytes);
@@ -330,7 +372,7 @@ async function loadSnapshotFiles(
 
 export async function publishDeveloperHandoffSnapshot(
   scope: WorkspaceScope,
-  projectId: string,
+  roomId: string,
   fileKey: string,
   options: { expiresInDays?: number | null } = {},
 ) {
@@ -339,13 +381,20 @@ export async function publishDeveloperHandoffSnapshot(
   if (days != null && (!Number.isInteger(days) || days < 1 || days > 365)) {
     throw new DeveloperHandoffError("expiresInDays must be an integer from 1 to 365.");
   }
-  const source = await loadApprovedIdentity(scope, projectId);
+  const source = await loadApprovedIdentity(scope, roomId);
+  const projectId = requireRoomProjectId(source.room);
   const snapshotId = randomUUID();
   const linkId = randomUUID();
   const token = generateDeveloperHandoffToken();
   const expiresAt = days == null ? null : new Date(Date.now() + days * 86_400_000);
   const publishedAt = new Date();
-  const loaded = await loadSnapshotFiles(scope, source.project, normalizedFileKey, snapshotId);
+  const loaded = await loadSnapshotFiles(
+    scope,
+    source.room,
+    projectId,
+    normalizedFileKey,
+    snapshotId,
+  );
   const storage = getStorageAdapter();
 
   try {
@@ -353,13 +402,13 @@ export async function publishDeveloperHandoffSnapshot(
       const locked = (
         await tx
           .select()
-          .from(projects)
-          .where(tenantProjectWhere(scope, projectId))
+          .from(rooms)
+          .where(tenantRoomWhere(scope, roomId))
           .for("update")
           .limit(1)
       )[0];
       if (!locked) notFound();
-      if (locked.approvedRevisionId !== source.project.approvedRevisionId) {
+      if (locked.approvedRevisionId !== source.room.approvedRevisionId) {
         throw new DeveloperHandoffError("The approved revision changed while publishing. Try again.", 409);
       }
 
@@ -382,9 +431,9 @@ export async function publishDeveloperHandoffSnapshot(
         snapshotId,
         version,
         project: {
-          id: source.project.id,
-          name: source.project.name,
-          clientName: source.project.clientName,
+          id: source.room.id,
+          name: source.room.name,
+          clientName: source.room.clientName,
         },
         approvedRevision: source.approvedRevision
           ? {
@@ -410,6 +459,7 @@ export async function publishDeveloperHandoffSnapshot(
           organizationId: scope.organizationId,
           workspaceId: scope.workspaceId,
           projectId,
+          sourceRoomId: source.room.id,
           figmaFileKey: normalizedFileKey,
           sourceImportId: loaded.imported.id,
           version,
@@ -442,7 +492,7 @@ export async function publishDeveloperHandoffSnapshot(
       await writeAuditEvent(
         {
           workspaceId: scope.workspaceId,
-          projectId,
+          roomId,
           actorType: "user",
           actorId: scope.userId,
           action: "developer_handoff.published",
@@ -460,7 +510,7 @@ export async function publishDeveloperHandoffSnapshot(
       await writeAuditEvent(
         {
           workspaceId: scope.workspaceId,
-          projectId,
+          roomId,
           actorType: "user",
           actorId: scope.userId,
           action: "developer_handoff.link_created",
@@ -484,14 +534,12 @@ export async function publishDeveloperHandoffSnapshot(
 
 export async function getDeveloperHandoffSummary(
   scope: WorkspaceScope,
-  projectId: string,
+  roomId: string,
   fileKey: string,
 ) {
   const normalizedFileKey = normalizeFileKey(fileKey);
-  const project = (
-    await db.select().from(projects).where(tenantProjectWhere(scope, projectId)).limit(1)
-  )[0];
-  if (!project) notFound();
+  const source = await loadApprovedIdentity(scope, roomId);
+  const projectId = requireRoomProjectId(source.room);
   const imported = (
     await db
       .select()
@@ -508,7 +556,14 @@ export async function getDeveloperHandoffSummary(
   )[0];
   if (!imported) notFound();
 
-  const source = await loadApprovedIdentity(scope, projectId);
+  const design = (await db
+    .select({ currentVersionId: projectDesigns.currentVersionId })
+    .from(projectDesigns)
+    .where(and(
+      eq(projectDesigns.projectId, projectId),
+      eq(projectDesigns.sourceKey, normalizedFileKey),
+    ))
+    .limit(1))[0];
   const [snapshots, links, explanationRows] = await Promise.all([
     db
       .select({
@@ -565,6 +620,9 @@ export async function getDeveloperHandoffSummary(
           eq(figmaExplanations.workspaceId, scope.workspaceId),
           eq(figmaExplanations.projectId, projectId),
           eq(figmaExplanations.figmaFileKey, normalizedFileKey),
+          design?.currentVersionId
+            ? eq(figmaExplanations.designVersionId, design.currentVersionId)
+            : sql`false`,
         ),
       ),
   ]);
@@ -579,7 +637,7 @@ export async function getDeveloperHandoffSummary(
       }
     : null;
   return {
-    project: { id: project.id, name: project.name },
+    project: { id: source.room.id, name: source.room.name },
     file: {
       key: imported.figmaFileKey,
       name: imported.figmaFileName,
@@ -596,10 +654,11 @@ export async function getDeveloperHandoffSummary(
 
 export async function createDeveloperHandoffLink(
   scope: WorkspaceScope,
-  projectId: string,
+  roomId: string,
   snapshotId: string,
   options: { expiresInDays?: number | null } = {},
 ) {
+  const projectId = await loadRoomProjectId(scope, roomId);
   const snapshot = (
     await db
       .select({ id: developerHandoffSnapshots.id })
@@ -636,7 +695,7 @@ export async function createDeveloperHandoffLink(
     await writeAuditEvent(
       {
         workspaceId: scope.workspaceId,
-        projectId,
+        roomId,
         actorType: "user",
         actorId: scope.userId,
         action: "developer_handoff.link_created",
@@ -652,9 +711,10 @@ export async function createDeveloperHandoffLink(
 
 export async function revokeDeveloperHandoffLink(
   scope: WorkspaceScope,
-  projectId: string,
+  roomId: string,
   linkId: string,
 ) {
+  const projectId = await loadRoomProjectId(scope, roomId);
   return db.transaction(async (tx) => {
     const [link] = await tx
       .update(developerHandoffLinks)
@@ -690,7 +750,7 @@ export async function revokeDeveloperHandoffLink(
     await writeAuditEvent(
       {
         workspaceId: scope.workspaceId,
-        projectId,
+        roomId,
         actorType: "user",
         actorId: scope.userId,
         action: "developer_handoff.link_revoked",
@@ -755,7 +815,7 @@ export async function resolveDeveloperHandoffToken(token: string, recordView = f
       await writeAuditEvent(
         {
           workspaceId: row.link.workspaceId,
-          projectId: row.link.projectId,
+          roomId: row.snapshot.sourceRoomId,
           actorType: "system",
           action: "developer_handoff.link_viewed",
           targetType: "developer_handoff_link",

@@ -58,6 +58,8 @@ import {
 
 type Props = {
   projectKey: string;
+  designId?: string;
+  designVersionId?: string;
   file: FigmaImportResult["file"];
   screen: FigmaScreen;
   outgoing: FigmaInteraction[];
@@ -77,6 +79,8 @@ const EMPTY_EXPLANATIONS: FigmaExplanationRecord[] = [];
 
 export function InteractiveScreenCanvas({
   projectKey,
+  designId,
+  designVersionId,
   file,
   screen,
   outgoing,
@@ -102,6 +106,8 @@ export function InteractiveScreenCanvas({
   const [savingComment, setSavingComment] = useState(false);
   const [explanations, setExplanations] = useState<FigmaExplanationRecord[]>([]);
   const [explanationPosition, setExplanationPosition] = useState<{ x: number; y: number } | null>(null);
+  const [explanationSelection, setExplanationSelection] = useState<{ width: number; height: number } | null>(null);
+  const [explanationSelectionPreview, setExplanationSelectionPreview] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
   const [explanationNode, setExplanationNode] = useState<{ id: string; name: string } | null>(null);
   const [explanationDraft, setExplanationDraft] = useState({
     category: "intent" as FigmaExplanationCategory,
@@ -117,6 +123,8 @@ export function InteractiveScreenCanvas({
   const [viewport, setViewport] = useState({ width: 0, height: 0 });
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const drag = useRef<{ pointerId: number; x: number; y: number; startX: number; startY: number; moved: boolean } | null>(null);
+  const explanationSelectionDrag = useRef<{ pointerId: number; startX: number; startY: number; moved: boolean } | null>(null);
+  const suppressExplanationClick = useRef(false);
   const didPanRef = useRef(false);
   const width = screen.width || 16;
   const height = screen.height || 10;
@@ -175,11 +183,11 @@ export function InteractiveScreenCanvas({
   }, []);
 
   useEffect(() => {
-    if (readOnly) {
+    if (readOnly || !designVersionId) {
       setComments([]);
       return;
     }
-    const query = new URLSearchParams({ fileKey: file.key, screenId: screen.id });
+    const query = new URLSearchParams({ projectKey, fileKey: file.key, screenId: screen.id, designVersionId });
     fetch(`/api/integrations/figma/comments?${query}`, { cache: "no-store" })
       .then(async (response) => {
         const payload = await response.json() as { comments?: FigmaCommentRecord[]; error?: string };
@@ -188,15 +196,15 @@ export function InteractiveScreenCanvas({
       })
       .then(setComments)
       .catch((reason: unknown) => setCommentError(reason instanceof Error ? reason.message : "Unable to load comments."));
-  }, [file.key, readOnly, screen.id]);
+  }, [designVersionId, file.key, projectKey, readOnly, screen.id]);
 
   useEffect(() => {
-    if (readOnly) {
+    if (readOnly || !designVersionId) {
       setExplanations(initialExplanations);
       setExplanationError(null);
       return;
     }
-    fetch(buildFigmaExplanationsUrl(projectKey, file.key, screen.id), { cache: "no-store" })
+    fetch(buildFigmaExplanationsUrl(projectKey, file.key, screen.id, designVersionId), { cache: "no-store" })
       .then(async (response) => {
         const payload = await response.json() as { explanations?: FigmaExplanationRecord[]; error?: string };
         if (!response.ok) throw new Error(payload.error || "Unable to load explanations.");
@@ -204,7 +212,7 @@ export function InteractiveScreenCanvas({
       })
       .then(setExplanations)
       .catch((reason: unknown) => setExplanationError(reason instanceof Error ? reason.message : "Unable to load explanations."));
-  }, [file.key, initialExplanations, projectKey, readOnly, screen.id]);
+  }, [designVersionId, file.key, initialExplanations, projectKey, readOnly, screen.id]);
 
   useEffect(() => {
     function focusComment(event: Event) {
@@ -317,12 +325,38 @@ export function InteractiveScreenCanvas({
     };
   }
 
+  function beginExplanation(
+    position: { x: number; y: number },
+    node: { id: string; name: string } | null,
+    selection: { width: number; height: number } | null,
+  ) {
+    setExplanationPosition(position);
+    setExplanationSelection(selection);
+    setExplanationNode(node);
+    setExplanationDraft({ category: "intent", title: "", body: "" });
+    setDraftPosition(null);
+    setActiveCommentId(null);
+    setActiveExplanationId(null);
+    setEditingExplanationId(null);
+    setExplanationError(null);
+  }
+
   async function placeExplanation(event: React.MouseEvent<HTMLDivElement>) {
     if (!explainMode || didPanRef.current || (event.target as HTMLElement).closest("[data-explanation-pin], [data-explanation-composer]")) return;
     event.stopPropagation();
+    if (suppressExplanationClick.current) {
+      suppressExplanationClick.current = false;
+      return;
+    }
     const position = positionFromClick(event);
     if (movingExplanationId) {
-      const updated = await patchExplanation(movingExplanationId, position);
+      const moving = explanations.find((item) => item.id === movingExplanationId);
+      const horizontalInset = (moving?.selectionWidth ?? 0) / 2;
+      const verticalInset = (moving?.selectionHeight ?? 0) / 2;
+      const updated = await patchExplanation(movingExplanationId, {
+        x: Math.max(horizontalInset, Math.min(100 - horizontalInset, position.x)),
+        y: Math.max(verticalInset, Math.min(100 - verticalInset, position.y)),
+      });
       if (updated) {
         setMovingExplanationId(null);
         setAuthoringMode(null);
@@ -330,14 +364,94 @@ export function InteractiveScreenCanvas({
       }
       return;
     }
-    setExplanationPosition(position);
-    setExplanationNode(selectedNode ? { id: selectedNode.id, name: selectedNode.name } : null);
-    setExplanationDraft({ category: "intent", title: "", body: "" });
-    setDraftPosition(null);
-    setActiveCommentId(null);
-    setActiveExplanationId(null);
-    setEditingExplanationId(null);
-    setExplanationError(null);
+    const clickedNode = inspectTree && screen.width && screen.height
+      ? hitTestInspectNode(inspectTree, (position.x / 100) * screen.width, (position.y / 100) * screen.height)
+      : null;
+    if (clickedNode && screen.width && screen.height && clickedNode.width > 0 && clickedNode.height > 0) {
+      const left = Math.max(0, clickedNode.x);
+      const top = Math.max(0, clickedNode.y);
+      const right = Math.min(screen.width, clickedNode.x + clickedNode.width);
+      const bottom = Math.min(screen.height, clickedNode.y + clickedNode.height);
+      const widthPercent = ((right - left) / screen.width) * 100;
+      const heightPercent = ((bottom - top) / screen.height) * 100;
+      beginExplanation(
+        { x: ((left + right) / 2 / screen.width) * 100, y: ((top + bottom) / 2 / screen.height) * 100 },
+        { id: clickedNode.id, name: clickedNode.name },
+        { width: widthPercent, height: heightPercent },
+      );
+      return;
+    }
+    beginExplanation(position, null, null);
+  }
+
+  function explanationPointerPosition(event: React.PointerEvent<HTMLDivElement>) {
+    const rect = event.currentTarget.getBoundingClientRect();
+    return {
+      x: Math.max(0, Math.min(100, ((event.clientX - rect.left) / rect.width) * 100)),
+      y: Math.max(0, Math.min(100, ((event.clientY - rect.top) / rect.height) * 100)),
+    };
+  }
+
+  function startExplanationSelection(event: React.PointerEvent<HTMLDivElement>) {
+    if (!explainMode || movingExplanationId || event.button !== 0) return;
+    if ((event.target as HTMLElement).closest("[data-explanation-pin], [data-explanation-composer]")) return;
+    event.stopPropagation();
+    const start = explanationPointerPosition(event);
+    event.currentTarget.setPointerCapture(event.pointerId);
+    explanationSelectionDrag.current = { pointerId: event.pointerId, startX: start.x, startY: start.y, moved: false };
+  }
+
+  function updateExplanationSelection(event: React.PointerEvent<HTMLDivElement>) {
+    const selectionDrag = explanationSelectionDrag.current;
+    if (!selectionDrag || selectionDrag.pointerId !== event.pointerId) return;
+    const position = explanationPointerPosition(event);
+    const rect = event.currentTarget.getBoundingClientRect();
+    const dx = ((position.x - selectionDrag.startX) / 100) * rect.width;
+    const dy = ((position.y - selectionDrag.startY) / 100) * rect.height;
+    if (!selectionDrag.moved && Math.hypot(dx, dy) < 4) return;
+    selectionDrag.moved = true;
+    const left = Math.min(selectionDrag.startX, position.x);
+    const top = Math.min(selectionDrag.startY, position.y);
+    setExplanationSelectionPreview({
+      x: left,
+      y: top,
+      width: Math.abs(position.x - selectionDrag.startX),
+      height: Math.abs(position.y - selectionDrag.startY),
+    });
+  }
+
+  function finishExplanationSelection(event: React.PointerEvent<HTMLDivElement>) {
+    const selectionDrag = explanationSelectionDrag.current;
+    if (!selectionDrag || selectionDrag.pointerId !== event.pointerId) return;
+    event.stopPropagation();
+    explanationSelectionDrag.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    const position = explanationPointerPosition(event);
+    const preview = {
+      x: Math.min(selectionDrag.startX, position.x),
+      y: Math.min(selectionDrag.startY, position.y),
+      width: Math.abs(position.x - selectionDrag.startX),
+      height: Math.abs(position.y - selectionDrag.startY),
+    };
+    setExplanationSelectionPreview(null);
+    if (!selectionDrag.moved || preview.width <= 0 || preview.height <= 0) return;
+    suppressExplanationClick.current = true;
+    window.setTimeout(() => {
+      suppressExplanationClick.current = false;
+    }, 0);
+    beginExplanation(
+      { x: preview.x + preview.width / 2, y: preview.y + preview.height / 2 },
+      null,
+      { width: preview.width, height: preview.height },
+    );
+  }
+
+  function cancelExplanationSelection(event: React.PointerEvent<HTMLDivElement>) {
+    if (explanationSelectionDrag.current?.pointerId !== event.pointerId) return;
+    explanationSelectionDrag.current = null;
+    setExplanationSelectionPreview(null);
   }
 
   function handleInspectClick(event: React.MouseEvent<HTMLDivElement>) {
@@ -360,6 +474,8 @@ export function InteractiveScreenCanvas({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          projectKey,
+          designVersionId,
           fileKey: file.key,
           fileName: file.name,
           screenId: screen.id,
@@ -388,7 +504,7 @@ export function InteractiveScreenCanvas({
     const response = await fetch("/api/integrations/figma/comments", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: comment.id, status }),
+      body: JSON.stringify({ projectKey, id: comment.id, status }),
     });
     const payload = await response.json() as FigmaCommentRecord | { error?: string };
     if (!response.ok || !("body" in payload)) return setCommentError("error" in payload && payload.error ? payload.error : "Unable to update comment.");
@@ -401,7 +517,7 @@ export function InteractiveScreenCanvas({
     const response = await fetch("/api/integrations/figma/comments", {
       method: "DELETE",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: comment.id }),
+      body: JSON.stringify({ projectKey, id: comment.id }),
     });
     const payload = await response.json() as { deleted?: boolean; error?: string };
     if (!response.ok) return setCommentError(payload.error || "Unable to delete comment.");
@@ -447,6 +563,8 @@ export function InteractiveScreenCanvas({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           projectKey,
+          designId,
+          designVersionId,
           fileKey: file.key,
           fileName: file.name,
           screenId: screen.id,
@@ -455,6 +573,8 @@ export function InteractiveScreenCanvas({
           figmaNodeName: explanationNode?.name ?? null,
           x: explanationPosition.x,
           y: explanationPosition.y,
+          selectionWidth: explanationSelection?.width ?? null,
+          selectionHeight: explanationSelection?.height ?? null,
           category: explanationDraft.category,
           title: explanationDraft.title,
           body: explanationDraft.body,
@@ -467,6 +587,7 @@ export function InteractiveScreenCanvas({
       }
       setExplanations((current) => [...current, payload]);
       setExplanationPosition(null);
+      setExplanationSelection(null);
       setExplanationNode(null);
       setActiveExplanationId(payload.id);
       setAuthoringMode(null);
@@ -524,7 +645,7 @@ export function InteractiveScreenCanvas({
     : explainMode
       ? movingExplanationId
         ? "Click the design to move this explanation"
-        : "Click the design to place an explanation"
+        : "Click an element or drag a box to explain an area"
     : inspectMode
       ? "Scroll or drag to pan · ⌘/Ctrl+scroll to zoom · click a layer"
       : readOnly
@@ -556,6 +677,7 @@ export function InteractiveScreenCanvas({
                 setAuthoringMode((current) => toggleFigmaAuthoringMode(current, "comment"));
                 setDraftPosition(null);
                 setExplanationPosition(null);
+                setExplanationSelection(null);
                 setMovingExplanationId(null);
                 setActiveCommentId(null);
                 setActiveExplanationId(null);
@@ -572,6 +694,7 @@ export function InteractiveScreenCanvas({
                 setAuthoringMode((current) => toggleFigmaAuthoringMode(current, "explain"));
                 setDraftPosition(null);
                 setExplanationPosition(null);
+                setExplanationSelection(null);
                 setMovingExplanationId(null);
                 setActiveCommentId(null);
                 setActiveExplanationId(null);
@@ -597,6 +720,10 @@ export function InteractiveScreenCanvas({
             else if (explainMode) void placeExplanation(event);
             else if (inspectMode) handleInspectClick(event);
           }}
+          onPointerDown={startExplanationSelection}
+          onPointerMove={updateExplanationSelection}
+          onPointerUp={finishExplanationSelection}
+          onPointerCancel={cancelExplanationSelection}
           className={`relative shrink-0 bg-white bg-[length:100%_100%] bg-center bg-no-repeat shadow-xl ${authoringMode || inspectMode ? "cursor-crosshair" : "cursor-grab"} ${!authoringMode ? "active:cursor-grabbing" : ""}`}
           style={{
             aspectRatio: `${width} / ${height}`,
@@ -622,6 +749,40 @@ export function InteractiveScreenCanvas({
               </span>
             </div>
           )}
+          {explanationSelectionPreview && (
+            <div
+              className="pointer-events-none absolute z-30 border-2 border-dashed border-[#16857a] bg-[#16857a]/10 shadow-[0_0_0_1px_rgba(255,255,255,.8)]"
+              style={{
+                left: `${explanationSelectionPreview.x}%`,
+                top: `${explanationSelectionPreview.y}%`,
+                width: `${explanationSelectionPreview.width}%`,
+                height: `${explanationSelectionPreview.height}%`,
+              }}
+            />
+          )}
+          {explanationPosition && explanationSelection && (
+            <div
+              className="pointer-events-none absolute z-30 border-2 border-dashed border-[#16857a] bg-[#16857a]/10 shadow-[0_0_0_1px_rgba(255,255,255,.8)]"
+              style={{
+                left: `${explanationPosition.x - explanationSelection.width / 2}%`,
+                top: `${explanationPosition.y - explanationSelection.height / 2}%`,
+                width: `${explanationSelection.width}%`,
+                height: `${explanationSelection.height}%`,
+              }}
+            />
+          )}
+          {explanations.map((explanation) => explanation.selectionWidth && explanation.selectionHeight ? (
+            <div
+              key={`selection-${explanation.id}`}
+              className={`pointer-events-none absolute z-30 border-2 bg-[#16857a]/8 shadow-[0_0_0_1px_rgba(255,255,255,.75)] ${activeExplanationId === explanation.id ? "border-[#16857a]" : "border-dashed border-[#16857a]/70"}`}
+              style={{
+                left: `${explanation.x - explanation.selectionWidth / 2}%`,
+                top: `${explanation.y - explanation.selectionHeight / 2}%`,
+                width: `${explanation.selectionWidth}%`,
+                height: `${explanation.selectionHeight}%`,
+              }}
+            />
+          ) : null)}
           {!inspectMode && outgoing.map((interaction, index) => {
             const bounds = interaction.sourceBounds;
             if (!bounds || screen.x === null || screen.y === null || !screen.width || !screen.height) return null;
@@ -667,6 +828,7 @@ export function InteractiveScreenCanvas({
                   event.stopPropagation();
                   setDraftPosition(null);
                   setExplanationPosition(null);
+                  setExplanationSelection(null);
                   setActiveCommentId(null);
                   setEditingExplanationId(null);
                   setActiveExplanationId((current) => current === explanation.id ? null : explanation.id);
@@ -709,29 +871,31 @@ export function InteractiveScreenCanvas({
                       <p className="mt-2 whitespace-pre-wrap text-[11px] leading-5 text-black/70">{explanation.body}</p>
                       {explanation.figmaNodeName && <p className="mt-2 truncate font-mono text-[8px] text-black/35">Layer: {explanation.figmaNodeName}</p>}
                       <p className="mt-2 text-[9px] text-black/35">{explanation.authorName} · {new Date(explanation.updatedAt).toLocaleString()}</p>
-                      {explanation.canEdit && (
+                      {(explanation.canEdit || explanation.canMoveToDraft) && (
                         <div className="mt-3 flex flex-wrap gap-1.5 border-t border-black/8 pt-2">
-                          <button type="button" onClick={() => beginExplanationEdit(explanation)} className="flex items-center gap-1 rounded-lg bg-black/5 px-2 py-1.5 text-[9px] font-semibold"><FilePenLine className="size-3" />Edit</button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setMovingExplanationId(explanation.id);
-                              setAuthoringMode("explain");
-                              setActiveExplanationId(null);
-                            }}
-                            className="flex items-center gap-1 rounded-lg bg-black/5 px-2 py-1.5 text-[9px] font-semibold"
-                          >
-                            <Move className="size-3" />Move
-                          </button>
+                          {explanation.canEdit && <button type="button" onClick={() => beginExplanationEdit(explanation)} className="flex items-center gap-1 rounded-lg bg-black/5 px-2 py-1.5 text-[9px] font-semibold"><FilePenLine className="size-3" />Edit</button>}
+                          {explanation.canEdit && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setMovingExplanationId(explanation.id);
+                                setAuthoringMode("explain");
+                                setActiveExplanationId(null);
+                              }}
+                              className="flex items-center gap-1 rounded-lg bg-black/5 px-2 py-1.5 text-[9px] font-semibold"
+                            >
+                              <Move className="size-3" />Move
+                            </button>
+                          )}
                           <button
                             type="button"
                             disabled={savingExplanation}
-                            onClick={() => void patchExplanation(explanation.id, { status: explanation.status === "draft" ? "published" : "draft" })}
+                            onClick={() => void patchExplanation(explanation.id, { status: explanation.canMoveToDraft ? "draft" : "published" })}
                             className="rounded-lg bg-[#dff3ef] px-2 py-1.5 text-[9px] font-semibold text-[#0f665d]"
                           >
-                            {explanation.status === "draft" ? "Publish" : "Unpublish"}
+                            {explanation.canMoveToDraft ? "Move to draft" : "Publish"}
                           </button>
-                          <button type="button" disabled={savingExplanation} onClick={() => setDeleteExplanationTarget(explanation)} className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-[9px] font-semibold text-[#b23b35] hover:bg-[#fff0ee]"><Trash2 className="size-3" />Delete</button>
+                          {explanation.canEdit && <button type="button" disabled={savingExplanation} onClick={() => setDeleteExplanationTarget(explanation)} className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-[9px] font-semibold text-[#b23b35] hover:bg-[#fff0ee]"><Trash2 className="size-3" />Delete</button>}
                         </div>
                       )}
                     </>
@@ -811,7 +975,9 @@ export function InteractiveScreenCanvas({
               style={{ left: `${explanationPosition.x}%`, top: `${explanationPosition.y}%`, transform: `translate(12px, 12px) scale(${1 / zoom})`, transformOrigin: "top left" }}
             >
               <p className="text-[10px] font-semibold">Explain this design decision</p>
-              {explanationNode && <p className="mt-1 truncate font-mono text-[8px] text-black/35">Attached to {explanationNode.name}</p>}
+              <p className="mt-1 truncate font-mono text-[8px] text-black/35">
+                {explanationNode ? `Attached to ${explanationNode.name}` : explanationSelection ? "Attached to selected area" : "Attached to selected point"}
+              </p>
               <div className="mt-2">
                 <ExplanationFields value={explanationDraft} onChange={setExplanationDraft} autoFocus />
               </div>
@@ -820,6 +986,7 @@ export function InteractiveScreenCanvas({
                   type="button"
                   onClick={() => {
                     setExplanationPosition(null);
+                    setExplanationSelection(null);
                     setExplanationNode(null);
                   }}
                   className="rounded-lg px-2 py-1.5 text-[9px] font-semibold text-black/45"
@@ -927,7 +1094,17 @@ function ExplanationFields({
   );
 }
 
-export function ScreenCommentsPanel({ file, screen }: { file: FigmaImportResult["file"]; screen: FigmaScreen }) {
+export function ScreenCommentsPanel({
+  projectKey,
+  designVersionId,
+  file,
+  screen,
+}: {
+  projectKey: string;
+  designVersionId: string;
+  file: FigmaImportResult["file"];
+  screen: FigmaScreen;
+}) {
   const [comments, setComments] = useState<FigmaCommentRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -936,7 +1113,7 @@ export function ScreenCommentsPanel({ file, screen }: { file: FigmaImportResult[
     let active = true;
     async function loadComments() {
       try {
-        const query = new URLSearchParams({ fileKey: file.key, screenId: screen.id });
+        const query = new URLSearchParams({ projectKey, fileKey: file.key, screenId: screen.id, designVersionId });
         const response = await fetch(`/api/integrations/figma/comments?${query}`, { cache: "no-store" });
         const payload = await response.json() as { comments?: FigmaCommentRecord[]; error?: string };
         if (!response.ok) throw new Error(payload.error || "Unable to load comments.");
@@ -960,7 +1137,7 @@ export function ScreenCommentsPanel({ file, screen }: { file: FigmaImportResult[
       active = false;
       window.removeEventListener(commentsUpdatedEvent, commentsChanged);
     };
-  }, [file.key, screen.id]);
+  }, [designVersionId, file.key, projectKey, screen.id]);
 
   const openCount = comments.filter((item) => item.status === "open").length;
   return (

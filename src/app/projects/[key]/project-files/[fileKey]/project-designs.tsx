@@ -147,12 +147,16 @@ function matchesFilter(group: DesignGroup, filter: FilterMode, query: string) {
 
 export function ProjectDesigns({
   projectKey,
-  fileKey,
+  designId,
   initialScreen = null,
+  backHref,
+  backLabel = "Back to room designs",
 }: {
   projectKey: string;
-  fileKey: string;
+  designId: string;
   initialScreen?: string | null;
+  backHref: string;
+  backLabel?: string;
 }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -160,6 +164,7 @@ export function ProjectDesigns({
   const screenParam = searchParams.get("screen") ?? initialScreen;
 
   const [result, setResult] = useState<FigmaImportResult | null>(null);
+  const fileKey = result?.file.key ?? "";
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -198,19 +203,19 @@ export function ProjectDesigns({
       setError(null);
       try {
         const response = await fetch(
-          `/api/integrations/figma/import?fileKey=${encodeURIComponent(fileKey)}&projectKey=${encodeURIComponent(projectKey)}`,
+          `/api/integrations/figma/import?designId=${encodeURIComponent(designId)}&projectKey=${encodeURIComponent(projectKey)}`,
           { cache: "no-store" },
         );
         const payload = await response.json() as FigmaImportResult | { error?: string };
         if (!response.ok || !("file" in payload)) {
-          throw new Error("error" in payload && payload.error ? payload.error : "Unable to open this project.");
+          throw new Error("error" in payload && payload.error ? payload.error : "Unable to open this design file.");
         }
         if (!cancelled) {
           setResult(payload);
           setProjectNameDraft(payload.file.name);
         }
       } catch (reason) {
-        if (!cancelled) setError(reason instanceof Error ? reason.message : "Unable to open this project.");
+        if (!cancelled) setError(reason instanceof Error ? reason.message : "Unable to open this design file.");
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -219,7 +224,7 @@ export function ProjectDesigns({
     return () => {
       cancelled = true;
     };
-  }, [fileKey, projectKey]);
+  }, [designId, projectKey]);
 
   useEffect(() => {
     if (!result) return;
@@ -360,11 +365,11 @@ export function ProjectDesigns({
         body: JSON.stringify({ fileKey, name: nextName, projectKey }),
       });
       const payload = await response.json() as { fileName?: string; error?: string };
-      if (!response.ok || !payload.fileName) throw new Error(payload.error || "Unable to rename the project.");
+      if (!response.ok || !payload.fileName) throw new Error(payload.error || "Unable to rename the design file.");
       setResult((current) => current ? { ...current, file: { ...current.file, name: payload.fileName! } } : current);
       setProjectNameDraft(payload.fileName);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Unable to rename the project.");
+      setError(reason instanceof Error ? reason.message : "Unable to rename the design file.");
       setProjectNameDraft(result.file.name);
     } finally {
       setRenamingProject(false);
@@ -433,12 +438,13 @@ export function ProjectDesigns({
   const openingHandoff = Boolean(screenParam) && !handoffOpen;
 
   return (
-    <main className="min-h-screen bg-[#f1f2ed] text-[#17221f]">
-      <div className="sticky top-0 z-40 border-b border-black/8 bg-[#faf8ff]/95 backdrop-blur-md">
+    <div className="min-h-[calc(100vh-4rem)] bg-[#f3f0ff] text-[#17221f]">
+      <div className="sticky top-0 z-40 border-b border-[#a594f5]/25 bg-[#faf8ff]/95 backdrop-blur-md">
         <header>
           <div className="flex h-14 items-center gap-4 px-4 lg:px-5">
-            <Link href={`/projects/${encodeURIComponent(projectKey)}`} aria-label="Back to Projects" className="flex size-9 items-center justify-center rounded-xl border border-black/10 bg-white text-black/55 transition hover:bg-black/5">
+            <Link href={backHref} className="flex h-9 items-center justify-center gap-2 rounded-xl border border-black/10 bg-white px-3 text-[10px] font-semibold text-black/55 transition hover:bg-black/5">
               <ArrowLeft className="size-4" />
+              <span className="hidden sm:inline">{backLabel}</span>
             </Link>
             <div className="min-w-0 flex-1">
               <form
@@ -453,7 +459,7 @@ export function ProjectDesigns({
                   onChange={(event) => setProjectNameDraft(event.target.value)}
                   onBlur={() => { void saveProjectName(); }}
                   disabled={loading || renamingProject || !result}
-                  aria-label="Project name"
+                  aria-label="Design file name"
                   className="min-w-0 flex-1 truncate rounded-lg border border-transparent bg-transparent px-1 py-0.5 text-sm font-semibold outline-none hover:border-black/10 focus:border-black/15 focus:bg-white disabled:opacity-60"
                 />
                 {renamingProject && <LoaderCircle className="size-3.5 shrink-0 animate-spin text-[#7c6cf0]" />}
@@ -690,9 +696,9 @@ export function ProjectDesigns({
             <AlertDialogDescription>
               {deleteTarget
                 ? deleteTarget.breakpointCount > 1
-                  ? `“${deleteTarget.name}” and its ${deleteTarget.breakpointCount} breakpoints will be removed from this project. This cannot be undone.`
-                  : `“${deleteTarget.name}” will be removed from this project. This cannot be undone.`
-                : "This design will be removed from this project."}
+                  ? `“${deleteTarget.name}” and its ${deleteTarget.breakpointCount} breakpoints will be removed from this room. This cannot be undone.`
+                  : `“${deleteTarget.name}” will be removed from this room. This cannot be undone.`
+                : "This design will be removed from this room."}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -710,7 +716,7 @@ export function ProjectDesigns({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </main>
+    </div>
   );
 }
 
@@ -756,7 +762,7 @@ function DesignGroupCard({
             </div>
           )}
           {group.cover.isMain && (
-            <span className="absolute left-2 top-2 rounded-lg bg-[#6354d4] px-2 py-1 text-[8px] font-bold text-[#ffd7a8] shadow-sm">PROJECT MAIN</span>
+            <span className="absolute left-2 top-2 rounded-lg bg-[#6354d4] px-2 py-1 text-[8px] font-bold text-[#ffd7a8] shadow-sm">ROOM MAIN</span>
           )}
           {group.screens.length > 1 && (
             <span className="absolute left-2 bottom-2 flex items-center gap-1 rounded-lg bg-[#6354d4] px-2 py-1 text-[8px] font-bold text-[#e4dffc] shadow-sm">
@@ -808,7 +814,7 @@ function DesignGroupCard({
             className="flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-black/8 bg-black/[0.02] px-2 py-1.5 text-[9px] font-semibold text-black/55 transition hover:bg-black/[0.04] disabled:opacity-40"
           >
             {busy ? <LoaderCircle className="size-3 animate-spin" /> : <Star className={`size-3 ${group.cover.isMain ? "fill-current text-[#7c6cf0]" : ""}`} />}
-            {group.cover.isMain ? "Project Main" : "Set Project Main"}
+            {group.cover.isMain ? "Room Main" : "Set Room Main"}
           </button>
           <button
             type="button"

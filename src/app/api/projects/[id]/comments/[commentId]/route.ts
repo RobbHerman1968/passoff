@@ -12,9 +12,9 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string; commentId: string }> },
 ) {
   try {
-    const { id, commentId } = await params;
-    if (!uuidPattern.test(id) || !uuidPattern.test(commentId)) {
-      return NextResponse.json({ error: "Invalid ids." }, { status: 400 });
+    const { id: roomId, commentId } = await params;
+    if (!uuidPattern.test(roomId) || !uuidPattern.test(commentId)) {
+      return NextResponse.json({ error: "Invalid room or comment id." }, { status: 400 });
     }
     const body = (await request.json()) as { status?: unknown };
     const status = body.status;

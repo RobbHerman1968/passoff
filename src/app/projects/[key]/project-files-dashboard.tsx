@@ -1,12 +1,11 @@
 "use client";
 
-import { AlertTriangle, ArrowRight, Check, ExternalLink, FileImage, FolderKanban, ImagePlus, Layers2, LoaderCircle, LogOut, PenLine, Plus, RefreshCw, Search, Trash2, Upload, Workflow, X } from "lucide-react";
+import { AlertTriangle, ArrowLeft, ArrowRight, Check, Copy, ExternalLink, FileImage, FolderKanban, History, ImagePlus, KeyRound, Layers2, LoaderCircle, LogOut, PenLine, Plus, RefreshCw, Search, Trash2, Upload, Workflow, X } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 
-import { BrandMark } from "@/components/brand-mark";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -20,6 +19,8 @@ import {
 } from "@/components/ui/alert-dialog";
 import { commonDesignName } from "@/lib/figma/breakpoints";
 import { FigmaImportClientError, streamFigmaImport } from "@/lib/figma/import-client";
+import { formatStorageBytes } from "@/lib/rooms/entitlements-format";
+import { projectDesignPath, roomPath } from "@/lib/rooms/routes";
 import type {
   FigmaConnectionStatus,
   FigmaImportProgress,
@@ -31,14 +32,35 @@ import type {
 } from "@/lib/figma/types";
 
 import { HandoffWorkspace } from "./project-files/[fileKey]/handoff/handoff-workspace";
+import { VideoDesignsPanel } from "./video-designs-panel";
 
-type ModalMode = "choose" | "import" | "create" | "upload";
+type ModalMode = "choose" | "import" | "api" | "plugin" | "create" | "upload";
 type FilterMode = "all" | "ungrouped" | "combined" | "mobile" | "tablet" | "desktop";
 
 type ProjectFileGroup = {
   fileKey: string;
+  designId: string;
+  designVersionId: string;
+  versionNumber: number;
   fileName: string;
   designs: ProjectDesignSummary[];
+};
+
+type PluginKeyStatus = {
+  configured: boolean;
+  createdAt: string | null;
+};
+
+type DesignVersionSummary = {
+  id: string;
+  versionNumber: number;
+  sourceLastModified: string | null;
+  createdAt: string;
+  screenCount: number;
+  previewBytes: number;
+  isCurrent: boolean;
+  isReferenced: boolean;
+  canDelete: boolean;
 };
 
 const FILTERS: Array<{ id: FilterMode; label: string }> = [
@@ -50,8 +72,8 @@ const FILTERS: Array<{ id: FilterMode; label: string }> = [
   { id: "desktop", label: "Desktop" },
 ];
 
-function projectFilePath(projectKey: string, fileKey: string) {
-  return `/projects/${encodeURIComponent(projectKey)}/project-files/${encodeURIComponent(fileKey)}`;
+function projectFilePath(projectId: string, designId: string, roomId?: string | null) {
+  return projectDesignPath(projectId, designId, { roomId });
 }
 
 function designPrimaryScreenId(design: ProjectDesignSummary) {
@@ -87,7 +109,14 @@ function buildFileGroups(designs: ProjectDesignSummary[]): ProjectFileGroup[] {
   for (const design of designs) {
     const current = byFile.get(design.fileKey);
     if (current) current.designs.push(design);
-    else byFile.set(design.fileKey, { fileKey: design.fileKey, fileName: design.fileName, designs: [design] });
+    else byFile.set(design.fileKey, {
+      fileKey: design.fileKey,
+      designId: design.designId,
+      designVersionId: design.designVersionId,
+      versionNumber: design.versionNumber,
+      fileName: design.fileName,
+      designs: [design],
+    });
   }
   return [...byFile.values()].sort((a, b) => a.fileName.localeCompare(b.fileName));
 }
@@ -165,7 +194,7 @@ function ProjectDesignCard({
           )}
           {design.isMain && (
             <span className="absolute left-2 top-2 rounded-lg bg-[#6354d4] px-2 py-1 text-[8px] font-bold text-[#ffd7a8] shadow-sm">
-              PROJECT MAIN
+              ROOM MAIN
             </span>
           )}
           {design.isCombined && (
@@ -252,12 +281,22 @@ function ProjectDesignCard({
 
 export function ProjectFilesDashboard({
   projectKey,
-  projectName,
+  roomName,
+  clientName,
+  backHref,
+  roomId,
 }: {
   projectKey: string;
-  projectName: string;
+  roomName: string;
+  clientName?: string | null;
+  backHref?: string;
+  backLabel?: string;
+  roomId?: string | null;
 }) {
   const router = useRouter();
+  const ownerLabel = roomId ? "room" : "project";
+  const ownerHref = backHref ?? (roomId ? roomPath(roomId) : `/projects/${encodeURIComponent(projectKey)}`);
+  const designProjectId = projectKey;
   const importTitleId = useId();
   const [status, setStatus] = useState<FigmaConnectionStatus | null>(null);
   const [imports, setImports] = useState<FigmaSavedImportSummary[]>([]);
@@ -275,6 +314,12 @@ export function ProjectFilesDashboard({
   const [modalError, setModalError] = useState<string | null>(null);
   const [importProgress, setImportProgress] = useState<FigmaImportProgress | null>(null);
   const [rateLimit, setRateLimit] = useState<FigmaRateLimitDetails | null>(null);
+  const [pluginKeyStatus, setPluginKeyStatus] = useState<PluginKeyStatus | null>(null);
+  const [projectPluginKey, setProjectPluginKey] = useState<string | null>(null);
+  const [pluginKeyBusy, setPluginKeyBusy] = useState(false);
+  const [pluginKeyCopied, setPluginKeyCopied] = useState(false);
+  const [projectIdCopied, setProjectIdCopied] = useState(false);
+  const [confirmKeyRotation, setConfirmKeyRotation] = useState(false);
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<FilterMode>("all");
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -283,12 +328,20 @@ export function ProjectFilesDashboard({
   const [combinePrimaryId, setCombinePrimaryId] = useState<string | null>(null);
   const [deleteAllOpen, setDeleteAllOpen] = useState(false);
   const [deleteSelectedOpen, setDeleteSelectedOpen] = useState(false);
+  const [historyTarget, setHistoryTarget] = useState<ProjectFileGroup | null>(null);
+  const [historyVersions, setHistoryVersions] = useState<DesignVersionSummary[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [historyDeleteTarget, setHistoryDeleteTarget] = useState<DesignVersionSummary | null>(null);
   const [handoff, setHandoff] = useState<{
     result: FigmaImportResult;
     screenId: string;
     siblingIds: string[];
   } | null>(null);
   const [handoffLoading, setHandoffLoading] = useState(false);
+  const [roomNotice, setRoomNotice] = useState<string | null>(null);
+  const designRoomId = roomId ?? null;
+  const pinTargetRoomId = designRoomId;
 
   const filteredDesigns = useMemo(
     () => designs.filter((design) => matchesDesignFilter(design, filter, query)),
@@ -339,15 +392,70 @@ export function ProjectFilesDashboard({
         error?: string;
       };
       if (statusResponse.ok) setStatus(nextStatus);
-      if (!importsResponse.ok) throw new Error(payload.error || "Unable to load project files.");
+      if (!importsResponse.ok) throw new Error(payload.error || "Unable to load design files.");
       setImports(payload.imports ?? []);
       setDesigns(payload.designs ?? []);
       if (!options?.keepSelection) setSelected(new Set());
-      if (!statusResponse.ok) setError("Unable to load the project workspace status.");
+      if (!statusResponse.ok) setError(`Unable to load the ${ownerLabel}’s Figma connection status.`);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Unable to load project files.");
+      setError(reason instanceof Error ? reason.message : "Unable to load design files.");
     } finally {
       if (!options?.silent) setLoading(false);
+    }
+  }
+
+  async function openVersionHistory(group: ProjectFileGroup) {
+    setHistoryTarget(group);
+    setHistoryVersions([]);
+    setHistoryError(null);
+    setHistoryLoading(true);
+    try {
+      const params = new URLSearchParams({
+        projectKey,
+        designId: group.designId,
+        history: "1",
+      });
+      const response = await fetch(`/api/integrations/figma/import?${params.toString()}`, {
+        cache: "no-store",
+      });
+      const payload = await response.json() as {
+        versions?: DesignVersionSummary[];
+        error?: string;
+      };
+      if (!response.ok) throw new Error(payload.error || "Unable to load version history.");
+      setHistoryVersions(payload.versions ?? []);
+    } catch (reason) {
+      setHistoryError(reason instanceof Error ? reason.message : "Unable to load version history.");
+    } finally {
+      setHistoryLoading(false);
+    }
+  }
+
+  async function deleteHistoricalVersion() {
+    if (!historyTarget || !historyDeleteTarget || busy) return;
+    setBusy(true);
+    setHistoryError(null);
+    try {
+      const params = new URLSearchParams({
+        projectKey,
+        designId: historyTarget.designId,
+        designVersionId: historyDeleteTarget.id,
+      });
+      const response = await fetch(`/api/integrations/figma/import?${params.toString()}`, {
+        method: "DELETE",
+      });
+      const payload = await response.json() as { deleted?: boolean; error?: string };
+      if (!response.ok || !payload.deleted) {
+        throw new Error(payload.error || "Unable to delete this version.");
+      }
+      setHistoryVersions((current) => current.filter((version) => version.id !== historyDeleteTarget.id));
+      setHistoryDeleteTarget(null);
+      router.refresh();
+    } catch (reason) {
+      setHistoryError(reason instanceof Error ? reason.message : "Unable to delete this version.");
+      setHistoryDeleteTarget(null);
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -356,16 +464,17 @@ export function ProjectFilesDashboard({
   }, [projectKey]);
 
   useEffect(() => {
-    if (!modalOpen && !combineOpen && !handoff) return;
+    if (!modalOpen && !combineOpen && !handoff && !historyTarget) return;
     function onKeyDown(event: KeyboardEvent) {
       if (event.key !== "Escape" || busy || handoffLoading) return;
       if (handoff) setHandoff(null);
       else if (combineOpen) setCombineOpen(false);
+      else if (historyTarget) setHistoryTarget(null);
       else setModalOpen(false);
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [modalOpen, combineOpen, handoff, busy, handoffLoading]);
+  }, [modalOpen, combineOpen, handoff, historyTarget, busy, handoffLoading]);
 
   useEffect(() => {
     if (!handoff && !handoffLoading) return;
@@ -384,13 +493,84 @@ export function ProjectFilesDashboard({
     setCreateName("");
     setUploadName("");
     setUploadFiles([]);
+    setPluginKeyStatus(null);
+    setProjectPluginKey(null);
+    setPluginKeyCopied(false);
+    setProjectIdCopied(false);
+    setConfirmKeyRotation(false);
     if (uploadInputRef.current) uploadInputRef.current.value = "";
     setModalOpen(true);
   }
 
   function closeModal() {
     if (busy) return;
+    setProjectPluginKey(null);
+    setPluginKeyCopied(false);
+    setProjectIdCopied(false);
+    setConfirmKeyRotation(false);
     setModalOpen(false);
+  }
+
+  async function openPluginImport() {
+    setModalMode("plugin");
+    setModalError(null);
+    setProjectPluginKey(null);
+    setPluginKeyCopied(false);
+    setProjectIdCopied(false);
+    setConfirmKeyRotation(false);
+    setPluginKeyBusy(true);
+    try {
+      const response = await fetch(`/api/integrations/figma/plugin-key?projectKey=${encodeURIComponent(projectKey)}`, { cache: "no-store" });
+      const payload = await response.json() as PluginKeyStatus & { error?: string };
+      if (!response.ok) throw new Error(payload.error || "Unable to read this project’s plugin key.");
+      setPluginKeyStatus(payload);
+    } catch (reason) {
+      setModalError(reason instanceof Error ? reason.message : "Unable to read this project’s plugin key.");
+    } finally {
+      setPluginKeyBusy(false);
+    }
+  }
+
+  async function createPluginKey(rotate: boolean) {
+    if (pluginKeyBusy) return;
+    setPluginKeyBusy(true);
+    setPluginKeyCopied(false);
+    setModalError(null);
+    try {
+      const response = await fetch("/api/integrations/figma/plugin-key", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectKey, rotate }),
+      });
+      const payload = await response.json() as { key?: string; createdAt?: string; error?: string };
+      if (!response.ok || !payload.key) throw new Error(payload.error || "Unable to create this project’s plugin key.");
+      setProjectPluginKey(payload.key);
+      setPluginKeyStatus({ configured: true, createdAt: payload.createdAt ?? new Date().toISOString() });
+      setConfirmKeyRotation(false);
+    } catch (reason) {
+      setModalError(reason instanceof Error ? reason.message : "Unable to create this project’s plugin key.");
+    } finally {
+      setPluginKeyBusy(false);
+    }
+  }
+
+  async function copyPluginKey() {
+    if (!projectPluginKey) return;
+    try {
+      await navigator.clipboard.writeText(projectPluginKey);
+      setPluginKeyCopied(true);
+    } catch {
+      setModalError("Unable to copy automatically. Select the project plugin key and copy it manually.");
+    }
+  }
+
+  async function copyProjectId() {
+    try {
+      await navigator.clipboard.writeText(projectKey);
+      setProjectIdCopied(true);
+    } catch {
+      setModalError("Unable to copy automatically. Select the destination ID and copy it manually.");
+    }
   }
 
   async function openDesign(design: ProjectDesignSummary) {
@@ -400,7 +580,7 @@ export function ProjectFilesDashboard({
     setError(null);
     try {
       const response = await fetch(
-        `/api/integrations/figma/import?fileKey=${encodeURIComponent(design.fileKey)}&projectKey=${encodeURIComponent(projectKey)}`,
+        `/api/integrations/figma/import?designVersionId=${encodeURIComponent(design.designVersionId)}&projectKey=${encodeURIComponent(projectKey)}`,
         { cache: "no-store" },
       );
       const payload = await response.json() as FigmaImportResult | { error?: string };
@@ -419,6 +599,30 @@ export function ProjectFilesDashboard({
       setError(reason instanceof Error ? reason.message : "Unable to open this design.");
     } finally {
       setHandoffLoading(false);
+    }
+  }
+
+  async function addDesignToRoom(group: ProjectFileGroup) {
+    if (!pinTargetRoomId || busy) return;
+    setBusy(true);
+    setError(null);
+    setRoomNotice(null);
+    try {
+      const response = await fetch(`/api/projects/${encodeURIComponent(pinTargetRoomId)}/design-versions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          designId: group.designId,
+          designVersionId: group.designVersionId,
+        }),
+      });
+      const payload = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(payload.error || "Unable to add this design to the room.");
+      setRoomNotice(`${group.fileName} v${group.versionNumber} added to the room.`);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Unable to add this design to the room.");
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -480,7 +684,7 @@ export function ProjectFilesDashboard({
     try {
       const response = await fetch(`/api/integrations/figma/import?all=1&projectKey=${encodeURIComponent(projectKey)}`, { method: "DELETE" });
       const payload = await response.json() as { error?: string };
-      if (!response.ok) throw new Error(payload.error || "Unable to delete project files.");
+      if (!response.ok) throw new Error(payload.error || "Unable to delete design files.");
       setDeleteAllOpen(false);
       setSelected(new Set());
       setQuery("");
@@ -488,7 +692,7 @@ export function ProjectFilesDashboard({
       setImports([]);
       setDesigns([]);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Unable to delete project files.");
+      setError(reason instanceof Error ? reason.message : "Unable to delete design files.");
     } finally {
       setBusy(false);
     }
@@ -503,14 +707,12 @@ export function ProjectFilesDashboard({
         const params = new URLSearchParams({
           fileKey: design.fileKey,
           projectKey,
+          designId: design.designId,
+          designVersionId: design.designVersionId,
         });
-        if (design.isCombined && design.groupId) {
-          params.set("groupId", design.groupId);
-        } else {
-          const screenId = design.breakpoints[0]?.id ?? designScreenIds(design)[0];
-          if (!screenId) throw new Error(`Unable to delete “${design.name}”.`);
-          params.set("screenId", screenId);
-        }
+        const screenIds = designScreenIds(design);
+        if (!screenIds.length) throw new Error(`Unable to delete “${design.name}”.`);
+        for (const screenId of screenIds) params.append("screenId", screenId);
         const response = await fetch(`/api/integrations/figma/screens?${params.toString()}`, { method: "DELETE" });
         const payload = await response.json() as { error?: string };
         if (!response.ok) throw new Error(payload.error || `Unable to delete “${design.name}”.`);
@@ -557,10 +759,10 @@ export function ProjectFilesDashboard({
         body: JSON.stringify({ name: createName, projectKey }),
       });
       const payload = await response.json() as { file?: { key: string }; error?: string };
-      if (!response.ok || !payload.file?.key) throw new Error(payload.error || "Unable to create the project file.");
-      router.push(projectFilePath(projectKey, payload.file.key));
+      if (!response.ok || !payload.file?.key) throw new Error(payload.error || "Unable to create the design file.");
+      router.push(projectFilePath(designProjectId, payload.file.key, designRoomId));
     } catch (reason) {
-      setModalError(reason instanceof Error ? reason.message : "Unable to create the project file.");
+      setModalError(reason instanceof Error ? reason.message : "Unable to create the design file.");
       setBusy(false);
     }
   }
@@ -581,7 +783,7 @@ export function ProjectFilesDashboard({
       });
       const payload = await response.json() as { file?: { key: string }; error?: string };
       if (!response.ok || !payload.file?.key) throw new Error(payload.error || "Unable to import images.");
-      router.push(projectFilePath(projectKey, payload.file.key));
+      router.push(projectFilePath(designProjectId, payload.file.key, designRoomId));
     } catch (reason) {
       setModalError(reason instanceof Error ? reason.message : "Unable to import images.");
       setBusy(false);
@@ -603,19 +805,27 @@ export function ProjectFilesDashboard({
   }
 
   const modalTitle = modalMode === "choose"
-    ? "Add a Project File"
+    ? "Add designs"
     : modalMode === "import"
-      ? "Import a Figma design"
-      : modalMode === "upload"
-        ? "Import Images"
-        : "Create a blank file";
+      ? "Choose a Figma import"
+      : modalMode === "api"
+        ? "Import with Figma API"
+        : modalMode === "plugin"
+          ? "Import with the Figma plugin"
+          : modalMode === "upload"
+            ? "Import images"
+            : "Create a blank file";
   const modalDescription = modalMode === "choose"
     ? "Bring in a Figma file, upload screen images, or start from scratch."
     : modalMode === "import"
-      ? "Adds the frames from that Figma file into this project’s design list."
-      : modalMode === "upload"
-        ? "Upload PNG, JPEG, WebP, or GIF screenshots as designs in this project."
-        : "Creates an empty Pass-Off file you can fill in later.";
+      ? "Use the REST API or send frames directly from Figma with the local plugin."
+      : modalMode === "api"
+        ? `Add frames from a Figma file to this ${ownerLabel}’s design list.`
+        : modalMode === "plugin"
+          ? `Send selected frames from Figma Desktop to this ${ownerLabel}.`
+          : modalMode === "upload"
+            ? `Upload PNG, JPEG, WebP, or GIF screenshots as designs in this ${ownerLabel}.`
+            : "Creates an empty Pass-Off file you can fill in later.";
 
   const hasActiveFilter = filter !== "all" || query.trim().length > 0;
   const summaryLabel = loading
@@ -627,85 +837,76 @@ export function ProjectFilesDashboard({
       ].filter(Boolean).join(" · ");
 
   return (
-    <main className="min-h-screen bg-[#f3f0ff] text-[#17221f]">
-      <header className="sticky top-0 z-40 border-b border-[#a594f5]/25 bg-[#faf8ff]/95 backdrop-blur-md">
-        <div className="flex h-16 items-center justify-between gap-3 px-4 lg:px-5">
-          <Link href="/dashboard" className="flex items-center gap-2.5 text-lg font-semibold tracking-[-0.04em]">
-            <BrandMark size={28} />
-            Pass-Off
-          </Link>
-          <div className="flex items-center gap-2 sm:gap-3">
+    <>
+      <div className="w-full px-5 pb-8 pt-4 lg:px-8">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <nav aria-label="Breadcrumb" className="inline-flex max-w-full self-start rounded-xl border border-[#a594f5]/25 bg-white/75 p-1 shadow-[0_1px_2px_rgba(45,35,105,0.05)] backdrop-blur-sm">
+            <ol className="flex min-w-0 items-center text-sm">
+              <li>
+                <Link href="/dashboard" className="inline-flex items-center gap-1.5 rounded-lg bg-[#eeeaff] px-2.5 py-1.5 font-semibold text-[#6354d4] transition hover:bg-[#e2dcff] hover:text-[#5143b8]">
+                  <ArrowLeft className="size-4" /> Projects
+                </Link>
+              </li>
+              <li aria-hidden="true" className="px-1 text-black/20">|</li>
+              <li className="min-w-0">
+                <Link href={ownerHref} className="block max-w-48 truncate rounded-lg border border-[#a594f5]/30 bg-[#faf8ff] px-2.5 py-1.5 font-medium text-[#6354d4] transition hover:border-[#8a78ec]/55 hover:bg-[#f3f0ff] sm:max-w-80">
+                  {roomName}
+                </Link>
+              </li>
+              <li aria-hidden="true" className="px-1 text-black/20">|</li>
+              <li aria-current="page" className="rounded-lg border border-[#a594f5]/30 bg-[#faf8ff] px-2.5 py-1.5 font-medium text-[var(--brand-deep)]">
+                Designs
+              </li>
+            </ol>
+          </nav>
+          <div className="flex flex-wrap items-center gap-2 sm:justify-end">
             {selectedDesigns.length > 0 && (
               <>
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() => setDeleteSelectedOpen(true)}
-                  className="flex items-center gap-2 rounded-xl border border-[#e6a44c]/40 bg-white px-3 py-2 text-[10px] font-semibold text-[#a14428] disabled:opacity-40"
-                >
-                  <Trash2 className="size-3.5" />
-                  <span className="hidden sm:inline">Delete Selected</span>
-                  <span>({selectedDesigns.length})</span>
+                <button type="button" disabled={busy} onClick={() => setDeleteSelectedOpen(true)} className="flex items-center gap-2 rounded-xl border border-[#e6a44c]/40 bg-white px-4 py-2.5 text-sm font-semibold text-[#a14428] disabled:opacity-40">
+                  <Trash2 className="size-4" /> Delete Selected ({selectedDesigns.length})
                 </button>
-                <button
-                  type="button"
-                  disabled={!canCombine || busy}
-                  onClick={openCombine}
-                  title={selectedFileKeys.length > 1 ? "Select designs from the same file to combine" : undefined}
-                  className="flex items-center gap-2 rounded-xl bg-[#6354d4] px-3 py-2 text-[10px] font-semibold text-[#e4dffc] disabled:opacity-40"
-                >
-                  <Layers2 className="size-3.5" />
-                  <span className="hidden sm:inline">Combine Breakpoints</span>
-                  <span>({selectedBreakpoints.length})</span>
+                <button type="button" disabled={!canCombine || busy} onClick={openCombine} title={selectedFileKeys.length > 1 ? "Select designs from the same file to combine" : undefined} className="flex items-center gap-2 rounded-xl bg-[#6354d4] px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-40">
+                  <Layers2 className="size-4" /> Combine ({selectedBreakpoints.length})
                 </button>
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() => setSelected(new Set())}
-                  className="rounded-xl border border-black/10 bg-white px-3 py-2 text-[10px] font-semibold text-black/45 disabled:opacity-40"
-                >
+                <button type="button" disabled={busy} onClick={() => setSelected(new Set())} className="rounded-xl border border-black/10 bg-white px-4 py-2.5 text-sm font-semibold text-black/45 disabled:opacity-40">
                   Clear
                 </button>
               </>
             )}
-            <span className="hidden text-xs text-black/40 lg:inline">{status?.tenant?.organizationName || "Project workspace"}</span>
             {status?.connected && (
-              <button type="button" onClick={disconnect} disabled={busy} className="flex items-center gap-2 rounded-xl border border-black/10 bg-white px-3 py-2 text-[10px] font-semibold text-black/50">
-                <LogOut className="size-3.5" />Disconnect Figma
+              <button type="button" onClick={disconnect} disabled={busy} className="flex items-center gap-2 rounded-xl border border-black/10 bg-white px-4 py-2.5 text-sm font-semibold text-black/50">
+                <LogOut className="size-4" /> Disconnect Figma
               </button>
             )}
-          </div>
-        </div>
-      </header>
-
-      <div className="mx-auto max-w-7xl px-5 py-8 lg:px-8 lg:py-12">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-[#7c6cf0]">
-              <FolderKanban className="size-4" />{status?.tenant?.workspaceName || "Main workspace"}
-            </div>
-            <h1 className="mt-3 text-4xl font-semibold tracking-[-0.055em] sm:text-5xl">{projectName}</h1>
-            <p className="mt-2 truncate font-mono text-xs text-black/35">{projectKey}</p>
-            <p className="mt-1 text-sm text-black/40">{summaryLabel}</p>
-          </div>
-          <div className="flex items-center gap-2">
-            <button type="button" onClick={() => { void loadProject(); }} className="flex items-center gap-2 rounded-xl border border-black/8 bg-white px-3 py-2 text-[10px] font-semibold text-black/50">
-              <RefreshCw className="size-3.5" />Refresh
+            <button type="button" onClick={() => { void loadProject(); }} className="flex items-center gap-2 rounded-xl border border-black/8 bg-white px-4 py-2.5 text-sm font-semibold text-black/50">
+              <RefreshCw className="size-4" />Refresh
             </button>
             {(imports.length > 0 || designs.length > 0) && (
               <button
                 type="button"
                 disabled={busy}
                 onClick={() => setDeleteAllOpen(true)}
-                className="flex items-center gap-2 rounded-xl border border-[#e6a44c]/40 bg-white px-3 py-2 text-[10px] font-semibold text-[#a14428] disabled:opacity-40"
+                className="flex items-center gap-2 rounded-xl border border-[#e6a44c]/40 bg-white px-4 py-2.5 text-sm font-semibold text-[#a14428] disabled:opacity-40"
               >
-                <Trash2 className="size-3.5" />Delete All
+                <Trash2 className="size-4" />Delete All
               </button>
             )}
-            <button type="button" onClick={openModal} className="flex items-center gap-2 rounded-xl bg-[#6354d4] px-4 py-2 text-[10px] font-semibold text-[#e4dffc]">
-              <Plus className="size-3.5" />Add File
+            <button type="button" onClick={openModal} className="flex items-center gap-2 rounded-xl bg-[#6354d4] px-4 py-2.5 text-sm font-semibold text-white">
+              <Plus className="size-4" />Add designs
             </button>
           </div>
+        </div>
+        <div className="mt-4">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[#7c6cf0]">
+            {clientName || status?.tenant?.workspaceName || "Project"}
+          </div>
+          <h1 className="mt-1 flex flex-wrap items-center gap-2.5 text-3xl font-semibold tracking-[-0.04em]">
+            <span>{roomName}</span>
+            <span className="rounded-lg border border-[#a594f5]/35 bg-[#eeeaff] px-2.5 py-1 text-xs font-semibold uppercase tracking-[0.12em] text-[#6354d4]">
+              Designs
+            </span>
+          </h1>
+          <p className="mt-2 text-sm text-black/40">{summaryLabel}</p>
         </div>
 
         {error && (
@@ -715,11 +916,20 @@ export function ProjectFilesDashboard({
           </div>
         )}
 
+        {roomNotice && (
+          <div role="status" className="mt-4 flex items-start gap-3 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-xs leading-5 text-emerald-800">
+            <Check className="mt-0.5 size-4 shrink-0" />
+            <p>{roomNotice}</p>
+          </div>
+        )}
+
         {selected.size > 0 && selectedFileKeys.length > 1 && (
           <div role="status" className="mt-4 rounded-xl border border-[#e6a44c]/35 bg-[#fff4d8] px-4 py-3 text-xs text-[#76500b]">
             Select designs from the same Figma file to combine breakpoints.
           </div>
         )}
+
+        <VideoDesignsPanel projectId={designProjectId} roomId={pinTargetRoomId} />
 
         {!loading && designs.length > 0 && (
           <div className="mt-8 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -789,10 +999,10 @@ export function ProjectFilesDashboard({
           ) : !designs.length ? (
             <div className="mt-5 rounded-[22px] border border-dashed border-black/15 bg-white/45 px-6 py-16 text-center">
               <FolderKanban className="mx-auto size-8 text-black/20" />
-              <p className="mt-4 text-sm font-semibold text-black/55">No files yet</p>
-              <p className="mt-1 text-xs text-black/35">Import from Figma to add designs to this project.</p>
-              <button type="button" onClick={openModal} className="mt-5 inline-flex items-center gap-2 rounded-xl bg-[#6354d4] px-4 py-2.5 text-[10px] font-semibold text-[#e4dffc]">
-                <Plus className="size-3.5" />Add File
+              <p className="mt-4 text-sm font-semibold text-black/55">No design files yet</p>
+              <p className="mt-1 text-xs text-black/35">Import a Figma file or upload screen images to add designs to this {ownerLabel}.</p>
+              <button type="button" onClick={openModal} className="mt-6 inline-flex items-center gap-2.5 rounded-xl bg-[#6354d4] px-6 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-[#5b4cc4]">
+                <Plus className="size-4" />Add designs
               </button>
             </div>
           ) : !filteredDesigns.length ? (
@@ -816,18 +1026,37 @@ export function ProjectFilesDashboard({
                     <div className="min-w-0">
                       <h2 className="truncate text-sm font-semibold tracking-[-0.02em]">{group.fileName}</h2>
                       <p className="mt-0.5 text-[10px] text-black/35">
-                        {group.designs.length} design{group.designs.length === 1 ? "" : "s"}
+                        Version {group.versionNumber} · {group.designs.length} design{group.designs.length === 1 ? "" : "s"}
                         {group.designs.some((design) => design.isCombined)
                           ? ` · ${group.designs.filter((design) => design.isCombined).length} grouped`
                           : ""}
                       </p>
                     </div>
-                    <Link
-                      href={projectFilePath(projectKey, group.fileKey)}
-                      className="inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-black/8 bg-white px-3 py-2 text-[10px] font-semibold text-black/50 transition hover:border-[#a594f5]/50 hover:text-[#6354d4]"
-                    >
-                      Open File <ArrowRight className="size-3.5" />
-                    </Link>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => { void openVersionHistory(group); }}
+                        className="inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-black/8 bg-white px-3 py-2 text-[10px] font-semibold text-black/50 transition hover:border-[#a594f5]/50 hover:text-[#6354d4]"
+                      >
+                        <History className="size-3.5" /> Version history
+                      </button>
+                      {pinTargetRoomId ? (
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => { void addDesignToRoom(group); }}
+                          className="inline-flex shrink-0 items-center gap-1.5 rounded-xl bg-[#6354d4] px-3 py-2 text-[10px] font-semibold text-white disabled:opacity-50"
+                        >
+                          <Plus className="size-3.5" /> Add v{group.versionNumber} to room
+                        </button>
+                      ) : null}
+                      <Link
+                        href={projectFilePath(designProjectId, group.designId, designRoomId)}
+                        className="inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-black/8 bg-white px-3 py-2 text-[10px] font-semibold text-black/50 transition hover:border-[#a594f5]/50 hover:text-[#6354d4]"
+                      >
+                        Open File <ArrowRight className="size-3.5" />
+                      </Link>
+                    </div>
                   </div>
                   <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
                     {group.designs.map((design) => (
@@ -847,6 +1076,89 @@ export function ProjectFilesDashboard({
           )}
         </section>
       </div>
+
+      {historyTarget && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Version history for ${historyTarget.fileName}`}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-[#0c1412]/45 p-4 backdrop-blur-sm"
+          onClick={() => { if (!busy) setHistoryTarget(null); }}
+        >
+          <div
+            className="w-full max-w-2xl overflow-hidden rounded-[24px] border border-white/10 bg-[#f4f2fb] shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-4 border-b border-black/8 bg-white px-5 py-4">
+              <div>
+                <div className="flex items-center gap-2">
+                  <History className="size-4 text-[#6354d4]" />
+                  <h2 className="text-base font-semibold">Version history</h2>
+                </div>
+                <p className="mt-1 text-xs text-black/45">{historyTarget.fileName}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setHistoryTarget(null)}
+                disabled={busy}
+                aria-label="Close version history"
+                className="flex size-9 items-center justify-center rounded-xl border border-black/8 text-black/45 disabled:opacity-40"
+              >
+                <X className="size-4" />
+              </button>
+            </div>
+            <div className="border-b border-[#a594f5]/20 bg-[#eeeaff] px-5 py-3 text-[10px] leading-4 text-[#5548b8]">
+              Current versions and versions used by approval rooms are protected and cannot be deleted.
+            </div>
+            <div className="max-h-[60vh] overflow-y-auto p-4">
+              {historyLoading ? (
+                <div className="flex items-center justify-center gap-2 py-12 text-xs text-black/45">
+                  <LoaderCircle className="size-4 animate-spin" /> Loading versions…
+                </div>
+              ) : historyError ? (
+                <p role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-xs text-red-700">{historyError}</p>
+              ) : !historyVersions.length ? (
+                <p className="py-12 text-center text-xs text-black/40">No versions found.</p>
+              ) : (
+                <ol className="space-y-2">
+                  {historyVersions.map((version) => (
+                    <li key={version.id} className="flex flex-col gap-3 rounded-2xl border border-black/8 bg-white p-4 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-sm font-semibold">Version {version.versionNumber}</span>
+                          {version.isCurrent ? (
+                            <span className="rounded-md bg-[#6354d4] px-2 py-0.5 text-[8px] font-bold uppercase tracking-wide text-white">Current</span>
+                          ) : null}
+                          {version.isReferenced ? (
+                            <span className="rounded-md bg-amber-100 px-2 py-0.5 text-[8px] font-bold uppercase tracking-wide text-amber-800">Protected · used in approval room</span>
+                          ) : null}
+                        </div>
+                        <p className="mt-1 text-[10px] text-black/40">
+                          {version.screenCount} screen{version.screenCount === 1 ? "" : "s"} · {formatStorageBytes(version.previewBytes)} previews · {new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(version.createdAt))}
+                        </p>
+                      </div>
+                      {version.canDelete ? (
+                        <button
+                          type="button"
+                          onClick={() => setHistoryDeleteTarget(version)}
+                          disabled={busy}
+                          className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-xl border border-red-200 px-3 py-2 text-[10px] font-semibold text-red-600 transition hover:bg-red-50 disabled:opacity-40"
+                        >
+                          <Trash2 className="size-3.5" /> Delete version
+                        </button>
+                      ) : (
+                        <span className="shrink-0 text-[9px] font-medium text-black/30">
+                          {version.isCurrent ? "Current version" : "Deletion unavailable"}
+                        </span>
+                      )}
+                    </li>
+                  ))}
+                </ol>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {combineOpen && canCombine && (
         <div
@@ -977,12 +1289,42 @@ export function ProjectFilesDashboard({
               )}
 
               {modalMode === "import" && (
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <button
+                    type="button"
+                    onClick={() => { setModalMode("api"); setModalError(null); }}
+                    className="rounded-2xl border border-white/10 bg-white/5 p-4 text-left transition hover:border-[#a594f5]/40 hover:bg-white/8"
+                  >
+                    <Workflow className="size-4 text-[#a594f5]" />
+                    <p className="mt-3 text-sm font-semibold">Figma REST API</p>
+                    <p className="mt-1 text-[10px] leading-4 text-white/45">Connect your Figma account, then paste a file URL.</p>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { void openPluginImport(); }}
+                    className="rounded-2xl border border-white/10 bg-white/5 p-4 text-left transition hover:border-[#a594f5]/40 hover:bg-white/8"
+                  >
+                    <Upload className="size-4 text-[#a594f5]" />
+                    <p className="mt-3 text-sm font-semibold">Local Figma plugin</p>
+                    <p className="mt-1 text-[10px] leading-4 text-white/45">Send selected frames directly from Figma Desktop without REST limits.</p>
+                  </button>
+                  <button type="button" onClick={() => setModalMode("choose")} className="justify-self-start rounded-xl border border-white/10 px-4 py-2.5 text-[10px] font-semibold text-white/55 sm:col-span-2">Back</button>
+                </div>
+              )}
+
+              {modalMode === "api" && (
                 !status?.configured ? (
-                  <p className="rounded-xl bg-white/8 p-4 text-xs text-white/60">Add the Figma OAuth environment variables before importing.</p>
+                  <div className="space-y-4">
+                    <p className="rounded-xl bg-white/8 p-4 text-xs text-white/60">Figma integration must be configured before you can import with the REST API.</p>
+                    <button type="button" onClick={() => setModalMode("import")} className="rounded-xl border border-white/10 px-4 py-2.5 text-[10px] font-semibold text-white/55">Back</button>
+                  </div>
                 ) : !status.connected ? (
-                  <a href="/api/integrations/figma/connect" className="flex items-center justify-center gap-2 rounded-xl bg-[#e4dffc] px-5 py-3 text-xs font-semibold text-[#6354d4]">
-                    Connect Figma <ArrowRight className="size-4" />
-                  </a>
+                  <div className="space-y-4">
+                    <a href={`/api/integrations/figma/connect?projectKey=${encodeURIComponent(projectKey)}`} className="flex items-center justify-center gap-2 rounded-xl bg-[#e4dffc] px-5 py-3 text-xs font-semibold text-[#6354d4]">
+                      Connect Figma <ArrowRight className="size-4" />
+                    </a>
+                    <button type="button" onClick={() => setModalMode("import")} className="rounded-xl border border-white/10 px-4 py-2.5 text-[10px] font-semibold text-white/55">Back</button>
+                  </div>
                 ) : (
                   <form onSubmit={importFile} className="space-y-4">
                     <label htmlFor="dashboard-figma-url" className="block text-[10px] font-semibold uppercase tracking-wider text-white/40">Figma file URL</label>
@@ -992,7 +1334,7 @@ export function ProjectFilesDashboard({
                       onChange={(event) => setFileUrl(event.target.value)}
                       disabled={busy}
                       required
-                      placeholder="https://www.figma.com/design/FILE_KEY/Project"
+                      placeholder="https://www.figma.com/design/FILE_KEY/Design"
                       className="h-11 w-full rounded-xl border border-white/10 bg-white/5 px-3 text-sm outline-none ring-[#7c6cf0]/40 placeholder:text-white/25 focus:ring-2 disabled:opacity-50"
                     />
                     {importProgress && (
@@ -1017,13 +1359,8 @@ export function ProjectFilesDashboard({
                         )}
                       </div>
                     )}
-                    {status.pluginConfigured && (
-                      <p className="text-[10px] text-white/35">
-                        Prefer the local plugin to avoid REST limits. Paste this project key in the plugin: <code className="text-white/55">{projectKey}</code>
-                      </p>
-                    )}
                     <div className="flex justify-between gap-2">
-                      <button type="button" disabled={busy} onClick={() => setModalMode("choose")} className="rounded-xl border border-white/10 px-4 py-2.5 text-[10px] font-semibold text-white/55 disabled:opacity-40">Back</button>
+                      <button type="button" disabled={busy} onClick={() => setModalMode("import")} className="rounded-xl border border-white/10 px-4 py-2.5 text-[10px] font-semibold text-white/55 disabled:opacity-40">Back</button>
                       <button type="submit" disabled={busy || !fileUrl.trim()} className="flex items-center gap-2 rounded-xl bg-[#6354d4] px-4 py-2.5 text-[10px] font-semibold text-[#e4dffc] disabled:opacity-40">
                         {busy ? <LoaderCircle className="size-3.5 animate-spin" /> : <Plus className="size-3.5" />}
                         Import File
@@ -1031,6 +1368,77 @@ export function ProjectFilesDashboard({
                     </div>
                   </form>
                 )
+              )}
+
+              {modalMode === "plugin" && (
+                <div className="space-y-4">
+                  <ol className="space-y-3 text-xs text-white/60">
+                    <li className="rounded-xl bg-white/5 p-3">
+                      <strong className="block text-[10px] uppercase tracking-wider text-white/35">1 · Import the manifest</strong>
+                      <span className="mt-1 block leading-5">In Figma Desktop, choose Plugins → Development → Import plugin from manifest, then select:</span>
+                      <code className="mt-2 block rounded-lg bg-black/20 px-2.5 py-2 text-[10px] text-[#e4dffc]">figma-plugin/manifest.json</code>
+                    </li>
+                    <li className="rounded-xl bg-white/5 p-3">
+                      <strong className="block text-[10px] uppercase tracking-wider text-white/35">2 · Run the plugin</strong>
+                      <span className="mt-1 block leading-5">Open your design, then run Plugins → Development → Pass-Off Exporter.</span>
+                    </li>
+                    <li className="rounded-xl bg-white/5 p-3">
+                      <strong className="block text-[10px] uppercase tracking-wider text-white/35">3 · Add this destination</strong>
+                      <span className="mt-2 block text-[10px] text-white/35">Project ID</span>
+                      <div className="mt-2 flex gap-2">
+                        <input aria-label="Project ID" readOnly value={projectKey} className="h-10 min-w-0 flex-1 rounded-lg border border-white/10 bg-black/20 px-2.5 font-mono text-[10px] text-[#e4dffc] outline-none" />
+                        <button type="button" onClick={() => { void copyProjectId(); }} className="flex h-10 shrink-0 items-center gap-1.5 rounded-lg bg-[#e4dffc] px-3 text-[10px] font-semibold text-[#6354d4]">
+                          {projectIdCopied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+                          {projectIdCopied ? "Copied" : "Copy"}
+                        </button>
+                      </div>
+                      <span className="mt-3 block text-[10px] text-white/35">Project plugin key</span>
+                      {pluginKeyBusy ? (
+                        <div className="mt-2 flex items-center gap-2 rounded-lg bg-black/20 px-2.5 py-3 text-[10px] text-white/45">
+                          <LoaderCircle className="size-3.5 animate-spin" /> Loading project key…
+                        </div>
+                      ) : projectPluginKey ? (
+                        <div className="mt-2">
+                          <div className="flex gap-2">
+                            <input aria-label="Project plugin key" readOnly value={projectPluginKey} className="h-10 min-w-0 flex-1 rounded-lg border border-white/10 bg-black/20 px-2.5 font-mono text-[10px] text-[#e4dffc] outline-none" />
+                            <button type="button" onClick={() => { void copyPluginKey(); }} className="flex h-10 shrink-0 items-center gap-1.5 rounded-lg bg-[#e4dffc] px-3 text-[10px] font-semibold text-[#6354d4]">
+                              {pluginKeyCopied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+                              {pluginKeyCopied ? "Copied" : "Copy"}
+                            </button>
+                          </div>
+                          <p className="mt-2 text-[9px] leading-4 text-[#f3c56f]">This key is shown once. Paste it into Figma now; Pass-Off stores only its hash.</p>
+                        </div>
+                      ) : pluginKeyStatus?.configured ? (
+                        <div className="mt-2 rounded-lg border border-white/10 bg-black/15 p-2.5">
+                          <div className="flex items-center gap-2 text-[10px] text-[#e4dffc]"><KeyRound className="size-3.5" /> A project key is active.</div>
+                          {pluginKeyStatus.createdAt && <p className="mt-1 text-[9px] text-white/30">Created {new Date(pluginKeyStatus.createdAt).toLocaleString()}</p>}
+                          {confirmKeyRotation ? (
+                            <div className="mt-3">
+                              <p className="text-[9px] leading-4 text-[#f3c56f]">Rotating immediately invalidates the key currently stored in Figma.</p>
+                              <div className="mt-2 flex gap-2">
+                                <button type="button" onClick={() => setConfirmKeyRotation(false)} className="rounded-lg border border-white/10 px-2.5 py-1.5 text-[9px] font-semibold text-white/50">Cancel</button>
+                                <button type="button" onClick={() => { void createPluginKey(true); }} className="rounded-lg bg-[#e4dffc] px-2.5 py-1.5 text-[9px] font-semibold text-[#6354d4]">Confirm rotation</button>
+                              </div>
+                            </div>
+                          ) : (
+                            <button type="button" onClick={() => setConfirmKeyRotation(true)} className="mt-2 flex items-center gap-1.5 rounded-lg border border-white/10 px-2.5 py-1.5 text-[9px] font-semibold text-white/50"><RefreshCw className="size-3" />Rotate key</button>
+                          )}
+                        </div>
+                      ) : (
+                        <button type="button" onClick={() => { void createPluginKey(false); }} className="mt-2 flex items-center gap-2 rounded-lg bg-[#e4dffc] px-3 py-2.5 text-[10px] font-semibold text-[#6354d4]"><KeyRound className="size-3.5" />Generate project key</button>
+                      )}
+                    </li>
+                    <li className="rounded-xl bg-white/5 p-3">
+                      <strong className="block text-[10px] uppercase tracking-wider text-white/35">4 · Export screens</strong>
+                      <span className="mt-1 block leading-5">Paste the destination ID and project plugin key into Figma, then select Export screens.</span>
+                    </li>
+                  </ol>
+                  {modalError && <p role="alert" className="rounded-xl border border-[#e6a44c]/30 bg-[#4a3518]/35 p-3 text-[10px] leading-4 text-[#f3c56f]">{modalError}</p>}
+                  <div className="flex justify-between gap-2">
+                    <button type="button" onClick={() => setModalMode("import")} className="rounded-xl border border-white/10 px-4 py-2.5 text-[10px] font-semibold text-white/55">Back</button>
+                    <button type="button" onClick={() => { closeModal(); void loadProject({ silent: true }); }} className="rounded-xl bg-[#6354d4] px-4 py-2.5 text-[10px] font-semibold text-[#e4dffc]">Done</button>
+                  </div>
+                </div>
               )}
 
               {modalMode === "create" && (
@@ -1103,6 +1511,31 @@ export function ProjectFilesDashboard({
         </div>
       )}
 
+      <AlertDialog open={Boolean(historyDeleteTarget)} onOpenChange={(open) => { if (!open && !busy) setHistoryDeleteTarget(null); }}>
+        <AlertDialogContent size="sm">
+          <AlertDialogHeader>
+            <AlertDialogMedia className="bg-[#fff1eb] text-[#a14428]">
+              <Trash2 />
+            </AlertDialogMedia>
+            <AlertDialogTitle>Delete version {historyDeleteTarget?.versionNumber}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This removes its immutable screen data, annotations, and previews. This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              disabled={busy}
+              onClick={() => { void deleteHistoricalVersion(); }}
+            >
+              {busy ? <LoaderCircle className="size-3.5 animate-spin" /> : null}
+              Delete Version
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       <AlertDialog open={deleteSelectedOpen} onOpenChange={(open) => { if (!open && !busy) setDeleteSelectedOpen(false); }}>
         <AlertDialogContent size="sm">
           <AlertDialogHeader>
@@ -1114,8 +1547,8 @@ export function ProjectFilesDashboard({
             </AlertDialogTitle>
             <AlertDialogDescription>
               {selectedDesigns.length === 1
-                ? `“${selectedDesigns[0]?.name}” will be removed from this project, including its preview${selectedDesigns[0]?.isCombined ? "s and breakpoint group" : ""}. This cannot be undone.`
-                : `The ${selectedDesigns.length} selected designs will be removed from this project, including previews and any breakpoint groups. This cannot be undone.`}
+                ? `“${selectedDesigns[0]?.name}” will be removed from this ${ownerLabel}, including its preview${selectedDesigns[0]?.isCombined ? "s and breakpoint group" : ""}. This cannot be undone.`
+                : `The ${selectedDesigns.length} selected designs will be removed from this ${ownerLabel}, including previews and any breakpoint groups. This cannot be undone.`}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -1181,9 +1614,9 @@ export function ProjectFilesDashboard({
             <AlertDialogMedia className="bg-[#fff1eb] text-[#a14428]">
               <Trash2 />
             </AlertDialogMedia>
-            <AlertDialogTitle>Delete All project files?</AlertDialogTitle>
+            <AlertDialogTitle>Delete all design files?</AlertDialogTitle>
             <AlertDialogDescription>
-              {`This removes ${Math.max(imports.length, fileCount)} file${Math.max(imports.length, fileCount) === 1 ? "" : "s"} and ${designs.length} design${designs.length === 1 ? "" : "s"} from this project, including breakpoint groups and previews. This cannot be undone.`}
+              {`This removes ${Math.max(imports.length, fileCount)} file${Math.max(imports.length, fileCount) === 1 ? "" : "s"} and ${designs.length} design${designs.length === 1 ? "" : "s"} from this ${ownerLabel}, including breakpoint groups and previews. This cannot be undone.`}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -1199,6 +1632,6 @@ export function ProjectFilesDashboard({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </main>
+    </>
   );
 }

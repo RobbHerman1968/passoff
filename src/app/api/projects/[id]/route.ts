@@ -1,14 +1,7 @@
-import { and, eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 
-import { db } from "@/db";
-import { projects } from "@/db/schema";
-import { deleteAllFigmaImports } from "@/lib/figma/persistence";
 import { archiveRoom, deleteRoom, getRoomBundle, updateRoom } from "@/lib/rooms/service";
-import {
-  getDefaultWorkspaceScope,
-  getTenantContextForProjectKey,
-} from "@/lib/tenant/context";
+import { getDefaultWorkspaceScope } from "@/lib/tenant/context";
 
 export const runtime = "nodejs";
 
@@ -19,12 +12,12 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    const { id } = await params;
-    if (!uuidPattern.test(id)) {
+    const { id: roomId } = await params;
+    if (!uuidPattern.test(roomId)) {
       return NextResponse.json({ error: "A valid room id is required." }, { status: 400 });
     }
     const scope = await getDefaultWorkspaceScope();
-    const bundle = await getRoomBundle(scope.workspaceId, id);
+    const bundle = await getRoomBundle(scope.workspaceId, roomId);
     return NextResponse.json(bundle, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     return NextResponse.json(
@@ -39,8 +32,8 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    const { id } = await params;
-    if (!uuidPattern.test(id)) {
+    const { id: roomId } = await params;
+    if (!uuidPattern.test(roomId)) {
       return NextResponse.json({ error: "A valid room id is required." }, { status: 400 });
     }
     const body = (await request.json()) as {
@@ -50,21 +43,21 @@ export async function PATCH(
     };
     const scope = await getDefaultWorkspaceScope();
     if (body.action === "archive") {
-      await archiveRoom(scope, id);
+      await archiveRoom(scope, roomId);
       return NextResponse.json({ ok: true, status: "ARCHIVED" });
     }
     if (body.action === "rename") {
       const name = typeof body.name === "string" ? body.name : "";
       const clientName = typeof body.clientName === "string" ? body.clientName : "";
-      const project = await updateRoom(scope, id, { name, clientName });
+      const room = await updateRoom(scope, roomId, { name, clientName });
       return NextResponse.json(
         {
           ok: true,
-          id: project.id,
-          name: project.name,
-          clientName: project.clientName,
-          slug: project.slug,
-          status: project.status,
+          id: room.id,
+          name: room.name,
+          clientName: room.clientName,
+          slug: room.slug,
+          status: room.status,
         },
         { headers: { "Cache-Control": "no-store" } },
       );
@@ -86,30 +79,21 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    const { id } = await params;
-    if (!uuidPattern.test(id)) {
-      return NextResponse.json({ error: "A valid project id is required." }, { status: 400 });
+    const { id: roomId } = await params;
+    if (!uuidPattern.test(roomId)) {
+      return NextResponse.json({ error: "A valid room id is required." }, { status: 400 });
     }
 
     const scope = await getDefaultWorkspaceScope();
-    const project = (await db
-      .select()
-      .from(projects)
-      .where(and(eq(projects.id, id), eq(projects.workspaceId, scope.workspaceId)))
-      .limit(1))[0];
-
-    if (!project) {
-      return NextResponse.json({ error: "Project not found." }, { status: 404 });
-    }
-
-    const tenant = await getTenantContextForProjectKey(project.id);
-    await deleteAllFigmaImports(tenant);
-    const result = await deleteRoom(scope, project.id);
+    const result = await deleteRoom(scope, roomId);
 
     return NextResponse.json(result, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
+    const { authzResponse } = await import("@/lib/auth/authorization");
+    const authz = authzResponse(error);
+    if (authz) return authz;
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Unable to delete the project." },
+      { error: error instanceof Error ? error.message : "Unable to delete the room." },
       { status: 400 },
     );
   }

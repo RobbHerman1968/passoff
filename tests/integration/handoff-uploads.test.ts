@@ -17,7 +17,7 @@ async function seedRoom(stamp: string, status: "DRAFT" | "SENT" | "APPROVED" | "
   const { createPasswordUser } = await import("@/lib/auth/password");
   const { createPrivateTenantForUser } = await import("@/lib/auth/tenant-membership");
   const { db } = await import("@/db");
-  const { projects, workspaces } = await import("@/db/schema");
+  const { rooms, workspaces } = await import("@/db/schema");
 
   const user = await createPasswordUser({
     email: `handoff-up-${stamp}@example.com`,
@@ -38,7 +38,7 @@ async function seedRoom(stamp: string, status: "DRAFT" | "SENT" | "APPROVED" | "
     userEmail: user.email || "",
   };
   const [room] = await db
-    .insert(projects)
+    .insert(rooms)
     .values({
       organizationId: workspace.organizationId,
       workspaceId: tenant.workspaceId,
@@ -125,7 +125,7 @@ describe.skipIf(!hasDb)("handoff direct upload authorization", () => {
     await expect(
       prepareHandoffDirectUpload({
         scope: a.scope,
-        projectId: "11111111-1111-4111-8111-111111111111",
+        roomId: "11111111-1111-4111-8111-111111111111",
         fileName: "pack.zip",
         contentType: "application/zip",
         size: 10,
@@ -135,7 +135,7 @@ describe.skipIf(!hasDb)("handoff direct upload authorization", () => {
     await expect(
       prepareHandoffDirectUpload({
         scope: a.scope,
-        projectId: b.room.id,
+        roomId: b.room.id,
         fileName: "pack.zip",
         contentType: "application/zip",
         size: 10,
@@ -152,7 +152,7 @@ describe.skipIf(!hasDb)("handoff direct upload authorization", () => {
       await expect(
         prepareHandoffDirectUpload({
           scope: ctx.scope,
-          projectId: ctx.room.id,
+          roomId: ctx.room.id,
           fileName: "pack.zip",
           contentType: "application/zip",
           size: 10,
@@ -163,12 +163,12 @@ describe.skipIf(!hasDb)("handoff direct upload authorization", () => {
     const approved = await seedRoom(`ok-${stamp}`, "APPROVED");
     const meta = await prepareHandoffDirectUpload({
       scope: approved.scope,
-      projectId: approved.room.id,
+      roomId: approved.room.id,
       fileName: "pack.zip",
       contentType: "application/zip",
       size: 42,
     });
-    expect(meta.projectId).toBe(approved.room.id);
+    expect(meta.roomId).toBe(approved.room.id);
     expect(meta.workspaceId).toBe(approved.scope.workspaceId);
     expect(meta.organizationId).toBe(approved.scope.organizationId);
     expect(meta.userId).toBe(approved.scope.userId);
@@ -188,7 +188,7 @@ describe.skipIf(!hasDb)("handoff direct upload authorization", () => {
     await expect(
       prepareHandoffDirectUpload({
         scope: ctx.scope,
-        projectId: ctx.room.id,
+        roomId: ctx.room.id,
         fileName: "pack.zip",
         contentType: "application/zip",
         size: MAX_UPLOAD_BYTES + 1,
@@ -198,7 +198,7 @@ describe.skipIf(!hasDb)("handoff direct upload authorization", () => {
     await expect(
       prepareHandoffDirectUpload({
         scope: ctx.scope,
-        projectId: ctx.room.id,
+        roomId: ctx.room.id,
         fileName: "pack.zip",
         contentType: "application/zip",
         size: 0,
@@ -207,7 +207,7 @@ describe.skipIf(!hasDb)("handoff direct upload authorization", () => {
 
     const meta = await prepareHandoffDirectUpload({
       scope: ctx.scope,
-      projectId: ctx.room.id,
+      roomId: ctx.room.id,
       fileName: "pack.zip",
       contentType: "application/zip",
       size: 12,
@@ -216,7 +216,7 @@ describe.skipIf(!hasDb)("handoff direct upload authorization", () => {
     await expect(
       completeHandoffDirectUpload({
         scope: ctx.scope,
-        projectId: ctx.room.id,
+        roomId: ctx.room.id,
         meta: { ...meta, size: MAX_UPLOAD_BYTES + 1 },
         blobUrl: meta.pathname,
       }),
@@ -231,7 +231,7 @@ describe.skipIf(!hasDb)("handoff direct upload authorization", () => {
 
     const meta = await prepareHandoffDirectUpload({
       scope: ctx.scope,
-      projectId: ctx.room.id,
+      roomId: ctx.room.id,
       fileName: "pack.zip",
       contentType: "application/zip",
       size: 12,
@@ -240,7 +240,7 @@ describe.skipIf(!hasDb)("handoff direct upload authorization", () => {
     await expect(
       completeHandoffDirectUpload({
         scope: ctx.scope,
-        projectId: ctx.room.id,
+        roomId: ctx.room.id,
         meta,
         blobUrl: meta.pathname,
       }),
@@ -249,7 +249,7 @@ describe.skipIf(!hasDb)("handoff direct upload authorization", () => {
     await expect(
       completeHandoffDirectUpload({
         scope: ctx.scope,
-        projectId: ctx.room.id,
+        roomId: ctx.room.id,
         meta,
         pathname: `workspaces/${ctx.scope.workspaceId}/rooms/other/handoff/x.zip`,
         blobUrl: "https://blob.example/x.zip",
@@ -259,7 +259,7 @@ describe.skipIf(!hasDb)("handoff direct upload authorization", () => {
     await expect(
       completeHandoffDirectUpload({
         scope: ctx.scope,
-        projectId: ctx.room.id,
+        roomId: ctx.room.id,
         meta,
         uploadSessionId: "different-session",
         blobUrl: "https://blob.example/x.zip",
@@ -269,7 +269,7 @@ describe.skipIf(!hasDb)("handoff direct upload authorization", () => {
     await expect(
       completeHandoffDirectUpload({
         scope: ctx.scope,
-        projectId: ctx.room.id,
+        roomId: ctx.room.id,
         meta,
         contentType: "image/png",
         blobUrl: "https://blob.example/x.zip",
@@ -280,7 +280,7 @@ describe.skipIf(!hasDb)("handoff direct upload authorization", () => {
     await expect(
       completeHandoffDirectUpload({
         scope: ctx.scope,
-        projectId: otherRoom.room.id,
+        roomId: otherRoom.room.id,
         meta,
         blobUrl: "https://blob.example/x.zip",
       }),
@@ -319,7 +319,7 @@ describe.skipIf(!hasDb)("handoff upload size verification (local adapter)", () =
 
     const meta = await prepareHandoffDirectUpload({
       scope: ctx.scope,
-      projectId: ctx.room.id,
+      roomId: ctx.room.id,
       fileName: "pack.zip",
       contentType: "application/zip",
       size: 1,
@@ -329,7 +329,7 @@ describe.skipIf(!hasDb)("handoff upload size verification (local adapter)", () =
     await expect(
       completeHandoffDirectUpload({
         scope: ctx.scope,
-        projectId: ctx.room.id,
+        roomId: ctx.room.id,
         meta,
         blobUrl: meta.pathname,
       }),
@@ -339,7 +339,7 @@ describe.skipIf(!hasDb)("handoff upload size verification (local adapter)", () =
     const itemRows = await db
       .select()
       .from(handoffItems)
-      .where(eq(handoffItems.projectId, ctx.room.id));
+      .where(eq(handoffItems.roomId, ctx.room.id));
     expect(assetRows).toHaveLength(0);
     expect(itemRows).toHaveLength(0);
   });
@@ -353,7 +353,7 @@ describe.skipIf(!hasDb)("handoff upload size verification (local adapter)", () =
 
     const meta = await prepareHandoffDirectUpload({
       scope: ctx.scope,
-      projectId: ctx.room.id,
+      roomId: ctx.room.id,
       fileName: "pack.zip",
       contentType: "application/zip",
       size: 64,
@@ -363,7 +363,7 @@ describe.skipIf(!hasDb)("handoff upload size verification (local adapter)", () =
     await expect(
       completeHandoffDirectUpload({
         scope: ctx.scope,
-        projectId: ctx.room.id,
+        roomId: ctx.room.id,
         meta,
         blobUrl: meta.pathname,
       }),
@@ -381,11 +381,11 @@ describe.skipIf(!hasDb)("handoff upload size verification (local adapter)", () =
       listReleasedHandoffItems,
     } = await import("@/lib/rooms/service");
     const { db } = await import("@/db");
-    const { assets, handoffItems, projects } = await import("@/db/schema");
+    const { assets, handoffItems, rooms } = await import("@/db/schema");
 
     await addHandoffItem({
       scope: ctx.scope,
-      projectId: ctx.room.id,
+      roomId: ctx.room.id,
       label: "Existing",
       category: "note",
     });
@@ -394,7 +394,7 @@ describe.skipIf(!hasDb)("handoff upload size verification (local adapter)", () =
 
     const meta = await prepareHandoffDirectUpload({
       scope: ctx.scope,
-      projectId: ctx.room.id,
+      roomId: ctx.room.id,
       fileName: "pack.zip",
       contentType: "application/zip",
       size: 8,
@@ -403,21 +403,21 @@ describe.skipIf(!hasDb)("handoff upload size verification (local adapter)", () =
     await expect(
       completeHandoffDirectUpload({
         scope: ctx.scope,
-        projectId: ctx.room.id,
+        roomId: ctx.room.id,
         meta,
         blobUrl: meta.pathname,
       }),
     ).rejects.toThrow(/not found/i);
 
     expect(await listReleasedHandoffItems(ctx.room.id)).toHaveLength(1);
-    const [room] = await db.select().from(projects).where(eq(projects.id, ctx.room.id)).limit(1);
+    const [room] = await db.select().from(rooms).where(eq(rooms.id, ctx.room.id)).limit(1);
     expect(room?.handoffReleasedAt).toBeTruthy();
 
     const assetRows = await db.select().from(assets).where(eq(assets.uploadSessionId, meta.uploadSessionId));
     const fileItems = await db
       .select()
       .from(handoffItems)
-      .where(and(eq(handoffItems.projectId, ctx.room.id), eq(handoffItems.category, "file")));
+      .where(and(eq(handoffItems.roomId, ctx.room.id), eq(handoffItems.category, "file")));
     expect(assetRows).toHaveLength(0);
     expect(fileItems).toHaveLength(0);
   });
@@ -438,7 +438,7 @@ describe.skipIf(!hasDb)("handoff upload size verification (local adapter)", () =
 
     await addHandoffItem({
       scope: ctx.scope,
-      projectId: ctx.room.id,
+      roomId: ctx.room.id,
       label: "Existing",
       category: "note",
     });
@@ -448,7 +448,7 @@ describe.skipIf(!hasDb)("handoff upload size verification (local adapter)", () =
     const bytes = Buffer.from("PK\u0003\u0004test");
     const meta = await prepareHandoffDirectUpload({
       scope: ctx.scope,
-      projectId: ctx.room.id,
+      roomId: ctx.room.id,
       fileName: "pack.zip",
       contentType: "application/zip",
       size: bytes.byteLength,
@@ -457,7 +457,7 @@ describe.skipIf(!hasDb)("handoff upload size verification (local adapter)", () =
 
     const first = await completeHandoffDirectUpload({
       scope: ctx.scope,
-      projectId: ctx.room.id,
+      roomId: ctx.room.id,
       meta,
       blobUrl: stored.url || meta.pathname,
     });
@@ -472,7 +472,7 @@ describe.skipIf(!hasDb)("handoff upload size verification (local adapter)", () =
 
     const second = await completeHandoffDirectUpload({
       scope: ctx.scope,
-      projectId: ctx.room.id,
+      roomId: ctx.room.id,
       meta,
       blobUrl: stored.url || meta.pathname,
     });
@@ -522,11 +522,11 @@ describe.skipIf(!hasDb)("handoff upload atomic completion", () => {
     } = await import("@/lib/rooms/service");
     const { writeAssetBytes, readAssetBytes } = await import("@/lib/rooms/storage");
     const { db } = await import("@/db");
-    const { assets, handoffItems, projects } = await import("@/db/schema");
+    const { assets, handoffItems, rooms } = await import("@/db/schema");
 
     await addHandoffItem({
       scope: ctx.scope,
-      projectId: ctx.room.id,
+      roomId: ctx.room.id,
       label: "Existing",
       category: "note",
     });
@@ -536,7 +536,7 @@ describe.skipIf(!hasDb)("handoff upload atomic completion", () => {
     const bytes = Buffer.from("PK\u0003\u0004concurrent");
     const meta = await prepareHandoffDirectUpload({
       scope: ctx.scope,
-      projectId: ctx.room.id,
+      roomId: ctx.room.id,
       fileName: "pack.zip",
       contentType: "application/zip",
       size: bytes.byteLength,
@@ -546,13 +546,13 @@ describe.skipIf(!hasDb)("handoff upload atomic completion", () => {
     const [a, b] = await Promise.all([
       completeHandoffDirectUpload({
         scope: ctx.scope,
-        projectId: ctx.room.id,
+        roomId: ctx.room.id,
         meta,
         blobUrl: meta.pathname,
       }),
       completeHandoffDirectUpload({
         scope: ctx.scope,
-        projectId: ctx.room.id,
+        roomId: ctx.room.id,
         meta,
         blobUrl: meta.pathname,
       }),
@@ -578,7 +578,7 @@ describe.skipIf(!hasDb)("handoff upload atomic completion", () => {
 
     expect(await readAssetBytes(meta.pathname)).toEqual(bytes);
     expect(await listReleasedHandoffItems(ctx.room.id)).toEqual([]);
-    const [room] = await db.select().from(projects).where(eq(projects.id, ctx.room.id)).limit(1);
+    const [room] = await db.select().from(rooms).where(eq(rooms.id, ctx.room.id)).limit(1);
     expect(room?.handoffReleasedAt).toBeNull();
   });
 
@@ -594,7 +594,7 @@ describe.skipIf(!hasDb)("handoff upload atomic completion", () => {
     const bytes = Buffer.from("PK\u0003\u0004partial");
     const meta = await prepareHandoffDirectUpload({
       scope: ctx.scope,
-      projectId: ctx.room.id,
+      roomId: ctx.room.id,
       fileName: "pack.zip",
       contentType: "application/zip",
       size: bytes.byteLength,
@@ -605,7 +605,7 @@ describe.skipIf(!hasDb)("handoff upload atomic completion", () => {
       .insert(assets)
       .values({
         workspaceId: ctx.scope.workspaceId,
-        projectId: ctx.room.id,
+        roomId: ctx.room.id,
         kind: "file",
         label: "Orphan",
         objectKey: meta.pathname,
@@ -621,7 +621,7 @@ describe.skipIf(!hasDb)("handoff upload atomic completion", () => {
 
     const repaired = await completeHandoffDirectUpload({
       scope: ctx.scope,
-      projectId: ctx.room.id,
+      roomId: ctx.room.id,
       meta,
       blobUrl: meta.pathname,
     });
@@ -632,7 +632,7 @@ describe.skipIf(!hasDb)("handoff upload atomic completion", () => {
 
     const again = await completeHandoffDirectUpload({
       scope: ctx.scope,
-      projectId: ctx.room.id,
+      roomId: ctx.room.id,
       meta,
       blobUrl: meta.pathname,
     });
@@ -664,7 +664,7 @@ describe.skipIf(!hasDb)("handoff upload atomic completion", () => {
     const bytes = Buffer.from("PK\u0003\u0004ok");
     const meta = await service.prepareHandoffDirectUpload({
       scope: ctx.scope,
-      projectId: ctx.room.id,
+      roomId: ctx.room.id,
       fileName: "pack.zip",
       contentType: "application/zip",
       size: bytes.byteLength,
@@ -681,7 +681,7 @@ describe.skipIf(!hasDb)("handoff upload atomic completion", () => {
     await expect(
       service.completeHandoffDirectUpload({
         scope: ctx.scope,
-        projectId: ctx.room.id,
+        roomId: ctx.room.id,
         meta,
         blobUrl: evilUrl,
       }),
@@ -717,7 +717,7 @@ describe.skipIf(!hasDb)("handoff upload atomic completion", () => {
     const bytes = Buffer.from("PK\u0003\u0004race");
     const meta = await service.prepareHandoffDirectUpload({
       scope: ctx.scope,
-      projectId: ctx.room.id,
+      roomId: ctx.room.id,
       fileName: "pack.zip",
       contentType: "application/zip",
       size: bytes.byteLength,
@@ -728,7 +728,7 @@ describe.skipIf(!hasDb)("handoff upload atomic completion", () => {
       .insert(assets)
       .values({
         workspaceId: ctx.scope.workspaceId,
-        projectId: ctx.room.id,
+        roomId: ctx.room.id,
         kind: "file",
         label: "Winner",
         objectKey: meta.pathname,
@@ -744,7 +744,7 @@ describe.skipIf(!hasDb)("handoff upload atomic completion", () => {
 
     const result = await service.completeHandoffDirectUpload({
       scope: ctx.scope,
-      projectId: ctx.room.id,
+      roomId: ctx.room.id,
       meta,
       blobUrl: meta.pathname,
     });
@@ -770,7 +770,7 @@ describe.skipIf(!hasDb)("handoff upload atomic completion", () => {
     const storage = await import("@/lib/rooms/storage");
     const service = await import("@/lib/rooms/service");
     const { db } = await import("@/db");
-    const { projects } = await import("@/db/schema");
+    const { rooms } = await import("@/db/schema");
 
     const deleteSpy = vi.spyOn(storage, "deleteAssetBytes");
     const queueSpy = vi.spyOn(service, "queueBlobDeletion");
@@ -778,7 +778,7 @@ describe.skipIf(!hasDb)("handoff upload atomic completion", () => {
     const bytes = Buffer.from("PK\u0003\u0004retry");
     const meta = await service.prepareHandoffDirectUpload({
       scope: ctx.scope,
-      projectId: ctx.room.id,
+      roomId: ctx.room.id,
       fileName: "pack.zip",
       contentType: "application/zip",
       size: bytes.byteLength,
@@ -786,14 +786,14 @@ describe.skipIf(!hasDb)("handoff upload atomic completion", () => {
     await storage.writeAssetBytes(meta.pathname, bytes, "application/zip");
 
     await db
-      .update(projects)
+      .update(rooms)
       .set({ status: "ARCHIVED", archivedAt: new Date(), updatedAt: new Date() })
-      .where(eq(projects.id, ctx.room.id));
+      .where(eq(rooms.id, ctx.room.id));
 
     await expect(
       service.completeHandoffDirectUpload({
         scope: ctx.scope,
-        projectId: ctx.room.id,
+        roomId: ctx.room.id,
         meta,
         blobUrl: meta.pathname,
       }),
@@ -809,13 +809,13 @@ describe.skipIf(!hasDb)("handoff upload atomic completion", () => {
     expect(await storage.readAssetBytes(meta.pathname)).toEqual(bytes);
 
     await db
-      .update(projects)
+      .update(rooms)
       .set({ status: "APPROVED", archivedAt: null, updatedAt: new Date() })
-      .where(eq(projects.id, ctx.room.id));
+      .where(eq(rooms.id, ctx.room.id));
 
     const result = await service.completeHandoffDirectUpload({
       scope: ctx.scope,
-      projectId: ctx.room.id,
+      roomId: ctx.room.id,
       meta,
       blobUrl: meta.pathname,
     });

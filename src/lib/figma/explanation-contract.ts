@@ -49,6 +49,10 @@ export function isValidFigmaCoordinate(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 100;
 }
 
+export function isValidFigmaSelectionSize(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0.01 && value <= 100;
+}
+
 export function isValidFigmaFileKey(value: unknown): value is string {
   return typeof value === "string" && /^[A-Za-z0-9_-]+$/.test(value);
 }
@@ -68,6 +72,8 @@ function optionalText(value: unknown, maxLength: number) {
 
 export type CreateFigmaExplanationInput = {
   projectKey: string;
+  designId: string;
+  designVersionId: string;
   fileKey: string;
   fileName: string;
   screenId: string;
@@ -76,6 +82,8 @@ export type CreateFigmaExplanationInput = {
   figmaNodeName: string | null;
   x: number;
   y: number;
+  selectionWidth: number | null;
+  selectionHeight: number | null;
   category: FigmaExplanationCategory;
   title: string;
   body: string;
@@ -97,6 +105,8 @@ export function parseCreateFigmaExplanation(
   value: Record<string, unknown>,
 ): CreateFigmaExplanationInput | null {
   const projectKey = requiredText(value.projectKey, 200);
+  const designId = requiredText(value.designId, 200);
+  const designVersionId = requiredText(value.designVersionId, 200);
   const fileName = requiredText(value.fileName, 200);
   const screenId = requiredText(value.screenId, 200);
   const screenName = requiredText(value.screenName, 200);
@@ -104,8 +114,12 @@ export function parseCreateFigmaExplanation(
   const body = requiredText(value.body, 4_000);
   const figmaNodeId = optionalText(value.figmaNodeId, 200);
   const figmaNodeName = optionalText(value.figmaNodeName, 200);
+  const hasSelectionWidth = value.selectionWidth !== undefined && value.selectionWidth !== null;
+  const hasSelectionHeight = value.selectionHeight !== undefined && value.selectionHeight !== null;
   if (
     !projectKey
+    || !designId
+    || !designVersionId
     || !isValidFigmaFileKey(value.fileKey)
     || !fileName
     || !screenId
@@ -116,6 +130,15 @@ export function parseCreateFigmaExplanation(
     || figmaNodeName === undefined
     || !isValidFigmaCoordinate(value.x)
     || !isValidFigmaCoordinate(value.y)
+    || hasSelectionWidth !== hasSelectionHeight
+    || (hasSelectionWidth && (
+      !isValidFigmaSelectionSize(value.selectionWidth)
+      || !isValidFigmaSelectionSize(value.selectionHeight)
+      || value.x - value.selectionWidth / 2 < 0
+      || value.x + value.selectionWidth / 2 > 100
+      || value.y - value.selectionHeight / 2 < 0
+      || value.y + value.selectionHeight / 2 > 100
+    ))
     || !isFigmaExplanationCategory(value.category)
     || !isFigmaExplanationStatus(value.status)
   ) {
@@ -123,6 +146,8 @@ export function parseCreateFigmaExplanation(
   }
   return {
     projectKey,
+    designId,
+    designVersionId,
     fileKey: value.fileKey,
     fileName,
     screenId,
@@ -131,6 +156,8 @@ export function parseCreateFigmaExplanation(
     figmaNodeName,
     x: value.x,
     y: value.y,
+    selectionWidth: hasSelectionWidth ? value.selectionWidth as number : null,
+    selectionHeight: hasSelectionHeight ? value.selectionHeight as number : null,
     category: value.category,
     title,
     body,
@@ -185,7 +212,8 @@ export function buildFigmaExplanationsUrl(
   projectKey: string,
   fileKey: string,
   screenId: string,
+  designVersionId: string,
 ) {
-  const query = new URLSearchParams({ projectKey, fileKey, screenId });
+  const query = new URLSearchParams({ projectKey, fileKey, screenId, designVersionId });
   return `/api/integrations/figma/explanations?${query.toString()}`;
 }

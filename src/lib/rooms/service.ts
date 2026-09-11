@@ -7,12 +7,18 @@ import {
   approvals,
   assets,
   blobDeletionJobs,
+  clientProjects,
+  designVersionExplanations,
+  figmaExplanations,
   handoffItems,
-  projects,
+  projectDesigns,
+  projectDesignVersions,
   reviewers,
   revisionAssets,
+  revisionDesignVersions,
   revisions,
   roomComments,
+  rooms,
   shareLinks,
 } from "@/db/schema";
 import { getWorkspaceNotificationEmail } from "@/lib/auth/tenant-membership";
@@ -46,26 +52,53 @@ import {
 } from "@/lib/rooms/storage";
 import {
   serializeApprovalReceipt,
+  type ApprovalReceiptDesignVersion,
   type ApprovalReceiptSource,
   type ApprovalReceiptView,
 } from "@/lib/rooms/approval-receipt";
 import { DEFAULT_APPROVAL_STATEMENT } from "@/lib/rooms/types";
 import { getSiteUrl } from "@/lib/site";
+import { designVersionPreviewPublicUrl } from "@/lib/figma/preview-storage";
 import {
-  allocateUniqueProjectSlug,
+  isVideoDesignVersionPayload,
+  parseAnyProjectDesignVersion,
+} from "@/lib/projects/design-version";
+import {
+  allocateUniqueRoomSlug,
   type WorkspaceScope,
 } from "@/lib/tenant/scope";
 
 const ACTIVE_ROOM_STATUSES = ["DRAFT", "SENT", "VIEWED", "CHANGES_REQUESTED", "APPROVED"] as const;
 
+type DesignDisplayMeta = {
+  designName?: string;
+  selectedScreenIds?: string[];
+};
+
+function parseDesignDisplayMeta(value: string): DesignDisplayMeta {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!parsed || typeof parsed !== "object") return {};
+    const record = parsed as Record<string, unknown>;
+    return {
+      designName: typeof record.designName === "string" ? record.designName : undefined,
+      selectedScreenIds: Array.isArray(record.selectedScreenIds)
+        ? record.selectedScreenIds.filter((id): id is string => typeof id === "string")
+        : undefined,
+    };
+  } catch {
+    return {};
+  }
+}
+
 export async function countActiveRooms(workspaceId: string) {
   const rows = await db
-    .select({ id: projects.id })
-    .from(projects)
+    .select({ id: rooms.id })
+    .from(rooms)
     .where(
       and(
-        eq(projects.workspaceId, workspaceId),
-        inArray(projects.status, [...ACTIVE_ROOM_STATUSES]),
+        eq(rooms.workspaceId, workspaceId),
+        inArray(rooms.status, [...ACTIVE_ROOM_STATUSES]),
       ),
     );
   return rows.length;
@@ -77,21 +110,35 @@ export async function createRoom(
 ) {
   const name = input.name.trim().slice(0, 120);
   const clientName = input.clientName.trim().slice(0, 120);
-  if (!name) throw new Error("A project name is required.");
+  if (!name) throw new Error("A room name is required.");
   if (!clientName) throw new Error("A client name is required.");
 
   await assertCanMutate(scope.organizationId);
   const activeCount = await countActiveRooms(scope.workspaceId);
   await assertCanCreateRoom(scope.organizationId, activeCount);
 
-  const slug = await allocateUniqueProjectSlug(scope.workspaceId, name);
+  const slug = await allocateUniqueRoomSlug(scope.workspaceId, name);
 
   return db.transaction(async (tx) => {
-    const [project] = await tx
-      .insert(projects)
+    const [clientProject] = await tx
+      .insert(clientProjects)
       .values({
         organizationId: scope.organizationId,
         workspaceId: scope.workspaceId,
+        name,
+        clientName,
+        slug,
+        status: "ACTIVE",
+      })
+      .returning();
+
+    const [room] = await tx
+      .insert(rooms)
+      .values({
+        id: clientProject.id,
+        organizationId: scope.organizationId,
+        workspaceId: scope.workspaceId,
+        clientProjectId: clientProject.id,
         name,
         clientName,
         slug,
@@ -103,7 +150,7 @@ export async function createRoom(
       .insert(revisions)
       .values({
         workspaceId: scope.workspaceId,
-        projectId: project.id,
+        roomId: room.id,
         number: 1,
         status: "DRAFT",
       })
@@ -112,63 +159,297 @@ export async function createRoom(
     await writeAuditEvent(
       {
         workspaceId: scope.workspaceId,
-        projectId: project.id,
+        roomId: room.id,
         actorType: "user",
         actorId: scope.userId,
         action: "project.created",
         targetType: "project",
-        targetId: project.id,
-        metadata: { revisionId: revision.id },
+        targetId: room.id,
+        metadata: { revisionId: revision.id, clientProjectId: clientProject.id },
       },
       tx as unknown as typeof db,
     );
 
-    return { project, revision };
+    return { project: room, revision };
+  });
+}
+
+/** Create an additional approval room inside an existing durable client project. */
+export async function createRoomInProject(
+  scope: WorkspaceScope,
+  clientProjectId: string,
+  input: { name: string },
+) {
+  const name = input.name.trim().slice(0, 120);
+  if (!name) throw new Error("A room name is required.");
+
+  await assertCanMutate(scope.organizationId);
+  const activeCount = await countActiveRooms(scope.workspaceId);
+  await assertCanCreateRoom(scope.organizationId, activeCount);
+
+  const clientProject = (
+    await db
+      .select()
+      .from(clientProjects)
+      .where(
+        and(
+          eq(clientProjects.id, clientProjectId),
+          eq(clientProjects.organizationId, scope.organizationId),
+          eq(clientProjects.workspaceId, scope.workspaceId),
+        ),
+      )
+      .limit(1)
+  )[0];
+  if (!clientProject) throw new Error("Project not found.");
+
+  const slug = await allocateUniqueRoomSlug(scope.workspaceId, name);
+  return db.transaction(async (tx) => {
+    const [room] = await tx
+      .insert(rooms)
+      .values({
+        organizationId: scope.organizationId,
+        workspaceId: scope.workspaceId,
+        clientProjectId: clientProject.id,
+        name,
+        clientName: clientProject.clientName,
+        slug,
+        status: "DRAFT",
+      })
+      .returning();
+    const [revision] = await tx
+      .insert(revisions)
+      .values({
+        workspaceId: scope.workspaceId,
+        roomId: room.id,
+        number: 1,
+        status: "DRAFT",
+      })
+      .returning();
+    await writeAuditEvent(
+      {
+        workspaceId: scope.workspaceId,
+        roomId: room.id,
+        actorType: "user",
+        actorId: scope.userId,
+        action: "room.created",
+        targetType: "room",
+        targetId: room.id,
+        metadata: { revisionId: revision.id, clientProjectId: clientProject.id },
+      },
+      tx as unknown as typeof db,
+    );
+    return { project: room, revision };
   });
 }
 
 export async function listRooms(workspaceId: string) {
   return db
     .select({
-      id: projects.id,
-      name: projects.name,
-      clientName: projects.clientName,
-      slug: projects.slug,
-      status: projects.status,
-      createdAt: projects.createdAt,
-      updatedAt: projects.updatedAt,
-      currentPublishedRevisionId: projects.currentPublishedRevisionId,
-      approvedRevisionId: projects.approvedRevisionId,
-      handoffReleasedAt: projects.handoffReleasedAt,
+      id: rooms.id,
+      name: rooms.name,
+      clientName: rooms.clientName,
+      slug: rooms.slug,
+      status: rooms.status,
+      createdAt: rooms.createdAt,
+      updatedAt: rooms.updatedAt,
+      currentPublishedRevisionId: rooms.currentPublishedRevisionId,
+      approvedRevisionId: rooms.approvedRevisionId,
+      handoffReleasedAt: rooms.handoffReleasedAt,
     })
-    .from(projects)
-    .where(eq(projects.workspaceId, workspaceId))
-    .orderBy(desc(projects.updatedAt));
+    .from(rooms)
+    .where(eq(rooms.workspaceId, workspaceId))
+    .orderBy(desc(rooms.updatedAt));
 }
 
-export async function getRoomOrThrow(workspaceId: string, projectId: string) {
-  const project = (
+export async function getRoomOrThrow(workspaceId: string, roomId: string) {
+  const room = (
     await db
       .select()
-      .from(projects)
-      .where(and(eq(projects.id, projectId), eq(projects.workspaceId, workspaceId)))
+      .from(rooms)
+      .where(and(eq(rooms.id, roomId), eq(rooms.workspaceId, workspaceId)))
       .limit(1)
   )[0];
-  if (!project) throw new Error("Room not found.");
-  return project;
+  if (!room) throw new Error("Room not found.");
+  return room;
 }
 
-export async function getRoomBundle(workspaceId: string, projectId: string) {
-  const project = await getRoomOrThrow(workspaceId, projectId);
+export async function listRevisionDesignVersions(roomRevisionId: string) {
+  const rows = await db
+    .select({
+      membership: revisionDesignVersions,
+      version: projectDesignVersions,
+      design: projectDesigns,
+    })
+    .from(revisionDesignVersions)
+    .innerJoin(projectDesignVersions, eq(projectDesignVersions.id, revisionDesignVersions.designVersionId))
+    .innerJoin(projectDesigns, eq(projectDesigns.id, projectDesignVersions.designId))
+    .where(eq(revisionDesignVersions.roomRevisionId, roomRevisionId))
+    .orderBy(asc(revisionDesignVersions.sortOrder));
+  return rows.map(({ membership, version, design }) => {
+    const payload = parseAnyProjectDesignVersion(version.payloadJson);
+    const isVideo = isVideoDesignVersionPayload(payload);
+    const displayMeta = parseDesignDisplayMeta(membership.displayMetaJson);
+    const selectedScreenIds = new Set(displayMeta.selectedScreenIds ?? []);
+    const screens = isVideo
+      ? []
+      : payload.screens
+          .filter((screen) => selectedScreenIds.size === 0 || selectedScreenIds.has(screen.id))
+          .map((screen) => ({
+            id: screen.id,
+            name: screen.name,
+            width: screen.width,
+            height: screen.height,
+            imageUrl: screen.preview
+              ? designVersionPreviewPublicUrl(version.id, screen.id, design.projectId)
+              : null,
+          }));
+    return {
+      id: membership.id,
+      sortOrder: membership.sortOrder,
+      displayMeta,
+      designId: design.id,
+      designName: design.name,
+      designVersionId: version.id,
+      versionNumber: version.versionNumber,
+      contentSha256: version.contentSha256,
+      sourceType: isVideo ? "video" as const : "figma" as const,
+      newerVersionAvailable: design.currentVersionId !== version.id,
+      video: isVideo ? payload.video : null,
+      screens,
+    };
+  });
+}
+
+export type PublicDesignerNote = {
+  id: string;
+  revisionDesignVersionId: string;
+  targetType: "design_screen" | "video";
+  screenId: string | null;
+  videoTimeMs: number | null;
+  category: string;
+  title: string;
+  body: string;
+  authorDisplayName: string;
+  figmaNodeName: string | null;
+  x: number | null;
+  y: number | null;
+  selectionWidth: number | null;
+  selectionHeight: number | null;
+};
+
+export async function listPublishedDesignerNotes(
+  room: typeof rooms.$inferSelect,
+  designMembership: Awaited<ReturnType<typeof listRevisionDesignVersions>>,
+): Promise<PublicDesignerNote[]> {
+  if (!room.clientProjectId || designMembership.length === 0) return [];
+  const versionIds = designMembership.map((item) => item.designVersionId);
+  const pinsByVersion = new Map(
+    designMembership.map((item) => [item.designVersionId, item]),
+  );
+  const rows = await db
+    .select()
+    .from(figmaExplanations)
+    .where(and(
+      eq(figmaExplanations.organizationId, room.organizationId),
+      eq(figmaExplanations.workspaceId, room.workspaceId),
+      eq(figmaExplanations.projectId, room.clientProjectId),
+      eq(figmaExplanations.status, "published"),
+      inArray(figmaExplanations.designVersionId, versionIds),
+    ))
+    .orderBy(asc(figmaExplanations.createdAt));
+  const videoRows = await db
+    .select()
+    .from(designVersionExplanations)
+    .where(and(
+      eq(designVersionExplanations.organizationId, room.organizationId),
+      eq(designVersionExplanations.workspaceId, room.workspaceId),
+      eq(designVersionExplanations.projectId, room.clientProjectId),
+      eq(designVersionExplanations.status, "published"),
+      inArray(designVersionExplanations.designVersionId, versionIds),
+    ))
+    .orderBy(asc(designVersionExplanations.videoTimeMs), asc(designVersionExplanations.createdAt));
+
+  const screenNotes: PublicDesignerNote[] = rows.flatMap((note) => {
+    const pin = pinsByVersion.get(note.designVersionId);
+    if (
+      !pin
+      || pin.designId !== note.designId
+      || !pin.screens.some((screen) => screen.id === note.screenId)
+    ) {
+      return [];
+    }
+    return [{
+      id: note.id,
+      revisionDesignVersionId: pin.id,
+      targetType: "design_screen" as const,
+      screenId: note.screenId,
+      videoTimeMs: null,
+      category: note.category,
+      title: note.title,
+      body: note.body,
+      authorDisplayName: note.authorDisplayName,
+      figmaNodeName: note.figmaNodeName,
+      x: note.xBasisPoints === null ? null : note.xBasisPoints / 100,
+      y: note.yBasisPoints === null ? null : note.yBasisPoints / 100,
+      selectionWidth: note.selectionWidthBasisPoints === null
+        ? null
+        : note.selectionWidthBasisPoints / 100,
+      selectionHeight: note.selectionHeightBasisPoints === null
+        ? null
+        : note.selectionHeightBasisPoints / 100,
+    }];
+  });
+  const videoNotes: PublicDesignerNote[] = videoRows.flatMap((note) => {
+    const pin = pinsByVersion.get(note.designVersionId);
+    if (!pin || pin.designId !== note.designId || pin.sourceType !== "video") return [];
+    return [{
+      id: note.id,
+      revisionDesignVersionId: pin.id,
+      targetType: "video",
+      screenId: null,
+      videoTimeMs: note.videoTimeMs,
+      category: note.category,
+      title: note.title,
+      body: note.body,
+      authorDisplayName: note.authorDisplayName,
+      figmaNodeName: null,
+      x: null,
+      y: null,
+      selectionWidth: null,
+      selectionHeight: null,
+    }];
+  });
+  return [...screenNotes, ...videoNotes];
+}
+
+export async function getRoomBundle(workspaceId: string, roomId: string) {
+  const room = await getRoomOrThrow(workspaceId, roomId);
+  const clientProject = room.clientProjectId
+    ? (
+        await db
+          .select({
+            id: clientProjects.id,
+            name: clientProjects.name,
+          })
+          .from(clientProjects)
+          .where(
+            and(
+              eq(clientProjects.id, room.clientProjectId),
+              eq(clientProjects.workspaceId, workspaceId),
+            ),
+          )
+          .limit(1)
+      )[0] ?? null
+    : null;
   const revisionRows = await db
     .select()
     .from(revisions)
-    .where(eq(revisions.projectId, projectId))
+    .where(eq(revisions.roomId, roomId))
     .orderBy(desc(revisions.number));
 
   const draft = revisionRows.find((r) => r.status === "DRAFT") || null;
   const published =
-    revisionRows.find((r) => r.id === project.currentPublishedRevisionId) ||
+    revisionRows.find((r) => r.id === room.currentPublishedRevisionId) ||
     revisionRows.find((r) => r.status === "PUBLISHED") ||
     null;
 
@@ -185,12 +466,15 @@ export async function getRoomBundle(workspaceId: string, projectId: string) {
         .where(eq(revisionAssets.revisionId, focusRevisionId))
         .orderBy(asc(revisionAssets.sortOrder))
     : [];
+  const designMembership = focusRevisionId
+    ? await listRevisionDesignVersions(focusRevisionId)
+    : [];
 
   const share = (
     await db
       .select()
       .from(shareLinks)
-      .where(and(eq(shareLinks.projectId, projectId), eq(shareLinks.status, "ACTIVE")))
+      .where(and(eq(shareLinks.roomId, roomId), eq(shareLinks.status, "ACTIVE")))
       .orderBy(desc(shareLinks.createdAt))
       .limit(1)
   )[0];
@@ -203,18 +487,19 @@ export async function getRoomBundle(workspaceId: string, projectId: string) {
         .orderBy(asc(roomComments.createdAt))
     : [];
 
-  const approvalReceipts = await listApprovalReceiptsForProject(projectId, {
+  const approvalReceipts = await listApprovalReceiptsForRoom(roomId, {
     includeReviewerEmail: true,
   });
 
   const handoff = await db
     .select()
     .from(handoffItems)
-    .where(eq(handoffItems.projectId, projectId))
+    .where(eq(handoffItems.roomId, roomId))
     .orderBy(asc(handoffItems.sortOrder));
 
   return {
-    project,
+    project: room,
+    clientProject,
     revisions: revisionRows,
     draft,
     published,
@@ -226,6 +511,7 @@ export async function getRoomBundle(workspaceId: string, projectId: string) {
         url: row.asset.objectKey ? assetPublicUrl(row.asset.id) : row.asset.externalUrl,
       },
     })),
+    designMembership,
     shareLink: share
       ? {
           id: share.id,
@@ -241,17 +527,29 @@ export async function getRoomBundle(workspaceId: string, projectId: string) {
   };
 }
 
-/** Build approval receipt views from existing approval/revision/reviewer/asset rows. */
-export async function listApprovalReceiptsForProject(
-  projectId: string,
+/** Build approval receipt views from immutable approval revision evidence. */
+export async function listApprovalReceiptsForRoom(
+  roomId: string,
   options?: { includeReviewerEmail?: boolean; decision?: "approved" | "changes_requested" },
 ): Promise<ApprovalReceiptView[]> {
+  const room = (
+    await db.select().from(rooms).where(eq(rooms.id, roomId)).limit(1)
+  )[0];
+  if (!room?.clientProjectId) return [];
   const project = (
-    await db.select().from(projects).where(eq(projects.id, projectId)).limit(1)
+    await db
+      .select()
+      .from(clientProjects)
+      .where(and(
+        eq(clientProjects.id, room.clientProjectId),
+        eq(clientProjects.organizationId, room.organizationId),
+        eq(clientProjects.workspaceId, room.workspaceId),
+      ))
+      .limit(1)
   )[0];
   if (!project) return [];
 
-  const approvalConditions = [eq(approvals.projectId, projectId)];
+  const approvalConditions = [eq(approvals.roomId, roomId)];
   if (options?.decision) {
     approvalConditions.push(eq(approvals.decision, options.decision));
   }
@@ -272,6 +570,7 @@ export async function listApprovalReceiptsForProject(
 
   const revisionIds = [...new Set(rows.map((row) => row.revisionId))];
   const assetsByRevision = new Map<string, string[]>();
+  const designsByRevision = new Map<string, ApprovalReceiptDesignVersion[]>();
   if (revisionIds.length > 0) {
     const assetRows = await db
       .select({
@@ -287,6 +586,54 @@ export async function listApprovalReceiptsForProject(
       const list = assetsByRevision.get(row.revisionId) || [];
       list.push(row.label);
       assetsByRevision.set(row.revisionId, list);
+    }
+
+    const designRows = await db
+      .select({
+        revisionId: revisionDesignVersions.roomRevisionId,
+        sortOrder: revisionDesignVersions.sortOrder,
+        designId: projectDesigns.id,
+        designVersionId: projectDesignVersions.id,
+        designName: projectDesigns.name,
+        versionNumber: projectDesignVersions.versionNumber,
+        contentSha256: projectDesignVersions.contentSha256,
+        payloadJson: projectDesignVersions.payloadJson,
+        displayMetaJson: revisionDesignVersions.displayMetaJson,
+      })
+      .from(revisionDesignVersions)
+      .innerJoin(
+        projectDesignVersions,
+        eq(projectDesignVersions.id, revisionDesignVersions.designVersionId),
+      )
+      .innerJoin(projectDesigns, eq(projectDesigns.id, projectDesignVersions.designId))
+      .where(inArray(revisionDesignVersions.roomRevisionId, revisionIds))
+      .orderBy(asc(revisionDesignVersions.sortOrder));
+    for (const design of designRows) {
+      const list = designsByRevision.get(design.revisionId) ?? [];
+      const payload = parseAnyProjectDesignVersion(design.payloadJson);
+      const isVideo = isVideoDesignVersionPayload(payload);
+      const displayMeta = parseDesignDisplayMeta(design.displayMetaJson);
+      const selectedScreenIds = new Set(displayMeta.selectedScreenIds ?? []);
+      list.push({
+        designId: design.designId,
+        designVersionId: design.designVersionId,
+        designName: design.designName,
+        versionNumber: design.versionNumber,
+        contentSha256: design.contentSha256,
+        sourceType: isVideo ? "video" : "figma",
+        screenNames: isVideo
+          ? []
+          : payload.screens
+              .filter((screen) => selectedScreenIds.size === 0 || selectedScreenIds.has(screen.id))
+              .map((screen) => screen.name),
+        video: isVideo ? {
+          durationMs: payload.video.durationMs,
+          mimeType: payload.video.mimeType,
+          originalFilename: payload.video.originalFilename,
+          byteSize: payload.video.byteSize,
+        } : null,
+      });
+      designsByRevision.set(design.revisionId, list);
     }
   }
 
@@ -305,6 +652,7 @@ export async function listApprovalReceiptsForProject(
       reviewerName: row.reviewerName,
       reviewerEmail: row.reviewerEmail,
       assetNames: assetsByRevision.get(row.revisionId) || [],
+      designVersions: designsByRevision.get(row.revisionId) || [],
     };
     return serializeApprovalReceipt(source, {
       includeReviewerEmail: options?.includeReviewerEmail !== false,
@@ -312,14 +660,14 @@ export async function listApprovalReceiptsForProject(
   });
 }
 
-export async function ensureDraftRevision(workspaceId: string, projectId: string) {
+export async function ensureDraftRevision(workspaceId: string, roomId: string) {
   const existing = (
     await db
       .select()
       .from(revisions)
       .where(
         and(
-          eq(revisions.projectId, projectId),
+          eq(revisions.roomId, roomId),
           eq(revisions.workspaceId, workspaceId),
           eq(revisions.status, "DRAFT"),
         ),
@@ -332,7 +680,7 @@ export async function ensureDraftRevision(workspaceId: string, projectId: string
     await db
       .select()
       .from(revisions)
-      .where(eq(revisions.projectId, projectId))
+      .where(eq(revisions.roomId, roomId))
       .orderBy(desc(revisions.number))
       .limit(1)
   )[0];
@@ -341,7 +689,7 @@ export async function ensureDraftRevision(workspaceId: string, projectId: string
     .insert(revisions)
     .values({
       workspaceId,
-      projectId,
+      roomId,
       number: (latest?.number || 0) + 1,
       status: "DRAFT",
     })
@@ -349,9 +697,142 @@ export async function ensureDraftRevision(workspaceId: string, projectId: string
   return created;
 }
 
+export async function pinDesignVersionToDraft(input: {
+  scope: WorkspaceScope;
+  roomId: string;
+  designId: string;
+  designVersionId?: string | null;
+  selectedScreenIds?: string[] | null;
+}) {
+  const room = await getRoomOrThrow(input.scope.workspaceId, input.roomId);
+  if (!room.clientProjectId) throw new Error("Room is not attached to a project.");
+  const design = (await db
+    .select()
+    .from(projectDesigns)
+    .where(and(
+      eq(projectDesigns.id, input.designId),
+      eq(projectDesigns.organizationId, input.scope.organizationId),
+      eq(projectDesigns.workspaceId, input.scope.workspaceId),
+      eq(projectDesigns.projectId, room.clientProjectId),
+    ))
+    .limit(1))[0];
+  if (!design || design.archivedAt) throw new Error("Design not found in this room's project.");
+  const designVersionId = input.designVersionId ?? design.currentVersionId;
+  if (!designVersionId) throw new Error("This design has no version to review.");
+  const version = (await db
+    .select()
+    .from(projectDesignVersions)
+    .where(and(
+      eq(projectDesignVersions.id, designVersionId),
+      eq(projectDesignVersions.designId, design.id),
+      eq(projectDesignVersions.projectId, room.clientProjectId),
+      eq(projectDesignVersions.workspaceId, input.scope.workspaceId),
+    ))
+    .limit(1))[0];
+  if (!version) throw new Error("Design version not found in this room's project.");
+  const payload = parseAnyProjectDesignVersion(version.payloadJson);
+  const isVideo = isVideoDesignVersionPayload(payload);
+  const requestedScreenIds = [...new Set(input.selectedScreenIds ?? [])];
+  if (isVideo && requestedScreenIds.length > 0) {
+    throw new Error("Videos cannot be limited to individual screens.");
+  }
+  if (!isVideo && input.selectedScreenIds && requestedScreenIds.length === 0) {
+    throw new Error("Select at least one screen.");
+  }
+  if (!isVideo && requestedScreenIds.length > 0) {
+    const validScreenIds = new Set(payload.screens.map((screen) => screen.id));
+    if (requestedScreenIds.some((screenId) => !validScreenIds.has(screenId))) {
+      throw new Error("One or more selected screens do not belong to this design version.");
+    }
+  }
+  const displayMetaJson = JSON.stringify({
+    designName: design.name,
+    ...(requestedScreenIds.length > 0 ? { selectedScreenIds: requestedScreenIds } : {}),
+  });
+  const draft = await ensureDraftRevision(input.scope.workspaceId, input.roomId);
+
+  return db.transaction(async (tx) => {
+    const locked = (await tx
+      .select()
+      .from(revisions)
+      .where(and(eq(revisions.id, draft.id), eq(revisions.status, "DRAFT")))
+      .for("update")
+      .limit(1))[0];
+    if (!locked) throw new Error("Only a draft room revision can select designs.");
+    const existingForDesign = await tx
+      .select({ id: revisionDesignVersions.id })
+      .from(revisionDesignVersions)
+      .innerJoin(projectDesignVersions, eq(projectDesignVersions.id, revisionDesignVersions.designVersionId))
+      .where(and(
+        eq(revisionDesignVersions.roomRevisionId, draft.id),
+        eq(projectDesignVersions.designId, design.id),
+      ));
+    const existing = (await tx
+      .select()
+      .from(revisionDesignVersions)
+      .where(and(
+        eq(revisionDesignVersions.roomRevisionId, draft.id),
+        eq(revisionDesignVersions.designVersionId, designVersionId),
+      ))
+      .limit(1))[0];
+    if (existing) {
+      const [updated] = await tx
+        .update(revisionDesignVersions)
+        .set({ displayMetaJson })
+        .where(eq(revisionDesignVersions.id, existing.id))
+        .returning();
+      return updated;
+    }
+    if (existingForDesign.length) {
+      await tx.delete(revisionDesignVersions).where(inArray(
+        revisionDesignVersions.id,
+        existingForDesign.map((row) => row.id),
+      ));
+    }
+    const maxSort = (await tx
+      .select({ value: sql<number>`coalesce(max(${revisionDesignVersions.sortOrder}), -1)` })
+      .from(revisionDesignVersions)
+      .where(eq(revisionDesignVersions.roomRevisionId, draft.id)))[0]?.value;
+    const [created] = await tx.insert(revisionDesignVersions).values({
+      roomRevisionId: draft.id,
+      designVersionId,
+      sortOrder: (maxSort ?? -1) + 1,
+      displayMetaJson,
+    }).returning();
+    return created;
+  });
+}
+
+export async function removeDesignVersionFromDraft(
+  scope: WorkspaceScope,
+  roomId: string,
+  revisionDesignVersionId: string,
+) {
+  const room = await getRoomOrThrow(scope.workspaceId, roomId);
+  const draft = (await db
+    .select()
+    .from(revisions)
+    .where(and(
+      eq(revisions.roomId, room.id),
+      eq(revisions.workspaceId, scope.workspaceId),
+      eq(revisions.status, "DRAFT"),
+    ))
+    .limit(1))[0];
+  if (!draft) throw new Error("Only a draft room revision can remove designs.");
+  const removed = await db
+    .delete(revisionDesignVersions)
+    .where(and(
+      eq(revisionDesignVersions.id, revisionDesignVersionId),
+      eq(revisionDesignVersions.roomRevisionId, draft.id),
+    ))
+    .returning({ id: revisionDesignVersions.id });
+  if (!removed[0]) throw new Error("Pinned design not found.");
+  return removed[0];
+}
+
 export async function uploadRoomAsset(input: {
   scope: WorkspaceScope;
-  projectId: string;
+  roomId: string;
   fileName: string;
   mime: string;
   bytes: Buffer;
@@ -359,8 +840,8 @@ export async function uploadRoomAsset(input: {
   width?: number | null;
   height?: number | null;
 }) {
-  const project = await getRoomOrThrow(input.scope.workspaceId, input.projectId);
-  if (project.status === "ARCHIVED") throw new Error("Archived rooms cannot accept new assets.");
+  const room = await getRoomOrThrow(input.scope.workspaceId, input.roomId);
+  if (room.status === "ARCHIVED") throw new Error("Archived rooms cannot accept new assets.");
 
   const mime = input.mime.toLowerCase();
   if (!(ALLOWED_UPLOAD_MIME_TYPES as readonly string[]).includes(mime)) {
@@ -377,10 +858,10 @@ export async function uploadRoomAsset(input: {
     input.bytes.byteLength,
   );
 
-  const draft = await ensureDraftRevision(input.scope.workspaceId, input.projectId);
+  const draft = await ensureDraftRevision(input.scope.workspaceId, input.roomId);
   const objectKey = buildTenantObjectPath({
     workspaceId: input.scope.workspaceId,
-    projectId: input.projectId,
+    roomId: input.roomId,
     revisionId: draft.id,
     filename: input.fileName,
   });
@@ -396,7 +877,7 @@ export async function uploadRoomAsset(input: {
       .insert(assets)
       .values({
         workspaceId: input.scope.workspaceId,
-        projectId: input.projectId,
+        roomId: input.roomId,
         kind,
         label: input.fileName.replace(/\.[^.]+$/, "").slice(0, 200) || "Untitled",
         objectKey: stored.pathname,
@@ -432,7 +913,7 @@ export async function uploadRoomAsset(input: {
     await writeAuditEvent(
       {
         workspaceId: input.scope.workspaceId,
-        projectId: input.projectId,
+        roomId: input.roomId,
         actorType: "user",
         actorId: input.scope.userId,
         action: "asset.uploaded",
@@ -448,21 +929,21 @@ export async function uploadRoomAsset(input: {
 
 export async function addExternalUrlAsset(input: {
   scope: WorkspaceScope;
-  projectId: string;
+  roomId: string;
   url: string;
   label?: string;
 }) {
   const url = input.url.trim();
   if (!/^https?:\/\//i.test(url)) throw new Error("URL must start with http:// or https://");
-  await getRoomOrThrow(input.scope.workspaceId, input.projectId);
-  const draft = await ensureDraftRevision(input.scope.workspaceId, input.projectId);
+  await getRoomOrThrow(input.scope.workspaceId, input.roomId);
+  const draft = await ensureDraftRevision(input.scope.workspaceId, input.roomId);
 
   return db.transaction(async (tx) => {
     const [asset] = await tx
       .insert(assets)
       .values({
         workspaceId: input.scope.workspaceId,
-        projectId: input.projectId,
+        roomId: input.roomId,
         kind: "url",
         label: (input.label || url).slice(0, 200),
         externalUrl: url,
@@ -487,15 +968,15 @@ export async function addExternalUrlAsset(input: {
   });
 }
 
-export async function publishRevision(scope: WorkspaceScope, projectId: string) {
-  const project = await getRoomOrThrow(scope.workspaceId, projectId);
+export async function publishRevision(scope: WorkspaceScope, roomId: string) {
+  const room = await getRoomOrThrow(scope.workspaceId, roomId);
   const draft = (
     await db
       .select()
       .from(revisions)
       .where(
         and(
-          eq(revisions.projectId, projectId),
+          eq(revisions.roomId, roomId),
           eq(revisions.workspaceId, scope.workspaceId),
           eq(revisions.status, "DRAFT"),
         ),
@@ -515,16 +996,30 @@ export async function publishRevision(scope: WorkspaceScope, projectId: string) 
     .where(eq(revisionAssets.revisionId, draft.id))
     .orderBy(asc(revisionAssets.sortOrder));
 
-  if (members.length === 0) throw new Error("Add at least one asset before publishing.");
+  const designMembers = await db
+    .select({
+      designVersionId: revisionDesignVersions.designVersionId,
+      contentSha256: projectDesignVersions.contentSha256,
+      sortOrder: revisionDesignVersions.sortOrder,
+      displayMetaJson: revisionDesignVersions.displayMetaJson,
+    })
+    .from(revisionDesignVersions)
+    .innerJoin(projectDesignVersions, eq(projectDesignVersions.id, revisionDesignVersions.designVersionId))
+    .where(eq(revisionDesignVersions.roomRevisionId, draft.id))
+    .orderBy(asc(revisionDesignVersions.sortOrder));
 
-  const digest = computeRevisionDigest(members);
+  if (members.length === 0 && designMembers.length === 0) {
+    throw new Error("Add at least one asset or project design before publishing.");
+  }
+
+  const digest = computeRevisionDigest(members, designMembers);
 
   return db.transaction(async (tx) => {
-    if (project.currentPublishedRevisionId) {
+    if (room.currentPublishedRevisionId) {
       await tx
         .update(revisions)
         .set({ status: "SUPERSEDED", supersededAt: new Date(), updatedAt: new Date() })
-        .where(eq(revisions.id, project.currentPublishedRevisionId));
+        .where(eq(revisions.id, room.currentPublishedRevisionId));
     }
 
     await tx
@@ -538,27 +1033,27 @@ export async function publishRevision(scope: WorkspaceScope, projectId: string) 
       .where(eq(revisions.id, draft.id));
 
     const nextStatus =
-      project.status === "APPROVED" || project.status === "CHANGES_REQUESTED"
+      room.status === "APPROVED" || room.status === "CHANGES_REQUESTED"
         ? "SENT"
-        : project.status === "DRAFT"
+        : room.status === "DRAFT"
           ? "SENT"
-          : project.status === "ARCHIVED"
+          : room.status === "ARCHIVED"
             ? "SENT"
             : "SENT";
 
     await tx
-      .update(projects)
+      .update(rooms)
       .set({
         currentPublishedRevisionId: draft.id,
         status: nextStatus,
         updatedAt: new Date(),
       })
-      .where(eq(projects.id, projectId));
+      .where(eq(rooms.id, roomId));
 
     await writeAuditEvent(
       {
         workspaceId: scope.workspaceId,
-        projectId,
+        roomId: roomId,
         actorType: "user",
         actorId: scope.userId,
         action: "revision.published",
@@ -575,11 +1070,11 @@ export async function publishRevision(scope: WorkspaceScope, projectId: string) 
 
 export async function createOrRotateShareLink(
   scope: WorkspaceScope,
-  projectId: string,
+  roomId: string,
   options?: { expiresInDays?: number; notifyEmail?: string },
 ) {
-  const project = await getRoomOrThrow(scope.workspaceId, projectId);
-  if (!project.currentPublishedRevisionId) {
+  const room = await getRoomOrThrow(scope.workspaceId, roomId);
+  if (!room.currentPublishedRevisionId) {
     throw new Error("Publish a revision before creating a share link.");
   }
 
@@ -594,13 +1089,13 @@ export async function createOrRotateShareLink(
     await tx
       .update(shareLinks)
       .set({ status: "REVOKED", revokedAt: new Date(), updatedAt: new Date() })
-      .where(and(eq(shareLinks.projectId, projectId), eq(shareLinks.status, "ACTIVE")));
+      .where(and(eq(shareLinks.roomId, roomId), eq(shareLinks.status, "ACTIVE")));
 
     const [created] = await tx
       .insert(shareLinks)
       .values({
         workspaceId: scope.workspaceId,
-        projectId,
+        roomId,
         tokenHash,
         scope: "review",
         status: "ACTIVE",
@@ -612,7 +1107,7 @@ export async function createOrRotateShareLink(
     await writeAuditEvent(
       {
         workspaceId: scope.workspaceId,
-        projectId,
+        roomId: roomId,
         actorType: "user",
         actorId: scope.userId,
         action: "share_link.created",
@@ -631,8 +1126,8 @@ export async function createOrRotateShareLink(
       type: "email.share",
       payload: {
         to: options.notifyEmail,
-        projectName: project.name,
-        clientName: project.clientName,
+        projectName: room.name,
+        clientName: room.clientName,
         shareUrl,
         replyTo: await getWorkspaceNotificationEmail(scope.workspaceId),
       },
@@ -665,20 +1160,38 @@ export async function resolveShareToken(rawToken: string) {
     throw new Error("This share link has expired.");
   }
 
+  const room = (
+    await db.select().from(rooms).where(eq(rooms.id, link.roomId)).limit(1)
+  )[0];
+  if (!room) throw new Error("This share link is invalid or revoked.");
+  if (!room.clientProjectId) throw new Error("This share link is invalid or revoked.");
   const project = (
-    await db.select().from(projects).where(eq(projects.id, link.projectId)).limit(1)
+    await db
+      .select()
+      .from(clientProjects)
+      .where(and(
+        eq(clientProjects.id, room.clientProjectId),
+        eq(clientProjects.organizationId, room.organizationId),
+        eq(clientProjects.workspaceId, room.workspaceId),
+      ))
+      .limit(1)
   )[0];
   if (!project) throw new Error("This share link is invalid or revoked.");
-  if (!project.currentPublishedRevisionId) throw new Error("Nothing has been published for review yet.");
+  if (!room.currentPublishedRevisionId) throw new Error("Nothing has been published for review yet.");
 
   const revision = (
     await db
       .select()
       .from(revisions)
-      .where(eq(revisions.id, project.currentPublishedRevisionId))
+      .where(eq(revisions.id, room.currentPublishedRevisionId))
       .limit(1)
   )[0];
-  if (!revision || revision.status === "DRAFT") {
+  if (
+    !revision
+    || revision.roomId !== room.id
+    || revision.workspaceId !== room.workspaceId
+    || revision.status === "DRAFT"
+  ) {
     throw new Error("Nothing has been published for review yet.");
   }
 
@@ -693,14 +1206,15 @@ export async function resolveShareToken(rawToken: string) {
     .where(eq(revisionAssets.revisionId, revision.id))
     .orderBy(asc(revisionAssets.sortOrder));
 
-  return { link, project, revision, membership };
+  const designMembership = await listRevisionDesignVersions(revision.id);
+  return { link, room, project, revision, membership, designMembership };
 }
 
-export async function recordShareView(linkId: string, projectId: string, workspaceId: string) {
-  const project = (
-    await db.select().from(projects).where(eq(projects.id, projectId)).limit(1)
+export async function recordShareView(linkId: string, roomId: string, workspaceId: string) {
+  const room = (
+    await db.select().from(rooms).where(eq(rooms.id, roomId)).limit(1)
   )[0];
-  if (!project) return;
+  if (!room) return;
 
   await db
     .update(shareLinks)
@@ -711,16 +1225,16 @@ export async function recordShareView(linkId: string, projectId: string, workspa
     })
     .where(eq(shareLinks.id, linkId));
 
-  if (project.status === "SENT") {
+  if (room.status === "SENT") {
     await db
-      .update(projects)
+      .update(rooms)
       .set({ status: "VIEWED", updatedAt: new Date() })
-      .where(eq(projects.id, projectId));
+      .where(eq(rooms.id, roomId));
   }
 
   await writeAuditEvent({
     workspaceId,
-    projectId,
+    roomId: roomId,
     actorType: "system",
     action: "share.viewed",
     targetType: "share_link",
@@ -730,7 +1244,7 @@ export async function recordShareView(linkId: string, projectId: string, workspa
 
 export async function createReviewer(input: {
   workspaceId: string;
-  projectId: string;
+  roomId: string;
   name: string;
   email: string;
 }) {
@@ -746,7 +1260,7 @@ export async function createReviewer(input: {
     .insert(reviewers)
     .values({
       workspaceId: input.workspaceId,
-      projectId: input.projectId,
+      roomId: input.roomId,
       email,
       name,
     })
@@ -757,7 +1271,7 @@ export async function createReviewer(input: {
 /** @deprecated Prefer createReviewer / getReviewerById — email is not an auth key. */
 export async function upsertReviewer(input: {
   workspaceId: string;
-  projectId: string;
+  roomId: string;
   name: string;
   email: string;
 }) {
@@ -766,7 +1280,7 @@ export async function upsertReviewer(input: {
 
 export async function getReviewerById(input: {
   workspaceId: string;
-  projectId: string;
+  roomId: string;
   reviewerId: string;
 }) {
   const reviewer = (
@@ -776,7 +1290,7 @@ export async function getReviewerById(input: {
       .where(
         and(
           eq(reviewers.id, input.reviewerId),
-          eq(reviewers.projectId, input.projectId),
+          eq(reviewers.roomId, input.roomId),
           eq(reviewers.workspaceId, input.workspaceId),
         ),
       )
@@ -796,7 +1310,7 @@ export async function getReviewerById(input: {
  */
 export async function updateSessionReviewerProfile(input: {
   workspaceId: string;
-  projectId: string;
+  roomId: string;
   reviewerId: string;
   name: string;
   email: string;
@@ -808,7 +1322,7 @@ export async function updateSessionReviewerProfile(input: {
 
   const existing = await getReviewerById({
     workspaceId: input.workspaceId,
-    projectId: input.projectId,
+    roomId: input.roomId,
     reviewerId: input.reviewerId,
   });
 
@@ -822,57 +1336,130 @@ export async function updateSessionReviewerProfile(input: {
   return updated;
 }
 
+export type PublicCommentTarget =
+  | { type: "asset"; revisionAssetId: string }
+  | { type: "design_screen"; revisionDesignVersionId: string; screenId: string }
+  | { type: "video"; revisionDesignVersionId: string; videoTimeMs: number };
+
 export async function createPublicComment(input: {
   workspaceId: string;
-  projectId: string;
+  roomId: string;
   revisionId: string;
-  revisionAssetId: string;
+  target: PublicCommentTarget;
   reviewerId: string;
-  xPercent: number;
-  yPercent: number;
+  xPercent?: number;
+  yPercent?: number;
   body: string;
   notifyTo?: string | null;
   projectName?: string;
   clientName?: string;
   reviewerName?: string;
 }) {
-  const project = (
-    await db.select().from(projects).where(eq(projects.id, input.projectId)).limit(1)
+  const room = (
+    await db
+      .select()
+      .from(rooms)
+      .where(and(eq(rooms.id, input.roomId), eq(rooms.workspaceId, input.workspaceId)))
+      .limit(1)
   )[0];
-  if (!project || project.currentPublishedRevisionId !== input.revisionId) {
+  if (!room || room.currentPublishedRevisionId !== input.revisionId) {
     throw new Error("Comments are only accepted on the current published revision.");
   }
-  if (project.status === "APPROVED" || project.status === "ARCHIVED") {
+  if (room.status === "APPROVED" || room.status === "ARCHIVED") {
     throw new Error("Comments are locked after approval.");
   }
 
   const body = sanitizeCommentBody(input.body);
   if (!body) throw new Error("Comment text is required.");
 
-  const member = (
-    await db
-      .select()
-      .from(revisionAssets)
-      .where(
-        and(
-          eq(revisionAssets.id, input.revisionAssetId),
+  let revisionAssetId: string | null = null;
+  let revisionDesignVersionId: string | null = null;
+  let designScreenId: string | null = null;
+  let videoTimeMs: number | null = null;
+
+  if (input.target.type === "asset") {
+    const member = (
+      await db
+        .select({ id: revisionAssets.id })
+        .from(revisionAssets)
+        .innerJoin(assets, eq(assets.id, revisionAssets.assetId))
+        .where(and(
+          eq(revisionAssets.id, input.target.revisionAssetId),
           eq(revisionAssets.revisionId, input.revisionId),
-        ),
-      )
-      .limit(1)
-  )[0];
-  if (!member) throw new Error("That review item was not found.");
+          eq(assets.roomId, input.roomId),
+          eq(assets.workspaceId, input.workspaceId),
+        ))
+        .limit(1)
+    )[0];
+    if (!member) throw new Error("That review asset was not found on this revision.");
+    revisionAssetId = member.id;
+  } else {
+    const member = (
+      await db
+        .select({
+          id: revisionDesignVersions.id,
+          projectId: projectDesignVersions.projectId,
+          workspaceId: projectDesignVersions.workspaceId,
+          payloadJson: projectDesignVersions.payloadJson,
+        })
+        .from(revisionDesignVersions)
+        .innerJoin(
+          projectDesignVersions,
+          eq(projectDesignVersions.id, revisionDesignVersions.designVersionId),
+        )
+        .where(and(
+          eq(revisionDesignVersions.id, input.target.revisionDesignVersionId),
+          eq(revisionDesignVersions.roomRevisionId, input.revisionId),
+        ))
+        .limit(1)
+    )[0];
+    if (!member) throw new Error("That design version is not pinned to this room revision.");
+    if (
+      !room.clientProjectId
+      || member.projectId !== room.clientProjectId
+      || member.workspaceId !== input.workspaceId
+    ) {
+      throw new Error("That design version does not belong to this room's project.");
+    }
+    const payload = parseAnyProjectDesignVersion(member.payloadJson);
+    if (input.target.type === "video") {
+      if (!isVideoDesignVersionPayload(payload)) {
+        throw new Error("That pinned design version is not a video.");
+      }
+      if (
+        !Number.isSafeInteger(input.target.videoTimeMs)
+        || input.target.videoTimeMs < 0
+        || input.target.videoTimeMs > payload.video.durationMs
+      ) {
+        throw new Error("Video feedback timestamp is outside the video duration.");
+      }
+      videoTimeMs = input.target.videoTimeMs;
+    } else {
+      if (isVideoDesignVersionPayload(payload)) {
+        throw new Error("A video version cannot be used as a design-screen target.");
+      }
+      const screenId = input.target.screenId;
+      if (!payload.screens.some((screen) => screen.id === screenId)) {
+        throw new Error("That screen does not exist in the pinned design version.");
+      }
+      designScreenId = screenId;
+    }
+    revisionDesignVersionId = member.id;
+  }
 
   const [comment] = await db
     .insert(roomComments)
     .values({
       workspaceId: input.workspaceId,
-      projectId: input.projectId,
+      roomId: input.roomId,
       revisionId: input.revisionId,
-      revisionAssetId: input.revisionAssetId,
+      revisionAssetId,
+      revisionDesignVersionId,
+      designScreenId,
+      videoTimeMs,
       reviewerId: input.reviewerId,
-      xPercent: String(clampPercent(input.xPercent)),
-      yPercent: String(clampPercent(input.yPercent)),
+      xPercent: videoTimeMs === null ? String(clampPercent(input.xPercent ?? 0.5)) : null,
+      yPercent: videoTimeMs === null ? String(clampPercent(input.yPercent ?? 0.5)) : null,
       body,
       status: "OPEN",
     })
@@ -880,7 +1467,7 @@ export async function createPublicComment(input: {
 
   await writeAuditEvent({
     workspaceId: input.workspaceId,
-    projectId: input.projectId,
+    roomId: input.roomId,
     actorType: "reviewer",
     actorId: input.reviewerId,
     action: "comment.created",
@@ -897,8 +1484,8 @@ export async function createPublicComment(input: {
         clientName: input.clientName,
         reviewerName: input.reviewerName,
         body,
-        ownerUrl: `${getSiteUrl()}/rooms/${input.projectId}`,
-        roomUrl: `${getSiteUrl()}/rooms/${input.projectId}`,
+        ownerUrl: `${getSiteUrl()}/rooms/${input.roomId}`,
+        roomUrl: `${getSiteUrl()}/rooms/${input.roomId}`,
       },
       idempotencyKey: `email.comment:${comment.id}`,
     });
@@ -909,19 +1496,19 @@ export async function createPublicComment(input: {
 
 export async function updatePublicComment(input: {
   workspaceId: string;
-  projectId: string;
+  roomId: string;
   revisionId: string;
   commentId: string;
   reviewerId: string;
   body: string;
 }) {
-  const project = (
-    await db.select().from(projects).where(eq(projects.id, input.projectId)).limit(1)
+  const room = (
+    await db.select().from(rooms).where(eq(rooms.id, input.roomId)).limit(1)
   )[0];
-  if (!project || project.currentPublishedRevisionId !== input.revisionId) {
+  if (!room || room.currentPublishedRevisionId !== input.revisionId) {
     throw new Error("Comments can only be edited on the current published revision.");
   }
-  if (project.status === "APPROVED" || project.status === "ARCHIVED") {
+  if (room.status === "APPROVED" || room.status === "ARCHIVED") {
     throw new Error("Comments are locked after approval.");
   }
 
@@ -936,7 +1523,7 @@ export async function updatePublicComment(input: {
         and(
           eq(roomComments.id, input.commentId),
           eq(roomComments.workspaceId, input.workspaceId),
-          eq(roomComments.projectId, input.projectId),
+          eq(roomComments.roomId, input.roomId),
           eq(roomComments.revisionId, input.revisionId),
         ),
       )
@@ -960,7 +1547,7 @@ export async function updatePublicComment(input: {
 
   await writeAuditEvent({
     workspaceId: input.workspaceId,
-    projectId: input.projectId,
+    roomId: input.roomId,
     actorType: "reviewer",
     actorId: input.reviewerId,
     action: "comment.updated",
@@ -994,7 +1581,7 @@ export async function resolveComment(scope: WorkspaceScope, commentId: string, s
 
   await writeAuditEvent({
     workspaceId: scope.workspaceId,
-    projectId: comment.projectId,
+    roomId: comment.roomId,
     actorType: "user",
     actorId: scope.userId,
     action: "comment.resolved",
@@ -1008,7 +1595,7 @@ export async function resolveComment(scope: WorkspaceScope, commentId: string, s
 
 export async function submitPublicDecision(input: {
   workspaceId: string;
-  projectId: string;
+  roomId: string;
   revisionId: string;
   reviewerId: string;
   decision: "approve" | "request_changes";
@@ -1017,8 +1604,8 @@ export async function submitPublicDecision(input: {
   reviewerEmail?: string | null;
   reviewerName?: string | null;
 }) {
-  const project = await getRoomOrThrow(input.workspaceId, input.projectId);
-  if (project.currentPublishedRevisionId !== input.revisionId) {
+  const room = await getRoomOrThrow(input.workspaceId, input.roomId);
+  if (room.currentPublishedRevisionId !== input.revisionId) {
     throw new Error("Only the current published revision can receive a decision.");
   }
 
@@ -1031,21 +1618,21 @@ export async function submitPublicDecision(input: {
 
   const ownerNotify =
     input.notifyTo || (await getWorkspaceNotificationEmail(input.workspaceId));
-  const ownerUrl = `${getSiteUrl()}/rooms/${input.projectId}`;
-  const clientName = input.reviewerName || project.clientName || "A client";
+  const ownerUrl = `${getSiteUrl()}/rooms/${input.roomId}`;
+  const clientName = input.reviewerName || room.clientName || "A client";
 
   if (input.decision === "request_changes") {
     return db.transaction(async (tx) => {
       await tx
-        .update(projects)
+        .update(rooms)
         .set({ status: "CHANGES_REQUESTED", updatedAt: new Date() })
-        .where(eq(projects.id, input.projectId));
+        .where(eq(rooms.id, input.roomId));
 
       const [approval] = await tx
         .insert(approvals)
         .values({
           workspaceId: input.workspaceId,
-          projectId: input.projectId,
+          roomId: input.roomId,
           revisionId: input.revisionId,
           reviewerId: input.reviewerId,
           acceptanceStatement: "Changes requested",
@@ -1057,7 +1644,7 @@ export async function submitPublicDecision(input: {
       await writeAuditEvent(
         {
           workspaceId: input.workspaceId,
-          projectId: input.projectId,
+          roomId: input.roomId,
           actorType: "reviewer",
           actorId: input.reviewerId,
           action: "revision.changes_requested",
@@ -1073,7 +1660,7 @@ export async function submitPublicDecision(input: {
             type: "email.changes_requested",
             payload: {
               to: ownerNotify,
-              projectName: project.name,
+              projectName: room.name,
               clientName,
               ownerUrl,
               roomUrl: ownerUrl,
@@ -1102,7 +1689,18 @@ export async function submitPublicDecision(input: {
     .innerJoin(assets, eq(revisionAssets.assetId, assets.id))
     .where(eq(revisionAssets.revisionId, input.revisionId));
 
-  const digest = computeRevisionDigest(members);
+  const designMembers = await db
+    .select({
+      designVersionId: revisionDesignVersions.designVersionId,
+      contentSha256: projectDesignVersions.contentSha256,
+      sortOrder: revisionDesignVersions.sortOrder,
+      displayMetaJson: revisionDesignVersions.displayMetaJson,
+    })
+    .from(revisionDesignVersions)
+    .innerJoin(projectDesignVersions, eq(projectDesignVersions.id, revisionDesignVersions.designVersionId))
+    .where(eq(revisionDesignVersions.roomRevisionId, input.revisionId));
+
+  const digest = computeRevisionDigest(members, designMembers);
   if (digest !== revision.contentDigest) {
     throw new Error("Revision contents changed. Ask the agency to republish, then approve again.");
   }
@@ -1159,19 +1757,19 @@ export async function submitPublicDecision(input: {
       .where(eq(revisions.id, input.revisionId));
 
     await tx
-      .update(projects)
+      .update(rooms)
       .set({
         status: "APPROVED",
         approvedRevisionId: input.revisionId,
         updatedAt: new Date(),
       })
-      .where(eq(projects.id, input.projectId));
+      .where(eq(rooms.id, input.roomId));
 
     const [approval] = await tx
       .insert(approvals)
       .values({
         workspaceId: input.workspaceId,
-        projectId: input.projectId,
+        roomId: input.roomId,
         revisionId: input.revisionId,
         reviewerId: input.reviewerId,
         acceptanceStatement: statement,
@@ -1183,7 +1781,7 @@ export async function submitPublicDecision(input: {
     await writeAuditEvent(
       {
         workspaceId: input.workspaceId,
-        projectId: input.projectId,
+        roomId: input.roomId,
         actorType: "reviewer",
         actorId: input.reviewerId,
         action: "revision.approved",
@@ -1200,7 +1798,7 @@ export async function submitPublicDecision(input: {
           type: "email.approval",
           payload: {
             to: ownerNotify,
-            projectName: project.name,
+            projectName: room.name,
             clientName,
             contentDigest: digest,
             ownerUrl,
@@ -1218,7 +1816,7 @@ export async function submitPublicDecision(input: {
           type: "email.receipt",
           payload: {
             to: input.reviewerEmail,
-            projectName: project.name,
+            projectName: room.name,
             contentDigest: digest,
             approvalId: approval.id,
           },
@@ -1232,20 +1830,20 @@ export async function submitPublicDecision(input: {
   });
 }
 
-export async function reopenRoom(scope: WorkspaceScope, projectId: string) {
-  const project = await getRoomOrThrow(scope.workspaceId, projectId);
-  if (project.status !== "APPROVED" && project.status !== "CHANGES_REQUESTED") {
+export async function reopenRoom(scope: WorkspaceScope, roomId: string) {
+  const room = await getRoomOrThrow(scope.workspaceId, roomId);
+  if (room.status !== "APPROVED" && room.status !== "CHANGES_REQUESTED") {
     throw new Error("Only approved or changes-requested rooms can be reopened into a new draft.");
   }
 
   return db.transaction(async (tx) => {
-    if (project.approvedRevisionId) {
+    if (room.approvedRevisionId) {
       await tx
         .update(approvals)
         .set({ supersededAt: new Date() })
         .where(
           and(
-            eq(approvals.revisionId, project.approvedRevisionId),
+            eq(approvals.revisionId, room.approvedRevisionId),
             eq(approvals.decision, "approved"),
           ),
         );
@@ -1255,7 +1853,7 @@ export async function reopenRoom(scope: WorkspaceScope, projectId: string) {
       await tx
         .select()
         .from(revisions)
-        .where(eq(revisions.projectId, projectId))
+        .where(eq(revisions.roomId, roomId))
         .orderBy(desc(revisions.number))
         .limit(1)
     )[0];
@@ -1264,21 +1862,38 @@ export async function reopenRoom(scope: WorkspaceScope, projectId: string) {
       .insert(revisions)
       .values({
         workspaceId: scope.workspaceId,
-        projectId,
+        roomId,
         number: (latest?.number || 0) + 1,
         status: "DRAFT",
       })
       .returning();
 
+    const sourceRevisionId = room.approvedRevisionId ?? room.currentPublishedRevisionId;
+    if (sourceRevisionId) {
+      const pins = await tx
+        .select()
+        .from(revisionDesignVersions)
+        .where(eq(revisionDesignVersions.roomRevisionId, sourceRevisionId))
+        .orderBy(asc(revisionDesignVersions.sortOrder));
+      if (pins.length) {
+        await tx.insert(revisionDesignVersions).values(pins.map((pin) => ({
+          roomRevisionId: draft.id,
+          designVersionId: pin.designVersionId,
+          sortOrder: pin.sortOrder,
+          displayMetaJson: pin.displayMetaJson,
+        })));
+      }
+    }
+
     await tx
-      .update(projects)
+      .update(rooms)
       .set({ status: "DRAFT", updatedAt: new Date() })
-      .where(eq(projects.id, projectId));
+      .where(eq(rooms.id, roomId));
 
     await writeAuditEvent(
       {
         workspaceId: scope.workspaceId,
-        projectId,
+        roomId: roomId,
         actorType: "user",
         actorId: scope.userId,
         action: "project.reopened",
@@ -1295,42 +1910,42 @@ export async function reopenRoom(scope: WorkspaceScope, projectId: string) {
 /**
  * Any handoff mutation after release clears handoffReleasedAt (option A).
  * Clients return to “preparing” until the owner releases again.
- * Caller must already hold a row lock on the project.
+ * Caller must already hold a row lock on the room.
  */
 async function clearHandoffReleaseInTx(
   tx: { update: typeof db.update },
-  projectId: string,
+  roomId: string,
   currentlyReleased: boolean,
 ) {
   if (!currentlyReleased) return false;
   await tx
-    .update(projects)
+    .update(rooms)
     .set({ handoffReleasedAt: null, updatedAt: new Date() })
-    .where(eq(projects.id, projectId));
+    .where(eq(rooms.id, roomId));
   return true;
 }
 
-/** Lock the project row for handoff mutations (tenant-scoped). */
-async function lockProjectForHandoffTx(
+/** Lock the room row for handoff mutations (tenant-scoped). */
+async function lockRoomForHandoffTx(
   tx: typeof db,
   workspaceId: string,
-  projectId: string,
+  roomId: string,
 ) {
-  const project = (
+  const room = (
     await tx
       .select()
-      .from(projects)
-      .where(and(eq(projects.id, projectId), eq(projects.workspaceId, workspaceId)))
+      .from(rooms)
+      .where(and(eq(rooms.id, roomId), eq(rooms.workspaceId, workspaceId)))
       .for("update")
       .limit(1)
   )[0];
-  if (!project) throw new Error("Room not found.");
-  return project;
+  if (!room) throw new Error("Room not found.");
+  return room;
 }
 
 export async function addHandoffItem(input: {
   scope: WorkspaceScope;
-  projectId: string;
+  roomId: string;
   label: string;
   category?: string;
   notes?: string;
@@ -1350,7 +1965,7 @@ export async function addHandoffItem(input: {
         .where(
           and(
             eq(assets.id, input.assetId),
-            eq(assets.projectId, input.projectId),
+            eq(assets.roomId, input.roomId),
             eq(assets.workspaceId, input.scope.workspaceId),
           ),
         )
@@ -1364,37 +1979,37 @@ export async function addHandoffItem(input: {
     (input.assetId ? "file" : externalUrl ? "link" : "note");
 
   return db.transaction(async (tx) => {
-    const project = await lockProjectForHandoffTx(
+    const room = await lockRoomForHandoffTx(
       tx as unknown as typeof db,
       input.scope.workspaceId,
-      input.projectId,
+      input.roomId,
     );
-    if (project.status !== "APPROVED" && project.status !== "ARCHIVED") {
+    if (room.status !== "APPROVED" && room.status !== "ARCHIVED") {
       throw new Error("Release handoff after the client approves a revision.");
     }
 
     return addHandoffItemInTx(tx as unknown as typeof db, {
       scope: input.scope,
-      projectId: input.projectId,
+      roomId: input.roomId,
       label: input.label.trim().slice(0, 200),
       category: category.slice(0, 40),
       notes: input.notes?.trim().slice(0, 4000) || null,
       externalUrl,
       assetId: input.assetId || null,
-      currentlyReleased: Boolean(project.handoffReleasedAt),
+      currentlyReleased: Boolean(room.handoffReleasedAt),
     });
   });
 }
 
 /**
- * Insert a handoff item inside an existing transaction (caller holds the project lock).
+ * Insert a handoff item inside an existing transaction (caller holds the room lock).
  * When assetId is set, concurrent inserts collapse via the unique asset_id index.
  */
 async function addHandoffItemInTx(
   tx: typeof db,
   input: {
     scope: WorkspaceScope;
-    projectId: string;
+    roomId: string;
     label: string;
     category: string;
     notes?: string | null;
@@ -1407,12 +2022,12 @@ async function addHandoffItemInTx(
     await tx
       .select({ value: sql<number>`coalesce(max(${handoffItems.sortOrder}), -1)` })
       .from(handoffItems)
-      .where(eq(handoffItems.projectId, input.projectId))
+      .where(eq(handoffItems.roomId, input.roomId))
   )[0]?.value;
 
   const values = {
     workspaceId: input.scope.workspaceId,
-    projectId: input.projectId,
+    roomId: input.roomId,
     label: input.label.trim().slice(0, 200),
     category: input.category.slice(0, 40),
     notes: input.notes?.trim().slice(0, 4000) || null,
@@ -1438,7 +2053,7 @@ async function addHandoffItemInTx(
           .where(
             and(
               eq(handoffItems.assetId, input.assetId),
-              eq(handoffItems.projectId, input.projectId),
+              eq(handoffItems.roomId, input.roomId),
               eq(handoffItems.workspaceId, input.scope.workspaceId),
             ),
           )
@@ -1456,14 +2071,14 @@ async function addHandoffItemInTx(
   // Clear release only when a new item was actually added.
   const releaseCleared = await clearHandoffReleaseInTx(
     tx,
-    input.projectId,
+    input.roomId,
     input.currentlyReleased,
   );
 
   await writeAuditEvent(
     {
       workspaceId: input.scope.workspaceId,
-      projectId: input.projectId,
+      roomId: input.roomId,
       actorType: "user",
       actorId: input.scope.userId,
       action: "handoff.item_added",
@@ -1482,12 +2097,12 @@ async function addHandoffItemInTx(
     await writeAuditEvent(
       {
         workspaceId: input.scope.workspaceId,
-        projectId: input.projectId,
+        roomId: input.roomId,
         actorType: "user",
         actorId: input.scope.userId,
         action: "handoff.release_cleared",
         targetType: "project",
-        targetId: input.projectId,
+        targetId: input.roomId,
         metadata: { reason: "item_added", itemId: item.id },
       },
       tx,
@@ -1501,22 +2116,22 @@ async function addHandoffItemInTx(
  * Explicitly release prepared handoff items to the client share link.
  * Idempotent when already released.
  */
-export async function releaseHandoff(scope: WorkspaceScope, projectId: string) {
+export async function releaseHandoff(scope: WorkspaceScope, roomId: string) {
   return db.transaction(async (tx) => {
-    const project = await lockProjectForHandoffTx(
+    const room = await lockRoomForHandoffTx(
       tx as unknown as typeof db,
       scope.workspaceId,
-      projectId,
+      roomId,
     );
-    if (project.status !== "APPROVED" && project.status !== "ARCHIVED") {
+    if (room.status !== "APPROVED" && room.status !== "ARCHIVED") {
       throw new Error("Release handoff after the client approves a revision.");
     }
 
-    if (project.handoffReleasedAt) {
+    if (room.handoffReleasedAt) {
       return {
         released: true as const,
         alreadyReleased: true as const,
-        releasedAt: project.handoffReleasedAt,
+        releasedAt: room.handoffReleasedAt,
       };
     }
 
@@ -1524,7 +2139,7 @@ export async function releaseHandoff(scope: WorkspaceScope, projectId: string) {
       await tx
         .select({ value: sql<number>`count(*)::int` })
         .from(handoffItems)
-        .where(eq(handoffItems.projectId, projectId))
+        .where(eq(handoffItems.roomId, roomId))
     )[0]?.value;
 
     if (!itemCount) {
@@ -1533,19 +2148,19 @@ export async function releaseHandoff(scope: WorkspaceScope, projectId: string) {
 
     const releasedAt = new Date();
     await tx
-      .update(projects)
+      .update(rooms)
       .set({ handoffReleasedAt: releasedAt, updatedAt: new Date() })
-      .where(eq(projects.id, projectId));
+      .where(eq(rooms.id, roomId));
 
     await writeAuditEvent(
       {
         workspaceId: scope.workspaceId,
-        projectId,
+        roomId: roomId,
         actorType: "user",
         actorId: scope.userId,
         action: "handoff.released",
         targetType: "project",
-        targetId: projectId,
+        targetId: roomId,
         metadata: { itemCount },
       },
       tx as unknown as typeof db,
@@ -1561,7 +2176,7 @@ export async function releaseHandoff(scope: WorkspaceScope, projectId: string) {
 
 export async function uploadHandoffFile(input: {
   scope: WorkspaceScope;
-  projectId: string;
+  roomId: string;
   fileName: string;
   mime: string;
   bytes: Buffer;
@@ -1569,10 +2184,10 @@ export async function uploadHandoffFile(input: {
   notes?: string;
   externalUrl?: string;
 }) {
-  const project = await getRoomOrThrow(input.scope.workspaceId, input.projectId);
-  if (project.status !== "APPROVED") {
+  const room = await getRoomOrThrow(input.scope.workspaceId, input.roomId);
+  if (room.status !== "APPROVED") {
     throw new Error(
-      project.status === "ARCHIVED"
+      room.status === "ARCHIVED"
         ? "Archived rooms cannot accept new handoff files."
         : "Release handoff after the client approves a revision.",
     );
@@ -1605,7 +2220,7 @@ export async function uploadHandoffFile(input: {
 
   const objectKey = buildHandoffObjectPath({
     workspaceId: input.scope.workspaceId,
-    projectId: input.projectId,
+    roomId: input.roomId,
     filename: fileName,
   });
   const stored = await writeAssetBytes(objectKey, input.bytes, mime);
@@ -1618,7 +2233,7 @@ export async function uploadHandoffFile(input: {
     .insert(assets)
     .values({
       workspaceId: input.scope.workspaceId,
-      projectId: input.projectId,
+      roomId: input.roomId,
       kind: mime === "application/pdf" ? "pdf" : mime.includes("zip") ? "file" : "image",
       label,
       objectKey: stored.pathname,
@@ -1635,7 +2250,7 @@ export async function uploadHandoffFile(input: {
   try {
     const { item, releaseCleared } = await addHandoffItem({
       scope: input.scope,
-      projectId: input.projectId,
+      roomId: input.roomId,
       label,
       category: "file",
       notes: input.notes,
@@ -1653,7 +2268,7 @@ export type HandoffUploadTokenMeta = {
   workspaceId: string;
   organizationId: string;
   userId: string;
-  projectId: string;
+  roomId: string;
   pathname: string;
   contentType: string;
   size: number;
@@ -1667,15 +2282,15 @@ export type HandoffUploadTokenMeta = {
  */
 export async function prepareHandoffDirectUpload(input: {
   scope: WorkspaceScope;
-  projectId: string;
+  roomId: string;
   fileName: string;
   contentType: string;
   size: number;
 }): Promise<HandoffUploadTokenMeta> {
-  const project = await getRoomOrThrow(input.scope.workspaceId, input.projectId);
-  if (project.status !== "APPROVED") {
+  const room = await getRoomOrThrow(input.scope.workspaceId, input.roomId);
+  if (room.status !== "APPROVED") {
     throw new Error(
-      project.status === "ARCHIVED"
+      room.status === "ARCHIVED"
         ? "Archived rooms cannot accept new handoff files."
         : "Release handoff after the client approves a revision.",
     );
@@ -1704,7 +2319,7 @@ export async function prepareHandoffDirectUpload(input: {
   const fileName = input.fileName.trim().slice(0, 200) || "handoff.bin";
   const pathname = buildHandoffObjectPath({
     workspaceId: input.scope.workspaceId,
-    projectId: input.projectId,
+    roomId: input.roomId,
     filename: fileName,
   });
 
@@ -1712,7 +2327,7 @@ export async function prepareHandoffDirectUpload(input: {
     workspaceId: input.scope.workspaceId,
     organizationId: input.scope.organizationId,
     userId: input.scope.userId,
-    projectId: input.projectId,
+    roomId: input.roomId,
     pathname,
     contentType: mime,
     size: input.size,
@@ -1745,12 +2360,12 @@ export function buildHandoffBlobClientTokenConstraints(meta: Pick<
  * Upload-completed webhooks prove an event occurred but not object size (PutBlobResult
  * lacks size) — always re-check authoritative Blob/local metadata before finalizing.
  *
- * Concurrent browser + webhook completions serialize on the project row lock and share
+ * Concurrent browser + webhook completions serialize on the room row lock and share
  * one asset + one handoff item for the uploadSessionId.
  */
 export async function completeHandoffDirectUpload(input: {
   scope: WorkspaceScope;
-  projectId: string;
+  roomId: string;
   /** Bound authorization metadata — never trust raw client fields alone. */
   meta: HandoffUploadTokenMeta;
   pathname?: string;
@@ -1765,7 +2380,7 @@ export async function completeHandoffDirectUpload(input: {
 }) {
   const meta = input.meta;
   if (
-    meta.projectId !== input.projectId ||
+    meta.roomId !== input.roomId ||
     meta.workspaceId !== input.scope.workspaceId ||
     meta.organizationId !== input.scope.organizationId ||
     meta.userId !== input.scope.userId
@@ -1775,7 +2390,7 @@ export async function completeHandoffDirectUpload(input: {
 
   const pathname = meta.pathname;
   const uploadSessionId = meta.uploadSessionId;
-  const expectedPrefix = `workspaces/${input.scope.workspaceId}/rooms/${input.projectId}/handoff/`;
+  const expectedPrefix = `workspaces/${input.scope.workspaceId}/rooms/${input.roomId}/handoff/`;
   if (!pathname.startsWith(expectedPrefix) || pathname.includes("..")) {
     throw new Error("Upload path is not owned by this room.");
   }
@@ -1817,11 +2432,11 @@ export async function completeHandoffDirectUpload(input: {
     throw new Error("Link must start with http:// or https://");
   }
 
-  // Phase 1: serialize on the project row — return or repair without holding a lock across Blob I/O.
+  // Phase 1: serialize on the room row — return or repair without holding a lock across Blob I/O.
   const early = await db.transaction(async (tx) => {
     return finalizeHandoffUploadInTx(tx as unknown as typeof db, {
       scope: input.scope,
-      projectId: input.projectId,
+      roomId: input.roomId,
       pathname,
       uploadSessionId,
       label,
@@ -1873,12 +2488,12 @@ export async function completeHandoffDirectUpload(input: {
     verified.size,
   );
 
-  // Phase 3: atomic asset + item + release/audit under the project lock.
+  // Phase 3: atomic asset + item + release/audit under the room lock.
   try {
     const finalized = await db.transaction(async (tx) => {
       return finalizeHandoffUploadInTx(tx as unknown as typeof db, {
         scope: input.scope,
-        projectId: input.projectId,
+        roomId: input.roomId,
         pathname,
         uploadSessionId,
         label,
@@ -1911,11 +2526,11 @@ export async function completeHandoffDirectUpload(input: {
 
 function assertHandoffAssetMatchesAuthorization(
   asset: typeof assets.$inferSelect,
-  input: { workspaceId: string; projectId: string; pathname: string },
+  input: { workspaceId: string; roomId: string; pathname: string },
 ) {
   if (
     asset.workspaceId !== input.workspaceId ||
-    asset.projectId !== input.projectId ||
+    asset.roomId !== input.roomId ||
     asset.objectKey !== input.pathname
   ) {
     throw new Error("Upload authorization does not match this room.");
@@ -1923,14 +2538,14 @@ function assertHandoffAssetMatchesAuthorization(
 }
 
 /**
- * Under an existing project row lock: resolve complete / repair / insert for one upload session.
+ * Under an existing room row lock: resolve complete / repair / insert for one upload session.
  * When verified is null, only complete or repair paths run (no new asset insert).
  */
 async function finalizeHandoffUploadInTx(
   tx: typeof db,
   input: {
     scope: WorkspaceScope;
-    projectId: string;
+    roomId: string;
     pathname: string;
     uploadSessionId: string;
     label: string;
@@ -1939,10 +2554,10 @@ async function finalizeHandoffUploadInTx(
     verified: Awaited<ReturnType<typeof verifyPrivateBlobObject>> | null;
   },
 ) {
-  const project = await lockProjectForHandoffTx(tx, input.scope.workspaceId, input.projectId);
-  if (project.status !== "APPROVED") {
+  const room = await lockRoomForHandoffTx(tx, input.scope.workspaceId, input.roomId);
+  if (room.status !== "APPROVED") {
     throw new Error(
-      project.status === "ARCHIVED"
+      room.status === "ARCHIVED"
         ? "Archived rooms cannot accept new handoff files."
         : "Release handoff after the client approves a revision.",
     );
@@ -1950,7 +2565,7 @@ async function finalizeHandoffUploadInTx(
 
   const ownership = {
     workspaceId: input.scope.workspaceId,
-    projectId: input.projectId,
+    roomId: input.roomId,
     pathname: input.pathname,
   };
 
@@ -1972,7 +2587,7 @@ async function finalizeHandoffUploadInTx(
       .insert(assets)
       .values({
         workspaceId: input.scope.workspaceId,
-        projectId: input.projectId,
+        roomId: input.roomId,
         kind: mime === "application/pdf" ? "pdf" : mime.includes("zip") ? "file" : "image",
         label: input.label,
         objectKey: input.verified.pathname,
@@ -2011,7 +2626,7 @@ async function finalizeHandoffUploadInTx(
       .where(
         and(
           eq(handoffItems.assetId, asset.id),
-          eq(handoffItems.projectId, input.projectId),
+          eq(handoffItems.roomId, input.roomId),
           eq(handoffItems.workspaceId, input.scope.workspaceId),
         ),
       )
@@ -2030,13 +2645,13 @@ async function finalizeHandoffUploadInTx(
   // Partial state: asset exists without item — repair inside this transaction.
   const { item, releaseCleared } = await addHandoffItemInTx(tx, {
     scope: input.scope,
-    projectId: input.projectId,
+    roomId: input.roomId,
     label: input.label,
     category: "file",
     notes: input.notes,
     externalUrl: input.externalUrl,
     assetId: asset.id,
-    currentlyReleased: Boolean(project.handoffReleasedAt),
+    currentlyReleased: Boolean(room.handoffReleasedAt),
   });
 
   return {
@@ -2070,14 +2685,14 @@ async function queueAuthorizedPathnameCleanup(input: {
   });
 }
 
-export async function deleteHandoffItem(scope: WorkspaceScope, projectId: string, itemId: string) {
+export async function deleteHandoffItem(scope: WorkspaceScope, roomId: string, itemId: string) {
   return db.transaction(async (tx) => {
-    const project = await lockProjectForHandoffTx(
+    const room = await lockRoomForHandoffTx(
       tx as unknown as typeof db,
       scope.workspaceId,
-      projectId,
+      roomId,
     );
-    if (project.status === "ARCHIVED") {
+    if (room.status === "ARCHIVED") {
       throw new Error("Archived rooms cannot change handoff.");
     }
 
@@ -2088,7 +2703,7 @@ export async function deleteHandoffItem(scope: WorkspaceScope, projectId: string
         .where(
           and(
             eq(handoffItems.id, itemId),
-            eq(handoffItems.projectId, projectId),
+            eq(handoffItems.roomId, roomId),
             eq(handoffItems.workspaceId, scope.workspaceId),
           ),
         )
@@ -2098,15 +2713,15 @@ export async function deleteHandoffItem(scope: WorkspaceScope, projectId: string
 
     const releaseCleared = await clearHandoffReleaseInTx(
       tx,
-      projectId,
-      Boolean(project.handoffReleasedAt),
+      roomId,
+      Boolean(room.handoffReleasedAt),
     );
     await tx.delete(handoffItems).where(eq(handoffItems.id, itemId));
 
     await writeAuditEvent(
       {
         workspaceId: scope.workspaceId,
-        projectId,
+        roomId: roomId,
         actorType: "user",
         actorId: scope.userId,
         action: "handoff.item_deleted",
@@ -2121,12 +2736,12 @@ export async function deleteHandoffItem(scope: WorkspaceScope, projectId: string
       await writeAuditEvent(
         {
           workspaceId: scope.workspaceId,
-          projectId,
+          roomId: roomId,
           actorType: "user",
           actorId: scope.userId,
           action: "handoff.release_cleared",
           targetType: "project",
-          targetId: projectId,
+          targetId: roomId,
           metadata: { reason: "item_deleted", itemId },
         },
         tx as unknown as typeof db,
@@ -2137,60 +2752,60 @@ export async function deleteHandoffItem(scope: WorkspaceScope, projectId: string
   });
 }
 
-export async function archiveRoom(scope: WorkspaceScope, projectId: string) {
-  await getRoomOrThrow(scope.workspaceId, projectId);
+export async function archiveRoom(scope: WorkspaceScope, roomId: string) {
+  await getRoomOrThrow(scope.workspaceId, roomId);
   await db
-    .update(projects)
+    .update(rooms)
     .set({ status: "ARCHIVED", archivedAt: new Date(), updatedAt: new Date() })
-    .where(eq(projects.id, projectId));
+    .where(eq(rooms.id, roomId));
   await writeAuditEvent({
     workspaceId: scope.workspaceId,
-    projectId,
+    roomId: roomId,
     actorType: "user",
     actorId: scope.userId,
     action: "project.archived",
     targetType: "project",
-    targetId: projectId,
+    targetId: roomId,
   });
 }
 
-/** Rename an approval room (project name and/or client name). Slug stays stable. */
+/** Rename an approval room (room name and/or client name). Slug stays stable. */
 export async function updateRoom(
   scope: WorkspaceScope,
-  projectId: string,
+  roomId: string,
   input: { name: string; clientName: string },
 ) {
   const name = input.name.trim().slice(0, 120);
   const clientName = input.clientName.trim().slice(0, 120);
-  if (!name) throw new Error("A project name is required.");
+  if (!name) throw new Error("A room name is required.");
   if (!clientName) throw new Error("A client name is required.");
 
-  const project = await getRoomOrThrow(scope.workspaceId, projectId);
-  if (project.status === "ARCHIVED") {
+  const room = await getRoomOrThrow(scope.workspaceId, roomId);
+  if (room.status === "ARCHIVED") {
     throw new Error("Archived rooms cannot be edited.");
   }
 
   await assertCanMutate(scope.organizationId);
 
   const [updated] = await db
-    .update(projects)
+    .update(rooms)
     .set({ name, clientName, updatedAt: new Date() })
-    .where(eq(projects.id, projectId))
+    .where(eq(rooms.id, roomId))
     .returning();
 
   await writeAuditEvent({
     workspaceId: scope.workspaceId,
-    projectId,
+    roomId: roomId,
     actorType: "user",
     actorId: scope.userId,
     action: "project.renamed",
     targetType: "project",
-    targetId: projectId,
+    targetId: roomId,
     metadata: {
       name,
       clientName,
-      previousName: project.name,
-      previousClientName: project.clientName,
+      previousName: room.name,
+      previousClientName: room.clientName,
     },
   });
 
@@ -2201,8 +2816,8 @@ export async function updateRoom(
  * Permanently delete a room. Clears RESTRICT FK rows (revision_assets → assets,
  * approvals → revisions/reviewers) before cascading the project delete.
  */
-export async function deleteRoom(scope: WorkspaceScope, projectId: string) {
-  const project = await getRoomOrThrow(scope.workspaceId, projectId);
+export async function deleteRoom(scope: WorkspaceScope, roomId: string) {
+  const room = await getRoomOrThrow(scope.workspaceId, roomId);
 
   const assetRows = await db
     .select({
@@ -2211,20 +2826,20 @@ export async function deleteRoom(scope: WorkspaceScope, projectId: string) {
       blobUrl: assets.blobUrl,
     })
     .from(assets)
-    .where(and(eq(assets.projectId, projectId), eq(assets.workspaceId, scope.workspaceId)));
+    .where(and(eq(assets.roomId, roomId), eq(assets.workspaceId, scope.workspaceId)));
 
   const revisionRows = await db
     .select({ id: revisions.id })
     .from(revisions)
-    .where(and(eq(revisions.projectId, projectId), eq(revisions.workspaceId, scope.workspaceId)));
+    .where(and(eq(revisions.roomId, roomId), eq(revisions.workspaceId, scope.workspaceId)));
   const revisionIds = revisionRows.map((row) => row.id);
 
   await db.transaction(async (tx) => {
     if (revisionIds.length > 0) {
       await tx.delete(revisionAssets).where(inArray(revisionAssets.revisionId, revisionIds));
     }
-    await tx.delete(approvals).where(eq(approvals.projectId, projectId));
-    await tx.delete(projects).where(eq(projects.id, project.id));
+    await tx.delete(approvals).where(eq(approvals.roomId, roomId));
+    await tx.delete(rooms).where(eq(rooms.id, room.id));
   });
 
   for (const asset of assetRows) {
@@ -2241,12 +2856,12 @@ export async function deleteRoom(scope: WorkspaceScope, projectId: string) {
     await processBlobDeletionBatch(Math.max(25, assetRows.length));
   } catch (error) {
     logWarn("blob_deletion.flush_failed", {
-      projectId,
+      roomId,
       error: error instanceof Error ? error.message : "unknown",
     });
   }
 
-  return { deleted: true as const, id: project.id };
+  return { deleted: true as const, id: room.id };
 }
 
 export async function getAssetForAccess(assetId: string) {
@@ -2260,11 +2875,11 @@ export async function deleteRoomAssetFile(objectKey: string | null | undefined) 
 /** Remove an asset from the current draft only (not from published revisions). */
 export async function removeDraftRevisionAsset(
   scope: WorkspaceScope,
-  projectId: string,
+  roomId: string,
   revisionAssetId: string,
 ) {
-  const project = await getRoomOrThrow(scope.workspaceId, projectId);
-  if (project.status === "ARCHIVED") {
+  const room = await getRoomOrThrow(scope.workspaceId, roomId);
+  if (room.status === "ARCHIVED") {
     throw new Error("Archived rooms cannot be edited.");
   }
 
@@ -2284,7 +2899,7 @@ export async function removeDraftRevisionAsset(
       .where(
         and(
           eq(revisionAssets.id, revisionAssetId),
-          eq(revisions.projectId, projectId),
+          eq(revisions.roomId, roomId),
           eq(revisions.workspaceId, scope.workspaceId),
         ),
       )
@@ -2319,7 +2934,7 @@ export async function removeDraftRevisionAsset(
     await writeAuditEvent(
       {
         workspaceId: scope.workspaceId,
-        projectId,
+        roomId: roomId,
         actorType: "user",
         actorId: scope.userId,
         action: "asset.removed",
@@ -2346,15 +2961,15 @@ export async function removeDraftRevisionAsset(
 /** Rename an asset that belongs to the current draft revision. */
 export async function renameDraftRevisionAsset(
   scope: WorkspaceScope,
-  projectId: string,
+  roomId: string,
   revisionAssetId: string,
   label: string,
 ) {
   const trimmed = label.trim().slice(0, 200);
   if (!trimmed) throw new Error("Name is required.");
 
-  const project = await getRoomOrThrow(scope.workspaceId, projectId);
-  if (project.status === "ARCHIVED") {
+  const room = await getRoomOrThrow(scope.workspaceId, roomId);
+  if (room.status === "ARCHIVED") {
     throw new Error("Archived rooms cannot be edited.");
   }
 
@@ -2369,7 +2984,7 @@ export async function renameDraftRevisionAsset(
       .where(
         and(
           eq(revisionAssets.id, revisionAssetId),
-          eq(revisions.projectId, projectId),
+          eq(revisions.roomId, roomId),
           eq(revisions.workspaceId, scope.workspaceId),
         ),
       )
@@ -2388,7 +3003,7 @@ export async function renameDraftRevisionAsset(
 
   await writeAuditEvent({
     workspaceId: scope.workspaceId,
-    projectId,
+    roomId: roomId,
     actorType: "user",
     actorId: scope.userId,
     action: "asset.renamed",
@@ -2403,11 +3018,11 @@ export async function renameDraftRevisionAsset(
 /** Reorder assets on the current draft revision. `orderedIds` must be the full set of draft revisionAsset ids. */
 export async function reorderDraftRevisionAssets(
   scope: WorkspaceScope,
-  projectId: string,
+  roomId: string,
   orderedIds: string[],
 ) {
-  const project = await getRoomOrThrow(scope.workspaceId, projectId);
-  if (project.status === "ARCHIVED") {
+  const room = await getRoomOrThrow(scope.workspaceId, roomId);
+  if (room.status === "ARCHIVED") {
     throw new Error("Archived rooms cannot be edited.");
   }
 
@@ -2417,7 +3032,7 @@ export async function reorderDraftRevisionAssets(
       .from(revisions)
       .where(
         and(
-          eq(revisions.projectId, projectId),
+          eq(revisions.roomId, roomId),
           eq(revisions.workspaceId, scope.workspaceId),
           eq(revisions.status, "DRAFT"),
         ),
@@ -2446,7 +3061,7 @@ export async function reorderDraftRevisionAssets(
     await writeAuditEvent(
       {
         workspaceId: scope.workspaceId,
-        projectId,
+        roomId: roomId,
         actorType: "user",
         actorId: scope.userId,
         action: "assets.reordered",
@@ -2470,11 +3085,11 @@ export async function listPublishedComments(revisionId: string) {
 }
 
 /** Safe handoff fields for the public client share page (only when released). */
-export async function listReleasedHandoffItems(projectId: string) {
-  const project = (
-    await db.select().from(projects).where(eq(projects.id, projectId)).limit(1)
+export async function listReleasedHandoffItems(roomId: string) {
+  const room = (
+    await db.select().from(rooms).where(eq(rooms.id, roomId)).limit(1)
   )[0];
-  if (!project?.handoffReleasedAt) return [];
+  if (!room?.handoffReleasedAt) return [];
 
   return db
     .select({
@@ -2486,20 +3101,20 @@ export async function listReleasedHandoffItems(projectId: string) {
       assetId: handoffItems.assetId,
     })
     .from(handoffItems)
-    .where(eq(handoffItems.projectId, projectId))
+    .where(eq(handoffItems.roomId, roomId))
     .orderBy(asc(handoffItems.sortOrder));
 }
 
-export async function revokeShareLink(scope: WorkspaceScope, projectId: string, shareLinkId?: string) {
-  await getRoomOrThrow(scope.workspaceId, projectId);
+export async function revokeShareLink(scope: WorkspaceScope, roomId: string, shareLinkId?: string) {
+  await getRoomOrThrow(scope.workspaceId, roomId);
   const where = shareLinkId
     ? and(
         eq(shareLinks.id, shareLinkId),
-        eq(shareLinks.projectId, projectId),
+        eq(shareLinks.roomId, roomId),
         eq(shareLinks.workspaceId, scope.workspaceId),
       )
     : and(
-        eq(shareLinks.projectId, projectId),
+        eq(shareLinks.roomId, roomId),
         eq(shareLinks.workspaceId, scope.workspaceId),
         eq(shareLinks.status, "ACTIVE"),
       );
@@ -2511,7 +3126,7 @@ export async function revokeShareLink(scope: WorkspaceScope, projectId: string, 
 
   await writeAuditEvent({
     workspaceId: scope.workspaceId,
-    projectId,
+    roomId: roomId,
     actorType: "user",
     actorId: scope.userId,
     action: "share_link.revoked",
@@ -2560,7 +3175,7 @@ export async function queueBlobDeletion(input: {
  */
 export async function completeDirectUpload(input: {
   scope: WorkspaceScope;
-  projectId: string;
+  roomId: string;
   revisionId: string;
   uploadSessionId: string;
   pathname: string;
@@ -2572,7 +3187,7 @@ export async function completeDirectUpload(input: {
   height?: number | null;
 }) {
   await assertCanMutate(input.scope.organizationId);
-  await getRoomOrThrow(input.scope.workspaceId, input.projectId);
+  await getRoomOrThrow(input.scope.workspaceId, input.roomId);
 
   const existing = (
     await db
@@ -2609,7 +3224,7 @@ export async function completeDirectUpload(input: {
       .where(
         and(
           eq(revisions.id, input.revisionId),
-          eq(revisions.projectId, input.projectId),
+          eq(revisions.roomId, input.roomId),
           eq(revisions.workspaceId, input.scope.workspaceId),
           eq(revisions.status, "DRAFT"),
         ),
@@ -2626,7 +3241,7 @@ export async function completeDirectUpload(input: {
       .insert(assets)
       .values({
         workspaceId: input.scope.workspaceId,
-        projectId: input.projectId,
+        roomId: input.roomId,
         kind,
         label: input.label.slice(0, 200) || "Untitled",
         objectKey: input.pathname,
@@ -2692,7 +3307,7 @@ export async function completeDirectUpload(input: {
     await writeAuditEvent(
       {
         workspaceId: input.scope.workspaceId,
-        projectId: input.projectId,
+        roomId: input.roomId,
         actorType: "user",
         actorId: input.scope.userId,
         action: "asset.uploaded",
@@ -2732,7 +3347,19 @@ export async function processBlobDeletionBatch(limit = 25) {
           .where(and(eq(assets.objectKey, job.objectKey), eq(assets.uploadStatus, "ready")))
           .limit(1)
       )[0];
-      if (stillReferenced) {
+      const videoReferenceResult = await db.execute(sql`
+        SELECT id
+        FROM project_design_versions
+        WHERE payload_json::jsonb->>'sourceType' = 'video'
+          AND (
+            payload_json::jsonb->'video'->>'objectKey' = ${job.objectKey}
+            OR payload_json::jsonb->'video'->'poster'->>'objectKey' = ${job.objectKey}
+          )
+        LIMIT 1
+      `);
+      const videoStillReferenced =
+        (((videoReferenceResult as unknown as { rows?: unknown[] }).rows ?? []).length > 0);
+      if (stillReferenced || videoStillReferenced) {
         await db
           .update(blobDeletionJobs)
           .set({

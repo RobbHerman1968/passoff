@@ -6,9 +6,10 @@ import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { db } from "@/db";
 import {
+  clientProjects,
   organizationMemberships,
   organizations,
-  projects,
+  rooms,
   users,
   workspaceMemberships,
   workspaces,
@@ -98,17 +99,40 @@ export async function requireActiveWorkspaceMembership(
   };
 }
 
-/** Verify the user is an active member of the workspace that owns this project. Returns 404 on miss. */
-export async function requireProjectMembership(projectId: string): Promise<{
+/** Verify the user is an active member of the workspace that owns this room. Returns 404 on miss. */
+export async function requireRoomMembership(roomId: string): Promise<{
   scope: WorkspaceScope;
-  project: typeof projects.$inferSelect;
+  room: typeof rooms.$inferSelect;
+}> {
+  const scope = await requireActiveWorkspaceMembership();
+  const room = (
+    await db
+      .select()
+      .from(rooms)
+      .where(and(eq(rooms.id, roomId), eq(rooms.workspaceId, scope.workspaceId)))
+      .limit(1)
+  )[0];
+  if (!room) throw new AuthzError("Not found.", 404);
+  return { scope, room };
+}
+
+/** Verify the user is an active member of the workspace that owns this durable client project. */
+export async function requireClientProjectMembership(projectId: string): Promise<{
+  scope: WorkspaceScope;
+  project: typeof clientProjects.$inferSelect;
 }> {
   const scope = await requireActiveWorkspaceMembership();
   const project = (
     await db
       .select()
-      .from(projects)
-      .where(and(eq(projects.id, projectId), eq(projects.workspaceId, scope.workspaceId)))
+      .from(clientProjects)
+      .where(
+        and(
+          eq(clientProjects.id, projectId),
+          eq(clientProjects.organizationId, scope.organizationId),
+          eq(clientProjects.workspaceId, scope.workspaceId),
+        ),
+      )
       .limit(1)
   )[0];
   if (!project) throw new AuthzError("Not found.", 404);

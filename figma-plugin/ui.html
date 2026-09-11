@@ -11,12 +11,6 @@
     p { color: var(--figma-color-text-secondary); font-size: 11px; line-height: 1.6; }
     label { display: block; margin: 14px 0 6px; font-size: 10px; font-weight: 700; }
     input { width: 100%; border: 1px solid var(--figma-color-border); border-radius: 9px; background: var(--figma-color-bg-secondary); color: var(--figma-color-text); padding: 9px 10px; font-size: 10px; outline: none; }
-    .scope { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 4px; }
-    .scope label { margin: 0; display: flex; flex-direction: column; gap: 4px; border: 1px solid var(--figma-color-border); border-radius: 10px; padding: 10px; cursor: pointer; background: var(--figma-color-bg-secondary); }
-    .scope label:has(input:checked) { border-color: #38b99d; background: color-mix(in srgb, #38b99d 12%, var(--figma-color-bg-secondary)); }
-    .scope input { width: auto; margin: 0; accent-color: #16806d; }
-    .scope strong { font-size: 11px; }
-    .scope span { font-size: 10px; font-weight: 400; line-height: 1.4; color: var(--figma-color-text-secondary); }
     .notice { margin-top: 14px; border-radius: 10px; background: var(--figma-color-bg-secondary); padding: 10px; font-size: 10px; line-height: 1.5; color: var(--figma-color-text-secondary); }
     .progress { display: none; margin-top: 16px; border: 1px solid var(--figma-color-border); border-radius: 11px; padding: 11px; }
     .progress-row { display: flex; justify-content: space-between; gap: 12px; font-size: 10px; }
@@ -36,26 +30,14 @@
   <h1>Send frames to Pass-Off</h1>
   <p>Optional: select frames, components, or sections first. With nothing selected, Pass-Off uses the current page.</p>
   <div class="notice">Development destination: <strong>http://localhost:3000</strong><br />This uses Figma’s Plugin API and does not consume REST file or image requests.</div>
-  <label>Export scope</label>
-  <div class="scope" role="radiogroup" aria-label="Export scope">
-    <label>
-      <input type="radio" name="scope" value="high-level" checked />
-      <strong>High level</strong>
-      <span>Only top-level frames, components, and sections.</span>
-    </label>
-    <label>
-      <input type="radio" name="scope" value="all" />
-      <strong>All</strong>
-      <span>Every nested frame, component, and section too.</span>
-    </label>
-  </div>
+  <div class="notice">Exports your selected screens, or direct page-level frames, components, and sections when nothing is selected.</div>
   <label for="project-key">Pass-Off project key</label>
   <input id="project-key" type="text" autocomplete="off" spellcheck="false" placeholder="UUID from /projects/… or slug" />
-  <label for="plugin-key">Local plugin key</label>
-  <input id="plugin-key" type="password" autocomplete="off" placeholder="paste hex value only" />
+  <label for="plugin-key">Project plugin key</label>
+  <input id="plugin-key" type="password" autocomplete="off" placeholder="pofig_…" />
   <div id="progress" class="progress"><div class="progress-row"><span id="message">Preparing…</span><strong id="percent">0%</strong></div><div class="track"><div id="bar" class="bar"></div></div></div>
   <div id="error" class="error"></div>
-  <div class="actions"><button id="cancel" type="button">Close</button><button id="export" type="button">Export frames</button></div>
+  <div class="actions"><button id="cancel" type="button">Close</button><button id="export" type="button">Export screens</button></div>
   <script>
     const frames = [];
     let file = null;
@@ -76,13 +58,7 @@
     }
 
     function normalizePluginKey(value) {
-      let key = String(value || "").trim();
-      // Allow pasting the whole .env assignment line.
-      key = key.replace(/^PASSOFF_FIGMA_PLUGIN_KEY\s*=\s*/i, "").trim();
-      if ((key.startsWith('"') && key.endsWith('"')) || (key.startsWith("'") && key.endsWith("'"))) {
-        key = key.slice(1, -1).trim();
-      }
-      return key;
+      return String(value || "").trim();
     }
 
     function normalizeProjectKey(value) {
@@ -118,23 +94,6 @@
       exportButton.disabled = false;
     }
 
-    function selectedScope() {
-      const checked = document.querySelector('input[name="scope"]:checked');
-      return checked && checked.value === "all" ? "all" : "high-level";
-    }
-
-    function setScope(scope) {
-      const value = scope === "all" ? "all" : "high-level";
-      const input = document.querySelector(`input[name="scope"][value="${value}"]`);
-      if (input) input.checked = true;
-    }
-
-    document.querySelectorAll('input[name="scope"]').forEach((input) => {
-      input.addEventListener("change", () => {
-        parent.postMessage({ pluginMessage: { type: "save-export-scope", scope: selectedScope() } }, "*");
-      });
-    });
-
     document.getElementById("cancel").onclick = () => parent.postMessage({ pluginMessage: { type: "cancel" } }, "*");
     exportButton.onclick = () => {
       frames.length = 0;
@@ -142,9 +101,8 @@
       errorBox.style.display = "none";
       message.className = "";
       exportButton.disabled = true;
-      const scope = selectedScope();
-      showProgress(scope === "all" ? "Preparing all nested frames" : "Preparing high-level frames", 2);
-      parent.postMessage({ pluginMessage: { type: "export", scope } }, "*");
+      showProgress("Preparing screens", 2);
+      parent.postMessage({ pluginMessage: { type: "export" } }, "*");
     };
 
     onmessage = async (event) => {
@@ -156,7 +114,6 @@
       if (data.type === "project-key" && typeof data.projectKey === "string") {
         projectKeyInput.value = data.projectKey;
       }
-      if (data.type === "export-scope") setScope(data.scope);
       if (data.type === "started") {
         file = data.file;
         showProgress(`Found ${data.total} frame${data.total === 1 ? "" : "s"}`, 5);
@@ -184,7 +141,7 @@
         try {
           file = data.file || file;
           const pluginKey = normalizePluginKey(pluginKeyInput.value);
-          if (!pluginKey) throw new Error("Paste the hex value from PASSOFF_FIGMA_PLUGIN_KEY in your local .env file.");
+          if (!pluginKey) throw new Error("Paste the project plugin key generated in Pass-Off.");
           pluginKeyInput.value = pluginKey;
           parent.postMessage({ pluginMessage: { type: "save-plugin-key", pluginKey } }, "*");
           const projectKey = normalizeProjectKey(projectKeyInput.value);
@@ -220,7 +177,7 @@
           const projectLabel = payload.projectName || payload.projectKey || projectKey;
           showProgress(`Saved ${payload.previewCount} previews · ${payload.interactionCount} interactions → ${projectLabel}`, 100);
           message.className = "done";
-          exportButton.textContent = "Export again";
+          exportButton.textContent = "Export screens again";
           exportButton.disabled = false;
         } catch (error) {
           showError(error instanceof Error ? error.message : String(error));

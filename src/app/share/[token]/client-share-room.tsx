@@ -18,12 +18,75 @@ type ShareAsset = {
 
 type ShareComment = {
   id: string;
-  revisionAssetId: string;
+  revisionAssetId: string | null;
+  revisionDesignVersionId: string | null;
+  screenId: string | null;
+  videoTimeMs: number | null;
   reviewerId: string | null;
-  xPercent: number;
-  yPercent: number;
+  xPercent: number | null;
+  yPercent: number | null;
   body: string;
   status: string;
+};
+
+type ReviewTarget =
+  | (ShareAsset & { type: "asset" })
+  | {
+      type: "design_screen";
+      revisionDesignVersionId: string;
+      designId: string;
+      designVersionId: string;
+      designName: string;
+      versionNumber: number;
+      screenId: string;
+      screenName: string;
+      width: number | null;
+      height: number | null;
+      previewUrl: string | null;
+    }
+  | {
+      type: "video";
+      revisionDesignVersionId: string;
+      designId: string;
+      designVersionId: string;
+      designName: string;
+      versionNumber: number;
+      durationMs: number;
+      width: number | null;
+      height: number | null;
+      mimeType: "video/mp4" | "video/webm";
+      playbackUrl: string;
+    };
+
+type DesignerNote = {
+  id: string;
+  revisionDesignVersionId: string;
+  targetType: "design_screen" | "video";
+  screenId: string | null;
+  videoTimeMs: number | null;
+  category: string;
+  title: string;
+  body: string;
+  authorDisplayName: string;
+  figmaNodeName: string | null;
+  x: number | null;
+  y: number | null;
+  selectionWidth: number | null;
+  selectionHeight: number | null;
+};
+
+type ShareDesign = {
+  id: string;
+  designVersionId: string;
+  name: string;
+  versionNumber: number;
+  screens: Array<{
+    id: string;
+    name: string;
+    width: number | null;
+    height: number | null;
+    url: string | null;
+  }>;
 };
 
 type ShareHandoff = {
@@ -36,10 +99,14 @@ type ShareHandoff = {
 };
 
 type SharePayload = {
-  project: { name: string; clientName: string; status: string; handoffReleasedAt: string | null };
+  project: { id: string; name: string; clientName: string };
+  room: { id: string; name: string; status: string; handoffReleasedAt: string | null };
   revision: { id: string; number: number; contentDigest: string | null };
   assets: ShareAsset[];
+  designs: ShareDesign[];
+  targets: ReviewTarget[];
   comments: ShareComment[];
+  designerNotes: DesignerNote[];
   handoff?: ShareHandoff[];
   approvalStatement: string;
   approvalReceipt?: ApprovalReceiptView | null;
@@ -47,6 +114,24 @@ type SharePayload = {
 };
 
 type RememberedIdentity = { name: string; email: string };
+
+function targetKey(target: ReviewTarget) {
+  return target.type === "asset"
+    ? `asset:${target.revisionAssetId}`
+    : target.type === "video"
+      ? `video:${target.revisionDesignVersionId}`
+      : `design:${target.revisionDesignVersionId}:${target.screenId}`;
+}
+
+function formatTimestamp(milliseconds: number) {
+  const seconds = Math.max(0, Math.floor(milliseconds / 1000));
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const remainder = seconds % 60;
+  return hours > 0
+    ? `${hours}:${String(minutes).padStart(2, "0")}:${String(remainder).padStart(2, "0")}`
+    : `${minutes}:${String(remainder).padStart(2, "0")}`;
+}
 
 function identityStorageKey(token: string) {
   return `passoff:reviewer:${token}`;
@@ -92,12 +177,15 @@ export function ClientShareRoom({ token }: { token: string }) {
   const [reviewerId, setReviewerId] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [draftPin, setDraftPin] = useState<{ x: number; y: number } | null>(null);
+  const [draftVideoTimeMs, setDraftVideoTimeMs] = useState<number | null>(null);
+  const [currentVideoTimeMs, setCurrentVideoTimeMs] = useState(0);
   const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
   const [commentBody, setCommentBody] = useState("");
   const [busy, setBusy] = useState(false);
   const [confirmApprove, setConfirmApprove] = useState(false);
   const [doneMessage, setDoneMessage] = useState<string | null>(null);
   const commentRef = useRef<HTMLTextAreaElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
   const viewed = useRef(false);
 
   useEffect(() => {
@@ -119,8 +207,8 @@ export function ClientShareRoom({ token }: { token: string }) {
     if (!response.ok) throw new Error(payload.error || "This link is unavailable.");
     setData(payload);
     setSelectedId((current) => {
-      if (current && payload.assets.some((a) => a.revisionAssetId === current)) return current;
-      return payload.assets[0]?.revisionAssetId ?? null;
+      if (current && payload.targets.some((target) => targetKey(target) === current)) return current;
+      return payload.targets[0] ? targetKey(payload.targets[0]) : null;
     });
   }, [token]);
 
@@ -176,42 +264,69 @@ export function ClientShareRoom({ token }: { token: string }) {
   }, [data, token]);
 
   useEffect(() => {
-    if (!draftPin && !editingCommentId) return;
+    if (!draftPin && draftVideoTimeMs === null && !editingCommentId) return;
     commentRef.current?.focus();
-  }, [draftPin, editingCommentId]);
+  }, [draftPin, draftVideoTimeMs, editingCommentId]);
 
   const selected = useMemo(
-    () => data?.assets.find((a) => a.revisionAssetId === selectedId) || data?.assets[0],
+    () => data?.targets.find((target) => targetKey(target) === selectedId) || data?.targets[0],
     [data, selectedId],
   );
 
   const pins = useMemo(
     () =>
       (data?.comments || []).filter(
-        (c) => c.revisionAssetId === selected?.revisionAssetId && c.status !== "WONT_FIX",
+        (comment) =>
+          comment.status !== "WONT_FIX"
+          && (
+            selected?.type === "asset"
+              ? comment.revisionAssetId === selected.revisionAssetId
+              : selected?.type === "video"
+                ? comment.revisionDesignVersionId === selected.revisionDesignVersionId
+                  && comment.videoTimeMs !== null
+                : comment.revisionDesignVersionId === selected?.revisionDesignVersionId
+                && comment.screenId === selected.screenId
+          ),
       ),
+    [data, selected],
+  );
+  const designerNotes = useMemo(
+    () => selected?.type === "design_screen"
+      ? (data?.designerNotes || []).filter(
+          (note) =>
+            note.revisionDesignVersionId === selected.revisionDesignVersionId
+            && note.screenId === selected.screenId,
+        )
+      : selected?.type === "video"
+        ? (data?.designerNotes || []).filter(
+            (note) => note.targetType === "video"
+              && note.revisionDesignVersionId === selected.revisionDesignVersionId,
+          )
+        : [],
     [data, selected],
   );
 
   const handoff = data?.handoff ?? [];
-  const isApproved = data?.project.status === "APPROVED";
-  const isChangesRequested = data?.project.status === "CHANGES_REQUESTED";
-  const isArchived = data?.project.status === "ARCHIVED";
-  const handoffReleased = Boolean(data?.project.handoffReleasedAt);
+  const isApproved = data?.room.status === "APPROVED";
+  const isChangesRequested = data?.room.status === "CHANGES_REQUESTED";
+  const isArchived = data?.room.status === "ARCHIVED";
+  const handoffReleased = Boolean(data?.room.handoffReleasedAt);
   const canDecide = !isApproved && !isChangesRequested && !isArchived;
   const canComment = !isApproved && !isArchived;
   const editingComment = pins.find((pin) => pin.id === editingCommentId) ?? null;
-  const isComposing = canComment && (Boolean(draftPin) || Boolean(editingComment));
+  const isComposing = canComment && (Boolean(draftPin) || draftVideoTimeMs !== null || Boolean(editingComment));
 
   useEffect(() => {
     if (canComment) return;
     setDraftPin(null);
+    setDraftVideoTimeMs(null);
     setEditingCommentId(null);
     setCommentBody("");
   }, [canComment]);
 
   function clearCommentDraft() {
     setDraftPin(null);
+    setDraftVideoTimeMs(null);
     setEditingCommentId(null);
     setCommentBody("");
   }
@@ -219,6 +334,10 @@ export function ClientShareRoom({ token }: { token: string }) {
   function beginEditComment(pin: ShareComment) {
     if (!canComment || !reviewerId || pin.reviewerId !== reviewerId || pin.status !== "OPEN") return;
     setDraftPin(null);
+    setDraftVideoTimeMs(null);
+    if (pin.videoTimeMs !== null && videoRef.current) {
+      videoRef.current.currentTime = pin.videoTimeMs / 1000;
+    }
     setConfirmApprove(false);
     setEditingCommentId(pin.id);
     setCommentBody(pin.body);
@@ -279,7 +398,7 @@ export function ClientShareRoom({ token }: { token: string }) {
   }
 
   async function submitComment() {
-    if (!canComment || !draftPin || !selected || !commentBody.trim()) return;
+    if (!canComment || (!draftPin && draftVideoTimeMs === null) || !selected || !commentBody.trim()) return;
     setBusy(true);
     setError(null);
     try {
@@ -289,9 +408,24 @@ export function ClientShareRoom({ token }: { token: string }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action: "comment",
-          revisionAssetId: selected.revisionAssetId,
-          xPercent: draftPin.x,
-          yPercent: draftPin.y,
+          ...(selected.type === "asset"
+            ? { revisionAssetId: selected.revisionAssetId }
+            : selected.type === "video"
+              ? {
+                  target: {
+                    type: "video",
+                    revisionDesignVersionId: selected.revisionDesignVersionId,
+                    videoTimeMs: draftVideoTimeMs,
+                  },
+                }
+              : {
+                target: {
+                  type: "design_screen",
+                  revisionDesignVersionId: selected.revisionDesignVersionId,
+                  screenId: selected.screenId,
+                },
+              }),
+          ...(draftPin ? { xPercent: draftPin.x, yPercent: draftPin.y } : {}),
           body: commentBody,
         }),
       });
@@ -400,8 +534,11 @@ export function ClientShareRoom({ token }: { token: string }) {
             <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-black/35">
               Client review · Revision {data.revision.number}
             </p>
-            <h1 className="mt-1 text-xl font-semibold tracking-[-0.03em]">{data.project.name}</h1>
-            <p className="text-sm text-black/45">{data.project.clientName}</p>
+            <h1 className="mt-1 text-xl font-semibold tracking-[-0.03em]">{data.room.name}</h1>
+            <p className="text-sm text-black/45">
+              {data.project.name}
+              {data.project.clientName ? ` · ${data.project.clientName}` : ""}
+            </p>
           </div>
           <p className="text-[10px] text-black/30">Delivered with Pass-Off</p>
         </div>
@@ -475,27 +612,38 @@ export function ClientShareRoom({ token }: { token: string }) {
 
           <div className="grid gap-6 lg:grid-cols-[200px_minmax(0,1fr)_260px]">
             <aside className="space-y-1">
-              {data.assets.map((asset) => (
+              {data.targets.map((target) => (
                 <button
-                  key={asset.revisionAssetId}
+                  key={targetKey(target)}
                   type="button"
                   onClick={() => {
-                    setSelectedId(asset.revisionAssetId);
+                    setSelectedId(targetKey(target));
                     clearCommentDraft();
                   }}
                   className={`w-full rounded-xl px-3 py-2 text-left text-xs ${
-                    selected?.revisionAssetId === asset.revisionAssetId
+                    selected && targetKey(selected) === targetKey(target)
                       ? "bg-[#1c1917] text-white"
                       : "bg-white text-black/65"
                   }`}
                 >
-                  {asset.label}
+                  <span className="block font-medium">
+                    {target.type === "asset"
+                      ? target.label
+                      : target.type === "video"
+                        ? target.designName
+                        : target.screenName}
+                  </span>
+                  {target.type === "design_screen" || target.type === "video" ? (
+                    <span className="mt-0.5 block text-[10px] opacity-65">
+                      {target.type === "video" ? "Video" : target.designName} · v{target.versionNumber}
+                    </span>
+                  ) : null}
                 </button>
               ))}
             </aside>
 
             <section>
-              {selected?.kind === "url" ? (
+              {selected?.type === "asset" && selected.kind === "url" ? (
                 <div className="rounded-2xl border border-black/8 bg-white p-8 text-center text-sm">
                   <a
                     href={selected.externalUrl || "#"}
@@ -506,12 +654,85 @@ export function ClientShareRoom({ token }: { token: string }) {
                     Open Review URL
                   </a>
                 </div>
-              ) : selected?.mime === "application/pdf" ? (
+              ) : selected?.type === "asset" && selected.mime === "application/pdf" ? (
                 <iframe
                   title={selected.label}
                   src={selected.url || ""}
                   className="h-[70vh] w-full rounded-2xl bg-white"
                 />
+              ) : selected?.type === "video" ? (
+                <div className="overflow-hidden rounded-2xl border border-black/8 bg-[#111]">
+                  <video
+                    ref={videoRef}
+                    src={selected.playbackUrl}
+                    controls
+                    preload="metadata"
+                    className="max-h-[70vh] w-full bg-black"
+                    onTimeUpdate={(event) => {
+                      setCurrentVideoTimeMs(Math.round(event.currentTarget.currentTime * 1000));
+                    }}
+                  />
+                  <div className="bg-white p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-xs font-semibold">
+                        {formatTimestamp(currentVideoTimeMs)} / {formatTimestamp(selected.durationMs)}
+                      </p>
+                      {canComment ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const time = Math.min(
+                              selected.durationMs,
+                              Math.max(0, Math.round((videoRef.current?.currentTime || 0) * 1000)),
+                            );
+                            videoRef.current?.pause();
+                            setDraftPin(null);
+                            setEditingCommentId(null);
+                            setDraftVideoTimeMs(time);
+                            setCommentBody("");
+                          }}
+                          className="rounded-xl bg-[#1c1917] px-3 py-2 text-[11px] font-semibold text-white"
+                        >
+                          Add feedback at current time
+                        </button>
+                      ) : null}
+                    </div>
+                    <div className="relative mt-4 h-6" aria-label="Video review timeline">
+                      <div className="absolute inset-x-0 top-2 h-1 rounded bg-black/10" />
+                      {designerNotes.map((note) => note.videoTimeMs === null ? null : (
+                        <button
+                          key={note.id}
+                          type="button"
+                          aria-label={`Designer note at ${formatTimestamp(note.videoTimeMs)}`}
+                          title={`Designer note: ${note.title}`}
+                          onClick={() => {
+                            if (videoRef.current) videoRef.current.currentTime = note.videoTimeMs! / 1000;
+                          }}
+                          className="absolute top-0 size-4 -translate-x-1/2 rounded-sm border border-white bg-sky-700"
+                          style={{ left: `${(note.videoTimeMs / selected.durationMs) * 100}%` }}
+                        />
+                      ))}
+                      {pins.map((comment) => comment.videoTimeMs === null ? null : (
+                        <button
+                          key={comment.id}
+                          type="button"
+                          aria-label={`Client feedback at ${formatTimestamp(comment.videoTimeMs)}`}
+                          title={`Client feedback: ${comment.body}`}
+                          onClick={() => {
+                            if (videoRef.current) videoRef.current.currentTime = comment.videoTimeMs! / 1000;
+                            beginEditComment(comment);
+                          }}
+                          className="absolute top-0 size-4 -translate-x-1/2 rounded-full border border-white bg-[#c2410c]"
+                          style={{ left: `${(comment.videoTimeMs / selected.durationMs) * 100}%` }}
+                        />
+                      ))}
+                    </div>
+                    <div className="flex gap-4 text-[10px] text-black/55">
+                      <span>■ Designer note</span>
+                      <span>● Client feedback</span>
+                    </div>
+                  </div>
+                </div>
               ) : (
                 <div className="relative overflow-hidden rounded-2xl border border-black/8 bg-[#111]">
                   {canComment ? (
@@ -538,18 +759,62 @@ export function ClientShareRoom({ token }: { token: string }) {
                       }}
                     >
                       <img
-                        src={selected?.url || ""}
-                        alt={selected?.label || "Review asset"}
+                        src={
+                          selected?.type === "asset"
+                            ? selected.url || ""
+                            : selected?.previewUrl || ""
+                        }
+                        alt={
+                          selected?.type === "asset"
+                            ? selected.label
+                            : selected?.screenName || "Design screen"
+                        }
                         className="w-full"
                       />
                     </button>
                   ) : (
                     <img
-                      src={selected?.url || ""}
-                      alt={selected?.label || "Review asset"}
+                      src={
+                        selected?.type === "asset"
+                          ? selected.url || ""
+                          : selected?.previewUrl || ""
+                      }
+                      alt={
+                        selected?.type === "asset"
+                          ? selected.label
+                          : selected?.screenName || "Design screen"
+                      }
                       className="block w-full"
                     />
                   )}
+                  {designerNotes.map((note, index) => {
+                    if (note.x === null || note.y === null) return null;
+                    const hasRegion =
+                      note.selectionWidth !== null && note.selectionHeight !== null;
+                    return (
+                      <span
+                        key={note.id}
+                        className={
+                          hasRegion
+                            ? "pointer-events-none absolute flex items-start justify-start border-2 border-dashed border-sky-300 bg-sky-100/20 p-1 text-[9px] font-bold text-sky-950"
+                            : "pointer-events-none absolute flex size-6 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-sm border-2 border-white bg-sky-700 text-[9px] font-bold text-white shadow"
+                        }
+                        style={
+                          hasRegion
+                            ? {
+                                left: `${note.x - note.selectionWidth! / 2}%`,
+                                top: `${note.y - note.selectionHeight! / 2}%`,
+                                width: `${note.selectionWidth}%`,
+                                height: `${note.selectionHeight}%`,
+                              }
+                            : { left: `${note.x}%`, top: `${note.y}%` }
+                        }
+                        title={`Designer note: ${note.title}`}
+                      >
+                        N{index + 1}
+                      </span>
+                    );
+                  })}
                   {pins.map((pin, index) => {
                     const canEdit =
                       canComment &&
@@ -625,13 +890,54 @@ export function ClientShareRoom({ token }: { token: string }) {
               ) : null}
               {error ? <p className="text-sm text-red-600">{error}</p> : null}
 
+              {selected?.type === "design_screen" || selected?.type === "video" ? (
+                <div className="rounded-2xl border border-sky-200 bg-sky-50 p-4">
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-sky-900/65">
+                    Designer notes
+                  </p>
+                  {designerNotes.length ? (
+                    <ul className="mt-3 space-y-2">
+                      {designerNotes.map((note, index) => (
+                        <li key={note.id} className="rounded-xl border border-sky-100 bg-white px-3 py-2 text-xs">
+                          <p className="font-semibold text-sky-950">
+                            N{index + 1} · {note.title}
+                          </p>
+                          {note.videoTimeMs !== null ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (videoRef.current) videoRef.current.currentTime = note.videoTimeMs! / 1000;
+                              }}
+                              className="mt-1 font-semibold text-sky-800 underline"
+                            >
+                              Designer note · {formatTimestamp(note.videoTimeMs)} · {note.category}
+                            </button>
+                          ) : null}
+                          <p className="mt-1 leading-5 text-black/65">{note.body}</p>
+                          <p className="mt-1 text-[10px] text-black/45">
+                            Designer note by {note.authorDisplayName}
+                            {note.figmaNodeName ? ` · ${note.figmaNodeName}` : ""}
+                          </p>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="mt-2 text-xs text-black/45">No published designer notes on this item.</p>
+                  )}
+                </div>
+              ) : null}
+
               <div className="rounded-2xl border border-black/8 bg-white p-4">
                 <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-black/35">
                   <MessageSquare className="size-3.5" /> Feedback
                 </div>
-                {canComment && draftPin ? (
+                {canComment && (draftPin || draftVideoTimeMs !== null) ? (
                   <div className="mt-3 space-y-2">
-                    <p className="text-xs text-black/50">Pin placed — describe what should change.</p>
+                    <p className="text-xs text-black/50">
+                      {draftVideoTimeMs !== null
+                        ? `Feedback at ${formatTimestamp(draftVideoTimeMs)} — describe what should change.`
+                        : "Pin placed — describe what should change."}
+                    </p>
                     <textarea
                       ref={commentRef}
                       value={commentBody}
@@ -698,7 +1004,7 @@ export function ClientShareRoom({ token }: { token: string }) {
                 )}
                 <ul className="mt-4 max-h-48 space-y-2 overflow-auto">
                   {pins.length === 0 ? (
-                    <li className="text-xs text-black/35">No comments on this asset yet.</li>
+                    <li className="text-xs text-black/35">No reviewer feedback on this item yet.</li>
                   ) : (
                     pins.map((pin, index) => {
                       const canEdit =
@@ -731,6 +1037,11 @@ export function ClientShareRoom({ token }: { token: string }) {
                               {index + 1}
                             </span>
                             <span className="min-w-0 pt-0.5">
+                              {pin.videoTimeMs !== null ? (
+                                <span className="mb-1 block text-[10px] font-semibold">
+                                  Client feedback · {formatTimestamp(pin.videoTimeMs)}
+                                </span>
+                              ) : null}
                               {pin.body}
                               {canEdit && !isSelected ? (
                                 <span className="mt-1 block text-[10px] font-medium text-black/35">

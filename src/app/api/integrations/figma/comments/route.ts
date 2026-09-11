@@ -6,9 +6,11 @@ import { NextResponse } from "next/server";
 import { db } from "@/db";
 import { figmaComments, users } from "@/db/schema";
 import type { FigmaCommentRecord } from "@/lib/figma/types";
-import { getPrototypeTenantContext } from "@/lib/tenant/context";
+import { resolveTenantFromRequest } from "@/lib/tenant/context";
 
 type CommentBody = {
+  projectKey?: unknown;
+  designVersionId?: unknown;
   id?: unknown;
   fileKey?: unknown;
   fileName?: unknown;
@@ -42,14 +44,15 @@ function serialize(row: typeof figmaComments.$inferSelect, authorName: string): 
 
 export async function GET(request: Request) {
   try {
-    const tenant = await getPrototypeTenantContext();
+    const tenant = await resolveTenantFromRequest(request);
     const url = new URL(request.url);
     const fileKey = url.searchParams.get("fileKey");
     const screenId = url.searchParams.get("screenId");
-    if (!validFileKey(fileKey) || !screenId || screenId.length > 200) {
+    const designVersionId = url.searchParams.get("designVersionId");
+    if (!validFileKey(fileKey) || !screenId || screenId.length > 200 || !designVersionId) {
       return NextResponse.json({ error: "A valid Figma file and screen are required." }, { status: 400 });
     }
-    const rows = await db.select({ comment: figmaComments, authorName: users.name, authorEmail: users.email }).from(figmaComments).leftJoin(users, eq(figmaComments.authorUserId, users.id)).where(and(eq(figmaComments.organizationId, tenant.organizationId), eq(figmaComments.projectId, tenant.projectId), eq(figmaComments.figmaFileKey, fileKey), eq(figmaComments.screenId, screenId))).orderBy(asc(figmaComments.createdAt));
+    const rows = await db.select({ comment: figmaComments, authorName: users.name, authorEmail: users.email }).from(figmaComments).leftJoin(users, eq(figmaComments.authorUserId, users.id)).where(and(eq(figmaComments.organizationId, tenant.organizationId), eq(figmaComments.projectId, tenant.projectId), eq(figmaComments.designVersionId, designVersionId), eq(figmaComments.figmaFileKey, fileKey), eq(figmaComments.screenId, screenId))).orderBy(asc(figmaComments.createdAt));
     return NextResponse.json({ comments: rows.map((row) => serialize(row.comment, row.authorName || row.authorEmail || "Former member")) }, { headers: { "Cache-Control": "no-store" } });
   } catch {
     return NextResponse.json({ error: "Unable to load screen comments." }, { status: 400 });
@@ -58,9 +61,9 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
-    const tenant = await getPrototypeTenantContext();
     const body = await request.json() as CommentBody;
-    if (!validFileKey(body.fileKey) || typeof body.fileName !== "string" || typeof body.screenId !== "string" || typeof body.screenName !== "string" || typeof body.body !== "string" || !body.body.trim() || body.body.length > 2_000 || typeof body.x !== "number" || typeof body.y !== "number" || body.x < 0 || body.x > 100 || body.y < 0 || body.y > 100) {
+    const tenant = await resolveTenantFromRequest(request, body.projectKey);
+    if (typeof body.designVersionId !== "string" || !validFileKey(body.fileKey) || typeof body.fileName !== "string" || typeof body.screenId !== "string" || typeof body.screenName !== "string" || typeof body.body !== "string" || !body.body.trim() || body.body.length > 2_000 || typeof body.x !== "number" || typeof body.y !== "number" || body.x < 0 || body.x > 100 || body.y < 0 || body.y > 100) {
       return NextResponse.json({ error: "The comment or its screen position is invalid." }, { status: 400 });
     }
     const now = new Date();
@@ -69,6 +72,7 @@ export async function POST(request: Request) {
       organizationId: tenant.organizationId,
       workspaceId: tenant.workspaceId,
       projectId: tenant.projectId,
+      designVersionId: body.designVersionId,
       authorUserId: tenant.userId,
       figmaFileKey: body.fileKey,
       figmaFileName: body.fileName.slice(0, 200),
@@ -90,8 +94,8 @@ export async function POST(request: Request) {
 
 export async function PATCH(request: Request) {
   try {
-    const tenant = await getPrototypeTenantContext();
     const body = await request.json() as CommentBody;
+    const tenant = await resolveTenantFromRequest(request, body.projectKey);
     if (typeof body.id !== "string" || (body.status !== "open" && body.status !== "resolved")) {
       return NextResponse.json({ error: "A comment and valid status are required." }, { status: 400 });
     }
@@ -106,8 +110,8 @@ export async function PATCH(request: Request) {
 
 export async function DELETE(request: Request) {
   try {
-    const tenant = await getPrototypeTenantContext();
     const body = await request.json() as CommentBody;
+    const tenant = await resolveTenantFromRequest(request, body.projectKey);
     if (typeof body.id !== "string") return NextResponse.json({ error: "A comment is required." }, { status: 400 });
     const rows = await db.delete(figmaComments).where(and(eq(figmaComments.id, body.id), eq(figmaComments.organizationId, tenant.organizationId), eq(figmaComments.projectId, tenant.projectId), eq(figmaComments.authorUserId, tenant.userId))).returning({ id: figmaComments.id });
     if (!rows[0]) return NextResponse.json({ error: "Comment not found or cannot be deleted." }, { status: 404 });

@@ -5,7 +5,7 @@ import { auditEvents } from "@/db/schema";
 
 type AuditInput = {
   workspaceId: string;
-  projectId?: string | null;
+  roomId?: string | null;
   actorType: "user" | "reviewer" | "system";
   actorId?: string | null;
   action: string;
@@ -17,7 +17,7 @@ type AuditInput = {
 export async function writeAuditEvent(input: AuditInput, tx: typeof db = db) {
   await tx.insert(auditEvents).values({
     workspaceId: input.workspaceId,
-    projectId: input.projectId ?? null,
+    roomId: input.roomId ?? null,
     actorType: input.actorType,
     actorId: input.actorId ?? null,
     action: input.action,

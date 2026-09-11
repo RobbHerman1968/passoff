@@ -46,7 +46,61 @@ export async function ensureTestMigrations() {
       "Missing drizzle-postgres/0012_developer_handoff_snapshots.sql — immutable developer handoff releases require migration 0012.",
     );
   }
-
+  if (!files.includes("0013_project_room_hierarchy.sql")) {
+    throw new Error(
+      "Missing drizzle-postgres/0013_project_room_hierarchy.sql — projects and approval rooms require distinct ownership.",
+    );
+  }
+  if (!files.includes("0014_project_design_versions.sql")) {
+    throw new Error(
+      "Missing drizzle-postgres/0014_project_design_versions.sql — immutable project design history requires migration 0014.",
+    );
+  }
+  if (!files.includes("0015_project_figma_plugin_keys.sql")) {
+    throw new Error(
+      "Missing drizzle-postgres/0015_project_figma_plugin_keys.sql — project-bound Figma plugin credentials require migration 0015.",
+    );
+  }
+  if (!files.includes("0016_project_design_trigger_fixes.sql")) {
+    throw new Error(
+      "Missing drizzle-postgres/0016_project_design_trigger_fixes.sql — versioned annotation triggers require the forward fix.",
+    );
+  }
+  if (!files.includes("0017_published_explanation_author_cleanup.sql")) {
+    throw new Error(
+      "Missing drizzle-postgres/0017_published_explanation_author_cleanup.sql — immutable explanations must preserve deleted-author cleanup.",
+    );
+  }
+  if (!files.includes("0018_project_design_version_tenant_normalization.sql")) {
+    throw new Error(
+      "Missing drizzle-postgres/0018_project_design_version_tenant_normalization.sql — design versions must inherit their design tenant.",
+    );
+  }
+  if (!files.includes("0019_room_design_screen_comments.sql")) {
+    throw new Error(
+      "Missing drizzle-postgres/0019_room_design_screen_comments.sql — room review comments require immutable design-screen targets.",
+    );
+  }
+  if (!files.includes("0020_versioned_video_review.sql")) {
+    throw new Error(
+      "Missing drizzle-postgres/0020_versioned_video_review.sql — immutable video review requires migration 0020.",
+    );
+  }
+  if (!files.includes("0021_project_video_upload_sessions.sql")) {
+    throw new Error(
+      "Missing drizzle-postgres/0021_project_video_upload_sessions.sql — exact video upload completion requires migration 0021.",
+    );
+  }
+  if (!files.includes("0022_video_version_trigger_hardening.sql")) {
+    throw new Error(
+      "Missing drizzle-postgres/0022_video_version_trigger_hardening.sql — trigger-owned video cleanup requires migration 0022.",
+    );
+  }
+  if (!files.includes("0023_explanations_return_to_draft.sql")) {
+    throw new Error(
+      "Missing drizzle-postgres/0023_explanations_return_to_draft.sql — explanation authors must be able to return published guidance to draft.",
+    );
+  }
   const pool = new pg.Pool({ connectionString: databaseUrl });
   try {
     const db = drizzle(pool);

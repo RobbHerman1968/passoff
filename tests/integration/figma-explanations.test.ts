@@ -25,7 +25,9 @@ describe.skipIf(!hasDb)("Figma explanations (DB)", () => {
       figmaImportScreens,
       organizationMemberships,
       organizations,
-      projects,
+      projectDesigns,
+      projectDesignVersions,
+      rooms,
       users,
       workspaceMemberships,
       workspaces,
@@ -68,7 +70,7 @@ describe.skipIf(!hasDb)("Figma explanations (DB)", () => {
       });
 
       const [project, outsiderProject] = await Promise.all([
-        db.insert(projects).values({
+        db.insert(rooms).values({
           organizationId: authorWorkspace.organizationId,
           workspaceId: authorWorkspace.id,
           name: `Explanations ${stamp}`,
@@ -76,7 +78,7 @@ describe.skipIf(!hasDb)("Figma explanations (DB)", () => {
           slug: `explanations-${stamp}`,
           status: "DRAFT",
         }).returning().then((rows) => rows[0]!),
-        db.insert(projects).values({
+        db.insert(rooms).values({
           organizationId: outsiderWorkspace.organizationId,
           workspaceId: outsiderWorkspace.id,
           name: `Other explanations ${stamp}`,
@@ -134,6 +136,36 @@ describe.skipIf(!hasDb)("Figma explanations (DB)", () => {
         interactionCount: 0,
         sortOrder: 0,
       });
+      const designId = randomUUID();
+      const designVersionId = randomUUID();
+      await db.insert(projectDesigns).values({
+        id: designId,
+        organizationId: authorTenant.organizationId,
+        workspaceId: authorTenant.workspaceId,
+        projectId: authorTenant.projectId,
+        sourceType: "figma",
+        sourceKey: "file-key",
+        name: "Canonical website file",
+      });
+      await db.insert(projectDesignVersions).values({
+        id: designVersionId,
+        organizationId: authorTenant.organizationId,
+        workspaceId: authorTenant.workspaceId,
+        projectId: authorTenant.projectId,
+        designId,
+        versionNumber: 1,
+        contentSha256: "a".repeat(64),
+        payloadJson: JSON.stringify({
+          schemaVersion: 1,
+          file: { key: "file-key", name: "Canonical website file", sourceVersion: "1", sourceLastModified: null, mainScreenId: "1:2", thumbnailScreenId: null },
+          screens: [{ id: "1:2", name: "Canonical home screen", type: "FRAME", width: null, height: null, x: null, y: null, interactionCount: 0, sortOrder: 0, breakpointGroupId: null, preview: null }],
+          interactions: [],
+          breakpointGroups: [],
+          inspectTrees: [],
+          warnings: [],
+        }),
+      });
+      await db.update(projectDesigns).set({ currentVersionId: designVersionId }).where(eq(projectDesigns.id, designId));
 
       const commentId = randomUUID();
       await db.insert(figmaComments).values({
@@ -141,6 +173,7 @@ describe.skipIf(!hasDb)("Figma explanations (DB)", () => {
         organizationId: authorTenant.organizationId,
         workspaceId: authorTenant.workspaceId,
         projectId: authorTenant.projectId,
+        designVersionId,
         authorUserId: author.id,
         figmaFileKey: "file-key",
         figmaFileName: "Website",
@@ -154,6 +187,8 @@ describe.skipIf(!hasDb)("Figma explanations (DB)", () => {
 
       const input = {
         projectKey: project.id,
+        designId,
+        designVersionId,
         fileKey: "file-key",
         fileName: "Website",
         screenId: "1:2",
@@ -162,6 +197,8 @@ describe.skipIf(!hasDb)("Figma explanations (DB)", () => {
         figmaNodeName: null,
         x: 10,
         y: 20,
+        selectionWidth: null,
+        selectionHeight: null,
         category: "intent" as const,
         title: "Design intent",
         body: "This is durable implementation guidance.",
@@ -176,11 +213,11 @@ describe.skipIf(!hasDb)("Figma explanations (DB)", () => {
         status: "published",
       })).rejects.toMatchObject({ status: 404 });
 
-      expect(await listFigmaExplanations(authorTenant, "file-key", "1:2")).toHaveLength(2);
-      expect(await listFigmaExplanations(memberTenant, "file-key", "1:2")).toEqual([
+      expect(await listFigmaExplanations(authorTenant, "file-key", "1:2", designVersionId)).toHaveLength(2);
+      expect(await listFigmaExplanations(memberTenant, "file-key", "1:2", designVersionId)).toEqual([
         expect.objectContaining({ id: published.id, status: "published", canEdit: false }),
       ]);
-      expect(await listFigmaExplanations(outsiderTenant, "file-key", "1:2")).toEqual([]);
+      expect(await listFigmaExplanations(outsiderTenant, "file-key", "1:2", designVersionId)).toEqual([]);
 
       expect(await updateFigmaExplanation(memberTenant, {
         projectKey: project.id,
@@ -196,8 +233,28 @@ describe.skipIf(!hasDb)("Figma explanations (DB)", () => {
         x: 30,
         y: 40,
       });
-      expect(updated).toMatchObject({ status: "published", x: 30, y: 40, canEdit: true });
-      expect(await deleteFigmaExplanation(authorTenant, draft.id)).toBe(true);
+      expect(updated).toMatchObject({ status: "published", x: 30, y: 40, canEdit: false });
+      expect(await deleteFigmaExplanation(authorTenant, draft.id)).toBe(false);
+
+      const returnedToDraft = await updateFigmaExplanation(authorTenant, {
+        projectKey: project.id,
+        id: published.id,
+        status: "draft",
+      });
+      expect(returnedToDraft).toMatchObject({ status: "draft", canEdit: true, canMoveToDraft: false });
+      expect(await listFigmaExplanations(memberTenant, "file-key", "1:2", designVersionId)).toEqual([
+        expect.objectContaining({ id: draft.id, status: "published" }),
+      ]);
+      expect(await updateFigmaExplanation(authorTenant, {
+        projectKey: project.id,
+        id: published.id,
+        title: "Published intent revised as a draft",
+      })).toMatchObject({ status: "draft", canEdit: true });
+      expect(await updateFigmaExplanation(authorTenant, {
+        projectKey: project.id,
+        id: published.id,
+        status: "published",
+      })).toMatchObject({ status: "published", canMoveToDraft: true });
 
       const comment = (await db.select().from(figmaComments).where(and(
         eq(figmaComments.id, commentId),
@@ -206,14 +263,12 @@ describe.skipIf(!hasDb)("Figma explanations (DB)", () => {
       expect(comment).toMatchObject({ body: "Please change this.", status: "open" });
 
       await db.delete(users).where(eq(users.id, author.id));
-      expect(await listFigmaExplanations(memberTenant, "file-key", "1:2")).toEqual([
-        expect.objectContaining({
-          id: published.id,
-          authorName: "Former member",
-          authorUserId: null,
-          canEdit: false,
-        }),
-      ]);
+      const afterAuthorRemoval = await listFigmaExplanations(memberTenant, "file-key", "1:2", designVersionId);
+      expect(afterAuthorRemoval).toHaveLength(2);
+      expect(afterAuthorRemoval).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: published.id, authorName: "Explanation Author", authorUserId: null, canEdit: false }),
+        expect.objectContaining({ id: draft.id, authorName: "Explanation Author", authorUserId: null, canEdit: false }),
+      ]));
     } finally {
       if (authorOrganizationId) await db.delete(organizations).where(eq(organizations.id, authorOrganizationId));
       if (outsiderOrganizationId) await db.delete(organizations).where(eq(organizations.id, outsiderOrganizationId));

@@ -12,15 +12,15 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string; revisionAssetId: string }> },
 ) {
   try {
-    const { id: projectId, revisionAssetId } = await params;
-    if (!uuidPattern.test(projectId) || !uuidPattern.test(revisionAssetId)) {
-      return NextResponse.json({ error: "Invalid id." }, { status: 400 });
+    const { id: roomId, revisionAssetId } = await params;
+    if (!uuidPattern.test(roomId) || !uuidPattern.test(revisionAssetId)) {
+      return NextResponse.json({ error: "Invalid room or revision asset id." }, { status: 400 });
     }
 
     const body = (await request.json()) as { label?: unknown };
     const label = typeof body.label === "string" ? body.label : "";
     const scope = await getDefaultWorkspaceScope();
-    const result = await renameDraftRevisionAsset(scope, projectId, revisionAssetId, label);
+    const result = await renameDraftRevisionAsset(scope, roomId, revisionAssetId, label);
     return NextResponse.json(result);
   } catch (error) {
     return NextResponse.json(
@@ -35,13 +35,13 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string; revisionAssetId: string }> },
 ) {
   try {
-    const { id: projectId, revisionAssetId } = await params;
-    if (!uuidPattern.test(projectId) || !uuidPattern.test(revisionAssetId)) {
-      return NextResponse.json({ error: "Invalid id." }, { status: 400 });
+    const { id: roomId, revisionAssetId } = await params;
+    if (!uuidPattern.test(roomId) || !uuidPattern.test(revisionAssetId)) {
+      return NextResponse.json({ error: "Invalid room or revision asset id." }, { status: 400 });
     }
 
     const scope = await getDefaultWorkspaceScope();
-    const result = await removeDraftRevisionAsset(scope, projectId, revisionAssetId);
+    const result = await removeDraftRevisionAsset(scope, roomId, revisionAssetId);
     return NextResponse.json(result);
   } catch (error) {
     return NextResponse.json(

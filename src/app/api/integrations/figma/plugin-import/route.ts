@@ -1,9 +1,11 @@
-import { timingSafeEqual } from "node:crypto";
-
+import { and, eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 
+import { db } from "@/db";
+import { clientProjects } from "@/db/schema";
 import { getFigmaImport, saveFigmaImport } from "@/lib/figma/persistence";
 import { normalizeInspectTree, type InspectNode } from "@/lib/figma/inspect";
+import { verifyProjectPluginKey } from "@/lib/figma/plugin-key";
 import type { FigmaImportResult, FigmaInteraction } from "@/lib/figma/types";
 import { getServiceTenantContextForProjectKey } from "@/lib/tenant/context";
 
@@ -31,27 +33,18 @@ function originHeaders(request: Request) {
   return { "Access-Control-Allow-Origin": origin, "Access-Control-Allow-Methods": "POST, OPTIONS", "Access-Control-Allow-Headers": "Content-Type, X-Passoff-Plugin-Key", "Cache-Control": "no-store", Vary: "Origin" };
 }
 
-function normalizePluginKey(value: unknown) {
-  let key = typeof value === "string" ? value.trim() : "";
-  key = key.replace(/^PASSOFF_FIGMA_PLUGIN_KEY\s*=\s*/i, "").trim();
-  if ((key.startsWith('"') && key.endsWith('"')) || (key.startsWith("'") && key.endsWith("'"))) {
-    key = key.slice(1, -1).trim();
-  }
-  return key;
-}
-
-function authorized(request: Request, bodyKey?: unknown) {
-  const expected = normalizePluginKey(process.env.PASSOFF_FIGMA_PLUGIN_KEY);
-  const supplied = normalizePluginKey(request.headers.get("x-passoff-plugin-key") || bodyKey);
-  if (!expected || !supplied) return false;
-  const left = Buffer.from(expected);
-  const right = Buffer.from(supplied);
-  return left.length === right.length && timingSafeEqual(left, right);
-}
-
 function finiteNumber(value: unknown): value is number { return typeof value === "number" && Number.isFinite(value); }
 function restDocument(value: unknown): RestNode | null { if (!value || typeof value !== "object") return null; const document = (value as { document?: unknown }).document; return document && typeof document === "object" ? document as RestNode : null; }
 function json(request: Request, error: string, status: number) { return NextResponse.json({ error }, { status, headers: originHeaders(request) || { "Cache-Control": "no-store" } }); }
+function errorWithCause(error: unknown) {
+  const messages: string[] = [];
+  let current: unknown = error;
+  while (current instanceof Error) {
+    if (!messages.includes(current.message)) messages.push(current.message);
+    current = current.cause;
+  }
+  return messages.join(": ") || "Unable to save the Figma plugin export.";
+}
 
 export async function OPTIONS(request: Request) {
   const headers = originHeaders(request);
@@ -64,16 +57,26 @@ export async function POST(request: Request) {
   if (!(request.headers.get("content-type") || "").includes("application/json")) return json(request, "Expected a JSON plugin export.", 415);
   try {
     const payload = await request.json() as PluginPayload;
-    if (!authorized(request, payload.pluginKey)) {
-      const serverReady = Boolean(normalizePluginKey(process.env.PASSOFF_FIGMA_PLUGIN_KEY));
-      if (!serverReady) return json(request, "PASSOFF_FIGMA_PLUGIN_KEY is not loaded in the Pass-Off server. Add it to .env and restart npm run dev.", 401);
-      return json(request, "The local Figma plugin key is missing or invalid. Paste only the hex value from PASSOFF_FIGMA_PLUGIN_KEY in .env (not the variable name), then export again.", 401);
-    }
     let tenant;
     try {
       tenant = await getServiceTenantContextForProjectKey(payload.projectKey);
     } catch (error) {
       return json(request, error instanceof Error ? error.message : "A valid Pass-Off project key is required.", 400);
+    }
+    const project = (
+      await db
+        .select({ keyHash: clientProjects.figmaPluginKeyHash })
+        .from(clientProjects)
+        .where(and(
+          eq(clientProjects.id, tenant.projectId),
+          eq(clientProjects.organizationId, tenant.organizationId),
+          eq(clientProjects.workspaceId, tenant.workspaceId),
+        ))
+        .limit(1)
+    )[0];
+    const suppliedKey = request.headers.get("x-passoff-plugin-key") || payload.pluginKey;
+    if (!verifyProjectPluginKey(suppliedKey, project?.keyHash)) {
+      return json(request, "The plugin key is missing, invalid, or belongs to another project. Copy this project’s plugin key from Pass-Off.", 401);
     }
     if (!payload.file || typeof payload.file !== "object") return json(request, "The plugin export is missing file metadata. Reload the local plugin from manifest and try again.", 400);
     if (typeof payload.file.key !== "string" || !/^[A-Za-z0-9_-]+$/.test(payload.file.key)) return json(request, "The plugin export has an invalid Figma file key. Open a cloud Figma file or reload the plugin so it can synthesize a local key.", 400);
@@ -119,13 +122,14 @@ export async function POST(request: Request) {
       interactions,
       warnings: interactions.length ? [] : ["No prototype interactions were found in the selected frames."],
     };
-    await saveFigmaImport(tenant, null, result, { mode, source: "plugin", inspectTrees });
+    const version = await saveFigmaImport(tenant, null, result, { mode, source: "plugin", inspectTrees });
     const saved = await getFigmaImport(tenant, result.file.key);
     return NextResponse.json({
       projectKey: tenant.projectId,
       projectName: tenant.projectName,
       fileKey: result.file.key,
       fileName: result.file.name,
+      ...version,
       mode,
       batchScreenCount: result.screens.length,
       batchInteractionCount: interactions.length,
@@ -134,6 +138,6 @@ export async function POST(request: Request) {
       interactionCount: saved?.interactions.length ?? interactions.length,
     }, { status: 201, headers: originHeaders(request)! });
   } catch (error) {
-    return json(request, error instanceof Error ? error.message : "Unable to save the Figma plugin export.", 400);
+    return json(request, errorWithCause(error), 400);
   }
 }

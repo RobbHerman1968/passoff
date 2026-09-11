@@ -24,7 +24,7 @@ describe.skipIf(!hasDb)("tenant isolation (DB)", () => {
     const { createPasswordUser } = await import("@/lib/auth/password");
     const { createPrivateTenantForUser } = await import("@/lib/auth/tenant-membership");
     const { db } = await import("@/db");
-    const { organizations, projects, users, workspaces } = await import("@/db/schema");
+    const { organizations, rooms, users, workspaces } = await import("@/db/schema");
 
     // Fail loudly when first-release migrations have not been applied —
     // a logged skip must not count as successful tenant-isolation coverage.
@@ -61,7 +61,7 @@ describe.skipIf(!hasDb)("tenant isolation (DB)", () => {
     )[0]!;
 
     const [roomA] = await db
-      .insert(projects)
+      .insert(rooms)
       .values({
         organizationId: workspaceA.organizationId,
         workspaceId: tenantA.workspaceId,
@@ -74,15 +74,15 @@ describe.skipIf(!hasDb)("tenant isolation (DB)", () => {
 
     const listB = await db
       .select()
-      .from(projects)
-      .where(eq(projects.workspaceId, tenantB.workspaceId));
+      .from(rooms)
+      .where(eq(rooms.workspaceId, tenantB.workspaceId));
     expect(listB.some((r) => r.id === roomA.id)).toBe(false);
 
     const crossRead = (
       await db
         .select()
-        .from(projects)
-        .where(and(eq(projects.id, roomA.id), eq(projects.workspaceId, tenantB.workspaceId)))
+        .from(rooms)
+        .where(and(eq(rooms.id, roomA.id), eq(rooms.workspaceId, tenantB.workspaceId)))
         .limit(1)
     )[0];
     expect(crossRead).toBeUndefined();

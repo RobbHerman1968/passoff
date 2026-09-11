@@ -29,7 +29,7 @@ type UploadTokenMeta = {
   workspaceId: string;
   organizationId: string;
   userId: string;
-  projectId: string;
+  roomId: string;
   revisionId: string;
   pathname: string;
   contentType: string;
@@ -67,8 +67,8 @@ function isBlobCompletionBody(body: unknown): body is HandleUploadBody {
   );
 }
 
-function assertOwnedPathname(pathname: string, workspaceId: string, projectId: string) {
-  const prefix = `workspaces/${workspaceId}/rooms/${projectId}/revisions/`;
+function assertOwnedPathname(pathname: string, workspaceId: string, roomId: string) {
+  const prefix = `workspaces/${workspaceId}/rooms/${roomId}/revisions/`;
   if (!pathname.startsWith(prefix) || pathname.includes("..")) {
     throw new Error("Upload path is not owned by this room.");
   }
@@ -86,14 +86,56 @@ function scopeFromMeta(meta: UploadTokenMeta): WorkspaceScope {
   };
 }
 
+function parseUploadTokenMeta(raw: string | null | undefined): UploadTokenMeta | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as Partial<UploadTokenMeta> & { projectId?: unknown };
+    if (!parsed || typeof parsed !== "object") return null;
+    const roomId =
+      typeof parsed.roomId === "string"
+        ? parsed.roomId
+        : typeof parsed.projectId === "string"
+          ? parsed.projectId
+          : null;
+    if (
+      !roomId ||
+      typeof parsed.workspaceId !== "string" ||
+      typeof parsed.organizationId !== "string" ||
+      typeof parsed.userId !== "string" ||
+      typeof parsed.revisionId !== "string" ||
+      typeof parsed.pathname !== "string" ||
+      typeof parsed.contentType !== "string" ||
+      typeof parsed.size !== "number" ||
+      typeof parsed.fileName !== "string" ||
+      typeof parsed.uploadSessionId !== "string"
+    ) {
+      return null;
+    }
+    return {
+      workspaceId: parsed.workspaceId,
+      organizationId: parsed.organizationId,
+      userId: parsed.userId,
+      roomId,
+      revisionId: parsed.revisionId,
+      pathname: parsed.pathname,
+      contentType: parsed.contentType,
+      size: parsed.size,
+      fileName: parsed.fileName,
+      uploadSessionId: parsed.uploadSessionId,
+    };
+  } catch {
+    return null;
+  }
+}
+
 async function finalizeCompletedUpload(input: {
-  projectId: string;
+  roomId: string;
   meta: UploadTokenMeta;
   pathname: string;
   blobUrl: string;
   contentType?: string | null;
 }) {
-  if (input.meta.projectId !== input.projectId) {
+  if (input.meta.roomId !== input.roomId) {
     throw new Error("Invalid upload completion payload.");
   }
 
@@ -105,7 +147,7 @@ async function finalizeCompletedUpload(input: {
         and(
           eq(revisions.id, input.meta.revisionId),
           eq(revisions.status, "DRAFT"),
-          eq(revisions.projectId, input.projectId),
+          eq(revisions.roomId, input.roomId),
         ),
       )
       .limit(1)
@@ -114,7 +156,7 @@ async function finalizeCompletedUpload(input: {
 
   return completeDirectUpload({
     scope: scopeFromMeta(input.meta),
-    projectId: input.projectId,
+    roomId: input.roomId,
     revisionId: input.meta.revisionId,
     uploadSessionId: input.meta.uploadSessionId,
     pathname: input.pathname || input.meta.pathname,
@@ -136,8 +178,8 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    const { id: projectId } = await params;
-    if (!uuidPattern.test(projectId)) {
+    const { id: roomId } = await params;
+    if (!uuidPattern.test(roomId)) {
       return NextResponse.json({ error: "Invalid room id." }, { status: 400 });
     }
 
@@ -165,10 +207,10 @@ export async function POST(
           throw new Error("Token generation is not available on the completion callback path.");
         },
         onUploadCompleted: async ({ blob, tokenPayload }) => {
-          const meta = tokenPayload ? (JSON.parse(tokenPayload) as UploadTokenMeta) : null;
+          const meta = parseUploadTokenMeta(tokenPayload);
           if (!meta) throw new Error("Invalid upload completion payload.");
           await finalizeCompletedUpload({
-            projectId,
+            roomId,
             meta,
             pathname: blob.pathname || meta.pathname,
             blobUrl: blob.url,
@@ -191,11 +233,11 @@ export async function POST(
         return NextResponse.json({ error: "Files must be between 1 byte and 25 MB." }, { status: 400 });
       }
       await assertStorageAllowance(scope.organizationId, scope.workspaceId, size);
-      const draft = await ensureDraftRevision(scope.workspaceId, projectId);
+      const draft = await ensureDraftRevision(scope.workspaceId, roomId);
       const fileName = typeof body.fileName === "string" ? body.fileName : "upload.bin";
       const pathname = buildTenantObjectPath({
         workspaceId: scope.workspaceId,
-        projectId,
+        roomId,
         revisionId: draft.id,
         filename: fileName,
       });
@@ -204,7 +246,7 @@ export async function POST(
         workspaceId: scope.workspaceId,
         organizationId: scope.organizationId,
         userId: scope.userId,
-        projectId,
+        roomId,
         revisionId: draft.id,
         pathname,
         contentType,
@@ -220,7 +262,7 @@ export async function POST(
         maximumSizeInBytes: MAX_UPLOAD_BYTES,
         addRandomSuffix: false,
         onUploadCompleted: {
-          callbackUrl: `${getSiteUrl()}/api/projects/${projectId}/uploads`,
+          callbackUrl: `${getSiteUrl()}/api/projects/${roomId}/uploads`,
           tokenPayload,
         },
       });
@@ -248,7 +290,7 @@ export async function POST(
       if (!pathname || !blobUrl || !revisionId) {
         return NextResponse.json({ error: "Missing upload completion fields." }, { status: 400 });
       }
-      assertOwnedPathname(pathname, scope.workspaceId, projectId);
+      assertOwnedPathname(pathname, scope.workspaceId, roomId);
       if (uploadSessionId !== pathname) {
         return NextResponse.json({ error: "Upload session mismatch." }, { status: 400 });
       }
@@ -260,12 +302,12 @@ export async function POST(
       }
 
       const result = await finalizeCompletedUpload({
-        projectId,
+        roomId,
         meta: {
           workspaceId: scope.workspaceId,
           organizationId: scope.organizationId,
           userId: scope.userId,
-          projectId,
+          roomId,
           revisionId,
           pathname,
           contentType,
@@ -294,14 +336,16 @@ export async function POST(
       onBeforeGenerateToken: async (_pathname, clientPayload) => {
         const payload = clientPayload
           ? (JSON.parse(clientPayload) as {
+              roomId?: string;
               projectId?: string;
               fileName?: string;
               contentType?: string;
               size?: number;
             })
           : {};
-        if (payload.projectId && payload.projectId !== projectId) {
-          throw new Error("Project mismatch.");
+        const payloadRoomId = payload.roomId || payload.projectId;
+        if (payloadRoomId && payloadRoomId !== roomId) {
+          throw new Error("Room mismatch.");
         }
         const contentType = (payload.contentType || "").toLowerCase();
         if (!(ALLOWED_UPLOAD_MIME_TYPES as readonly string[]).includes(contentType)) {
@@ -312,11 +356,11 @@ export async function POST(
           throw new Error("Files must be between 1 byte and 25 MB.");
         }
         await assertStorageAllowance(scope.organizationId, scope.workspaceId, size);
-        const draft = await ensureDraftRevision(scope.workspaceId, projectId);
+        const draft = await ensureDraftRevision(scope.workspaceId, roomId);
         const fileName = typeof payload.fileName === "string" ? payload.fileName : "upload.bin";
         const pathname = buildTenantObjectPath({
           workspaceId: scope.workspaceId,
-          projectId,
+          roomId,
           revisionId: draft.id,
           filename: fileName,
         });
@@ -328,7 +372,7 @@ export async function POST(
             workspaceId: scope.workspaceId,
             organizationId: scope.organizationId,
             userId: scope.userId,
-            projectId,
+            roomId,
             revisionId: draft.id,
             pathname,
             contentType,
@@ -336,14 +380,14 @@ export async function POST(
             fileName,
             uploadSessionId: pathname,
           } satisfies UploadTokenMeta),
-          callbackUrl: `${getSiteUrl()}/api/projects/${projectId}/uploads`,
+          callbackUrl: `${getSiteUrl()}/api/projects/${roomId}/uploads`,
         };
       },
       onUploadCompleted: async ({ blob, tokenPayload }) => {
-        const meta = tokenPayload ? (JSON.parse(tokenPayload) as UploadTokenMeta) : null;
+        const meta = parseUploadTokenMeta(tokenPayload);
         if (!meta) throw new Error("Invalid upload completion payload.");
         await finalizeCompletedUpload({
-          projectId,
+          roomId,
           meta,
           pathname: blob.pathname || meta.pathname,
           blobUrl: blob.url,

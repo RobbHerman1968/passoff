@@ -11,10 +11,10 @@ import {
   getOrganizationEntitlements,
   getWorkspaceUsageSummary,
 } from "@/lib/rooms/entitlements";
-import { listRooms } from "@/lib/rooms/service";
+import { listClientProjects } from "@/lib/projects/service";
 import { getDefaultWorkspaceScope } from "@/lib/tenant/context";
 
-import { RoomsDashboard } from "./rooms-dashboard";
+import { ProjectsDashboard } from "./projects-dashboard";
 
 export const metadata: Metadata = {
   title: "Dashboard | Pass-Off",
@@ -23,7 +23,7 @@ export const metadata: Metadata = {
 
 export default async function DashboardPage() {
   const scope = await getDefaultWorkspaceScope();
-  const rooms = await listRooms(scope.workspaceId);
+  const projects = await listClientProjects(scope.workspaceId);
   const entitlements = await getOrganizationEntitlements(scope.organizationId);
   const usage = await getWorkspaceUsageSummary(scope.organizationId, scope.workspaceId);
   const user = (await db.select().from(users).where(eq(users.id, scope.userId)).limit(1))[0];
@@ -55,18 +55,9 @@ export default async function DashboardPage() {
       </header>
 
       <div className="w-full px-5 py-6 lg:px-8">
-        <RoomsDashboard
-          workspaceName={scope.workspaceName}
-          rooms={rooms.map((room) => ({
-            id: room.id,
-            name: room.name,
-            clientName: room.clientName,
-            slug: room.slug,
-            status: room.status,
-          }))}
-          planId={entitlements.planId}
-          maxActiveRooms={usage.maxActiveRooms}
-          canCreateRooms={entitlements.canCreateRooms}
+        <ProjectsDashboard
+          initialProjects={projects}
+          canCreate={entitlements.canCreateRooms}
           isExpired={entitlements.isExpired}
         />
       </div>
