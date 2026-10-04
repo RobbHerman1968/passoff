@@ -1,25 +1,53 @@
 export const siteConfig = {
-  name: "Pass-Off",
-  productName: "Pass-Off Approval Rooms",
-  tagline: "Get client sign-off on the exact design revision.",
+  name: "Passoff",
+  tagline: "Good work deserves a clean pass.",
   description:
-    "Share one review link, collect visual feedback, record approval, and deliver final files without losing track of what was approved.",
-  keywords: [
-    "design approval",
-    "client design approval",
-    "approval room",
-    "design revision approval",
-    "client review link",
-    "design handoff files",
-    "Pass-Off",
-    "Pass-Off Approval Rooms",
-  ],
+    "Review real websites and videos, collect clear feedback, and get a confident yes—all without the usual screenshot scavenger hunt.",
+  url:
+    process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/$/, "") ??
+    "https://passoff.app",
 } as const;
 
-/** Canonical production URL for emails, Stripe redirects, OAuth, review links, sitemap. */
-export function getSiteUrl() {
-  const explicit = process.env.NEXT_PUBLIC_SITE_URL || process.env.AUTH_URL;
-  if (explicit) return explicit.replace(/\/$/, "");
-  if (process.env.VERCEL_URL) return `https://${process.env.VERCEL_URL.replace(/\/$/, "")}`;
-  return "http://localhost:3000";
+export const authRoutes = {
+  signIn: "/sign-in",
+  signUp: "/sign-up",
+} as const;
+
+export const publicNavItems = [
+  { href: "/website-feedback-tool", label: "Websites" },
+  { href: "/video-review-software", label: "Video" },
+  { href: "/client-approval-software", label: "Approval" },
+  { href: "/review-tool-for-agencies", label: "Agencies" },
+  { href: "/pricing", label: "Pricing" },
+  { href: "/alternatives", label: "Compare" },
+] as const;
+
+export const publicFooterGroups = [
+  {
+    title: "Product",
+    items: [
+      { href: "/website-feedback-tool", label: "Website feedback" },
+      { href: "/video-review-software", label: "Video review" },
+      { href: "/client-approval-software", label: "Client approval" },
+    ],
+  },
+  {
+    title: "Choosing Passoff",
+    items: [
+      { href: "/review-tool-for-agencies", label: "Agencies" },
+      { href: "/pricing", label: "Pricing" },
+      { href: "/alternatives", label: "Compare" },
+    ],
+  },
+  {
+    title: "Account",
+    items: [
+      { href: authRoutes.signIn, label: "Sign in" },
+      { href: authRoutes.signUp, label: "Create an account" },
+    ],
+  },
+] as const;
+
+export function absoluteUrl(path = "/") {
+  return new URL(path, siteConfig.url).toString();
 }

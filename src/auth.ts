@@ -1,7 +1,6 @@
 import { DrizzleAdapter } from "@auth/drizzle-adapter";
 import NextAuth from "next-auth";
 import Credentials from "next-auth/providers/credentials";
-import { eq } from "drizzle-orm";
 
 import { authConfig } from "@/auth.config";
 import { db } from "@/db";
@@ -12,10 +11,23 @@ import {
   users,
   verificationTokens,
 } from "@/db/schema";
-import { findUserByEmail, normalizeEmail, verifyPassword } from "@/lib/auth/password";
-import { createPrivateTenantForUser } from "@/lib/auth/tenant-membership";
+import { clearStaleAuthSessionCookies } from "@/lib/auth/clear-stale-session";
+import { credentialsSignInSchema } from "@/lib/auth/schemas";
+import {
+  authenticateWithPassword,
+  getUserAuthState,
+  getUserSessionVersion,
+} from "@/lib/auth/users";
 
-export const { handlers, auth, signIn, signOut } = NextAuth({
+/**
+ * Session strategy: JWT.
+ *
+ * Auth.js Credentials cannot use database sessions (`UnsupportedStrategy`).
+ * Google/GitHub still use the Drizzle adapter for user/account persistence.
+ * Password reset invalidates JWTs by bumping `users.sessionVersion` and
+ * rejecting tokens that carry a stale version.
+ */
+export const { auth, handlers, signIn, signOut } = NextAuth({
   ...authConfig,
   adapter: DrizzleAdapter(db, {
     usersTable: users,
@@ -24,69 +36,121 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     verificationTokensTable: verificationTokens,
     authenticatorsTable: authenticators,
   }),
-  session: { strategy: "jwt" },
   providers: [
     ...authConfig.providers,
     Credentials({
+      id: "credentials",
       name: "Email and password",
       credentials: {
         email: { label: "Email", type: "email" },
         password: { label: "Password", type: "password" },
       },
       async authorize(credentials) {
-        const email = typeof credentials?.email === "string" ? normalizeEmail(credentials.email) : "";
-        const password = typeof credentials?.password === "string" ? credentials.password : "";
-        if (!email || !password) return null;
+        const parsed = credentialsSignInSchema.safeParse(credentials);
+        if (!parsed.success) {
+          return null;
+        }
 
-        const user = await findUserByEmail(email);
-        if (!user?.passwordHash) return null;
-        const valid = await verifyPassword(password, user.passwordHash);
-        if (!valid) return null;
+        const user = await authenticateWithPassword(
+          parsed.data.email,
+          parsed.data.password,
+        );
+
+        if (!user) {
+          return null;
+        }
+
+        const authState = await getUserAuthState(user.id);
 
         return {
           id: user.id,
-          email: user.email,
           name: user.name,
+          email: user.email,
           image: user.image,
+          sessionVersion: user.sessionVersion,
+          platformRole: authState?.platformRole ?? "user",
         };
       },
     }),
   ],
-  events: {
-    async createUser({ user }) {
-      if (!user.id) return;
-      await createPrivateTenantForUser(user.id);
-    },
-    async linkAccount({ user, account }) {
-      if (!user.id) return;
-      await db
-        .update(users)
-        .set({
-          authProvider: account.provider,
-          authProviderUserId: account.providerAccountId,
-          updatedAt: new Date(),
-        })
-        .where(eq(users.id, user.id));
-    },
-  },
   callbacks: {
     ...authConfig.callbacks,
-    async signIn({ user, account }) {
-      if (user.id && account) {
-        await db
-          .update(users)
-          .set({
-            authProvider: account.provider,
-            authProviderUserId:
-              account.provider === "credentials" ? user.email ?? account.providerAccountId : account.providerAccountId,
-            name: user.name ?? undefined,
-            image: user.image ?? undefined,
-            updatedAt: new Date(),
-          })
-          .where(eq(users.id, user.id));
-        await createPrivateTenantForUser(user.id);
+    async jwt({ token, user }) {
+      if (user?.id) {
+        const authState = await getUserAuthState(user.id);
+        const version =
+          typeof user.sessionVersion === "number"
+            ? user.sessionVersion
+            : (authState?.sessionVersion ?? 1);
+
+        token.sub = user.id;
+        token.sessionVersion = version;
+        token.platformRole = authState?.platformRole ?? "user";
+        token.name = user.name;
+        token.email = user.email;
+        token.picture = user.image;
+        return token;
       }
-      return true;
+
+      if (!token.sub) {
+        return null;
+      }
+
+      const authState = await getUserAuthState(token.sub);
+      if (
+        authState === null ||
+        typeof token.sessionVersion !== "number" ||
+        authState.sessionVersion !== token.sessionVersion
+      ) {
+        return null;
+      }
+
+      // Refresh display-only platformRole on every JWT check so role changes
+      // are not stuck behind an indefinitely cached session claim.
+      token.platformRole = authState.platformRole;
+      return token;
+    },
+    async session({ session, token }) {
+      if (!token.sub) {
+        return session;
+      }
+
+      session.user = {
+        ...session.user,
+        id: token.sub,
+        name: typeof token.name === "string" ? token.name : session.user.name,
+        email: typeof token.email === "string" ? token.email : session.user.email,
+        image:
+          typeof token.picture === "string" ? token.picture : session.user.image,
+        platformRole:
+          token.platformRole === "admin" || token.platformRole === "user"
+            ? token.platformRole
+            : "user",
+      };
+
+      return session;
     },
   },
 });
+
+export async function getValidSession() {
+  // Drop legacy database-session cookies before Auth.js tries to decrypt them.
+  await clearStaleAuthSessionCookies();
+
+  try {
+    const session = await auth();
+    if (!session?.user?.id) {
+      return null;
+    }
+
+    const version = await getUserSessionVersion(session.user.id);
+    if (version === null) {
+      return null;
+    }
+
+    return session;
+  } catch {
+    // Stale or undecryptable JWT cookies should not break public auth pages.
+    return null;
+  }
+}

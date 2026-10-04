@@ -1,57 +1,35 @@
 import type { MetadataRoute } from "next";
 
-import { getSeoPageInventory } from "@/lib/seo/inventory";
-import { getSiteUrl } from "@/lib/site";
+import { comparisonPages } from "@/lib/comparisons";
+import { seoPages } from "@/lib/seo-pages";
+import { absoluteUrl } from "@/lib/site";
 
 export default function sitemap(): MetadataRoute.Sitemap {
-  const base = getSiteUrl();
-  const lastModified = new Date();
-
-  const core: MetadataRoute.Sitemap = [
+  return [
     {
-      url: base,
-      lastModified,
+      url: absoluteUrl("/"),
       changeFrequency: "weekly",
       priority: 1,
     },
+    ...seoPages.map((page) => ({
+      url: absoluteUrl(`/${page.slug}`),
+      changeFrequency: "monthly" as const,
+      priority: 0.8,
+    })),
     {
-      url: `${base}/pricing`,
-      lastModified,
+      url: absoluteUrl("/alternatives"),
       changeFrequency: "monthly",
       priority: 0.8,
     },
     {
-      url: `${base}/support`,
-      lastModified,
+      url: absoluteUrl("/pricing"),
       changeFrequency: "monthly",
-      priority: 0.5,
+      priority: 0.9,
     },
-    {
-      url: `${base}/privacy`,
-      lastModified,
-      changeFrequency: "yearly",
-      priority: 0.3,
-    },
-    {
-      url: `${base}/terms`,
-      lastModified,
-      changeFrequency: "yearly",
-      priority: 0.3,
-    },
-    {
-      url: `${base}/login`,
-      lastModified,
-      changeFrequency: "monthly",
-      priority: 0.4,
-    },
+    ...comparisonPages.map((page) => ({
+      url: absoluteUrl(`/compare/${page.slug}`),
+      changeFrequency: "monthly" as const,
+      priority: 0.75,
+    })),
   ];
-
-  const seoPages: MetadataRoute.Sitemap = getSeoPageInventory().map((page) => ({
-    url: `${base}${page.url}`,
-    lastModified,
-    changeFrequency: page.pageType === "hub" ? "weekly" : "monthly",
-    priority: page.pageType === "hub" ? 0.85 : page.pageType === "commercial" ? 0.8 : 0.7,
-  }));
-
-  return [...core, ...seoPages];
 }

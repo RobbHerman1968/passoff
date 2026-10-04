@@ -1,78 +1,47 @@
 import "server-only";
 
-import { compare, hash } from "bcryptjs";
-import { eq } from "drizzle-orm";
+import { hash, verify } from "@node-rs/argon2";
 
-import { db } from "@/db";
-import { users } from "@/db/schema";
+import {
+  PASSWORD_MAX_LENGTH,
+  validatePasswordPolicy,
+} from "@/lib/auth/password-policy";
 
-const MIN_PASSWORD_LENGTH = 8;
+export {
+  getPasswordRequirementCopy,
+  PASSWORD_MAX_LENGTH,
+  PASSWORD_MIN_LENGTH,
+  PASSWORD_POLICY_HINT,
+  validatePasswordPolicy,
+} from "@/lib/auth/password-policy";
 
-export function normalizeEmail(email: string) {
-  return email.trim().toLowerCase();
-}
+const ARGON2_OPTIONS = {
+  memoryCost: 19_456,
+  timeCost: 2,
+  parallelism: 1,
+  outputLen: 32,
+} as const;
 
-export function validatePassword(password: string) {
-  if (password.length < MIN_PASSWORD_LENGTH) {
-    return `Password must be at least ${MIN_PASSWORD_LENGTH} characters.`;
-  }
-  return null;
-}
-
-export async function hashPassword(password: string) {
-  return hash(password, 12);
-}
-
-export async function verifyPassword(password: string, passwordHash: string) {
-  return compare(password, passwordHash);
-}
-
-export async function findUserByEmail(email: string) {
-  return (await db.select().from(users).where(eq(users.email, normalizeEmail(email))).limit(1))[0] ?? null;
-}
-
-export async function createPasswordUser(input: {
-  email: string;
-  password: string;
-  name?: string;
-}) {
-  const email = normalizeEmail(input.email);
-  if (!email || !email.includes("@")) {
-    throw new Error("Enter a valid email address.");
-  }
-  const passwordError = validatePassword(input.password);
-  if (passwordError) throw new Error(passwordError);
-
-  const existing = await findUserByEmail(email);
-  if (existing?.passwordHash) {
-    throw new Error("An account with that email already exists. Sign in instead.");
+export async function hashPassword(password: string): Promise<string> {
+  const policyError = validatePasswordPolicy(password);
+  if (policyError) {
+    throw new Error("PASSWORD_POLICY");
   }
 
-  const passwordHash = await hashPassword(input.password);
-  const name = input.name?.trim() || email.split("@")[0] || "Pass-Off user";
+  return hash(password, ARGON2_OPTIONS);
+}
 
-  if (existing) {
-    const [user] = await db
-      .update(users)
-      .set({
-        passwordHash,
-        name: existing.name || name,
-        authProvider: existing.authProvider || "credentials",
-        updatedAt: new Date(),
-      })
-      .where(eq(users.id, existing.id))
-      .returning();
-    return user;
+export async function verifyPassword(
+  passwordHash: string,
+  password: string,
+): Promise<boolean> {
+  if (password.length === 0 || password.length > PASSWORD_MAX_LENGTH) {
+    return false;
   }
 
-  const [user] = await db
-    .insert(users)
-    .values({
-      email,
-      name,
-      passwordHash,
-      authProvider: "credentials",
-    })
-    .returning();
-  return user;
+  try {
+    return await verify(passwordHash, password, ARGON2_OPTIONS);
+  } catch {
+    return false;
+  }
 }

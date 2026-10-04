@@ -1,32 +1,26 @@
 import type { NextConfig } from "next";
-import path from "node:path";
 
 const nextConfig: NextConfig = {
   async headers() {
     return [
       {
-        source: "/developer-handoff/:token",
+        source: "/sdk/v1/:path*",
         headers: [
-          { key: "Cache-Control", value: "private, no-store, max-age=0" },
-          { key: "Referrer-Policy", value: "no-referrer" },
+          {
+            key: "Cache-Control",
+            value: "public, max-age=31536000, immutable",
+          },
+          {
+            key: "X-Content-Type-Options",
+            value: "nosniff",
+          },
+          {
+            key: "Cross-Origin-Resource-Policy",
+            value: "cross-origin",
+          },
         ],
       },
     ];
-  },
-  turbopack: {
-    // Keep the workspace root here (avoids picking up ~/package-lock.json)
-    root: path.join(__dirname),
-  },
-  images: {
-    remotePatterns: [
-      { protocol: "https", hostname: "figma-alpha-api.s3.us-west-2.amazonaws.com" },
-      { protocol: "https", hostname: "s3-alpha-sig.figma.com" },
-      { protocol: "https", hostname: "s3-alpha.figma.com" },
-    ],
-  },
-  experimental: {
-    // Plugin imports send frame PNGs + REST JSON; batches can exceed the 10MB default.
-    proxyClientMaxBodySize: "50mb",
   },
 };
 

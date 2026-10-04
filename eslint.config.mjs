@@ -5,23 +5,17 @@ import nextTs from "eslint-config-next/typescript";
 const eslintConfig = defineConfig([
   ...nextVitals,
   ...nextTs,
-  {
-    rules: {
-      // Data-fetch and sessionStorage hydration in client workspaces use effects intentionally.
-      "react-hooks/set-state-in-effect": "off",
-      "@next/next/no-img-element": "off",
-    },
-  },
+  // Override default ignores of eslint-config-next.
   globalIgnores([
+    // Default ignores of eslint-config-next:
     ".next/**",
     "out/**",
     "build/**",
     "next-env.d.ts",
-    // Prototype / deferred Figma handoff surfaces — not first-release paths.
-    "src/app/prototypes/**",
-    "src/app/projects/**",
-    "src/app/dashboard/projects-dashboard.tsx",
-    "figma-plugin/**",
+    "packages/website-sdk/dist/**",
+    "public/sdk/**",
+    "playwright-report/**",
+    "test-results/**",
   ]),
 ]);
 

@@ -2,79 +2,66 @@ import type { NextAuthConfig } from "next-auth";
 import GitHub from "next-auth/providers/github";
 import Google from "next-auth/providers/google";
 
-const providers: NextAuthConfig["providers"] = [];
-
-if (process.env.AUTH_GOOGLE_ID && process.env.AUTH_GOOGLE_SECRET) {
-  providers.push(
-    Google({
-      allowDangerousEmailAccountLinking: true,
-    }),
-  );
-}
-
-if (process.env.AUTH_GITHUB_ID && process.env.AUTH_GITHUB_SECRET) {
-  providers.push(
-    GitHub({
-      allowDangerousEmailAccountLinking: true,
-    }),
-  );
-}
+import { sanitizeCallbackUrl } from "@/lib/auth/callback-url";
 
 /**
- * Edge-safe Auth.js config (no DB adapter). Used by `proxy.ts`.
- * Providers that need Node-only APIs belong in `auth.ts`.
+ * Edge-safe Auth.js config for proxy/optimistic checks.
+ * Credentials authorize and session-version checks live in `src/auth.ts`.
  */
 export const authConfig = {
   pages: {
-    signIn: "/login",
+    signIn: "/sign-in",
+    error: "/sign-in",
   },
-  providers,
+  providers: [
+    Google({
+      allowDangerousEmailAccountLinking: false,
+    }),
+    GitHub({
+      allowDangerousEmailAccountLinking: false,
+    }),
+  ],
+  session: {
+    strategy: "jwt",
+    maxAge: 30 * 24 * 60 * 60,
+  },
   callbacks: {
     authorized({ auth, request }) {
       const { pathname } = request.nextUrl;
-      const isLoggedIn = !!auth?.user;
-      const isAuthRoute =
-        pathname.startsWith("/login") ||
-        pathname.startsWith("/api/auth");
       const isProtected =
-        pathname.startsWith("/dashboard") ||
-        pathname.startsWith("/account") ||
-        pathname.startsWith("/projects") ||
-        pathname.startsWith("/rooms") ||
-        pathname.startsWith("/api/projects") ||
-        pathname.startsWith("/api/account") ||
-        pathname.startsWith("/api/billing") ||
-        (pathname.startsWith("/api/assets") && !request.nextUrl.searchParams.get("token")) ||
-        (pathname.startsWith("/api/integrations") &&
-          !pathname.startsWith("/api/integrations/figma/plugin-import"));
+        pathname === "/dashboard" ||
+        pathname.startsWith("/dashboard/") ||
+        pathname === "/projects" ||
+        pathname.startsWith("/projects/") ||
+        pathname === "/onboarding" ||
+        pathname.startsWith("/onboarding/") ||
+        pathname === "/admin" ||
+        pathname.startsWith("/admin/");
 
-      if (isAuthRoute) {
-        if (isLoggedIn && pathname.startsWith("/login")) {
-          return Response.redirect(new URL("/dashboard", request.nextUrl));
-        }
+      if (!isProtected) {
         return true;
       }
 
-      if (isProtected) {
-        return isLoggedIn;
+      return Boolean(auth?.user);
+    },
+    async redirect({ url, baseUrl }) {
+      if (url.startsWith("/")) {
+        return `${baseUrl}${sanitizeCallbackUrl(url)}`;
       }
 
-      return true;
-    },
-    jwt({ token, user, account }) {
-      if (user?.id) {
-        token.sub = user.id;
+      try {
+        const target = new URL(url);
+        if (target.origin === baseUrl) {
+          return `${baseUrl}${sanitizeCallbackUrl(
+            `${target.pathname}${target.search}${target.hash}`,
+          )}`;
+        }
+      } catch {
+        // Fall through.
       }
-      if (account?.provider) {
-        token.provider = account.provider;
-      }
-      return token;
-    },
-    session({ session, token }) {
-      if (session.user && token.sub) {
-        session.user.id = token.sub;
-      }
-      return session;
+
+      return baseUrl;
     },
   },
+  trustHost: true,
 } satisfies NextAuthConfig;

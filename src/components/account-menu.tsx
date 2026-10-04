@@ -1,272 +1,150 @@
 "use client";
 
-import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { useActionState, useEffect, useId, useRef, useState } from "react";
-import { ChevronDown, LogOut } from "lucide-react";
+import { ChevronsUpDown, LogOut, Moon, Sun } from "lucide-react";
+import { useState, useSyncExternalStore, useTransition } from "react";
 
+import { signOutAction } from "@/app/(auth)/actions";
+import { FormAlert } from "@/components/auth/form-alert";
+import { Button } from "@/components/ui/button";
 import {
-  signOutAction,
-  updateAccountPassword,
-  updateAccountProfile,
-  type AccountFormState,
-} from "@/app/account/actions";
-import { formatStorageBytes } from "@/lib/rooms/entitlements-format";
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { applyTheme, getResolvedTheme, subscribeTheme } from "@/lib/theme";
+import { cn } from "@/lib/utils";
 
-export type AccountMenuProps = {
+export function getInitials(value: string): string {
+  const words = value
+    .replace(/@.*$/, "")
+    .split(/[\s._-]+/)
+    .filter(Boolean);
+  const initials = words
+    .slice(0, 2)
+    .map((word) => word[0]?.toUpperCase() ?? "")
+    .join("");
+  return initials || "?";
+}
+
+export function Avatar({
+  name,
+  className,
+}: {
   name: string;
-  email: string;
-  roomCount: number;
-  maxActiveRooms: number;
-  usedBytes: number;
-  maxStorageBytes: number;
-  hasPassword: boolean;
-  compact?: boolean;
-};
-
-const initialState: AccountFormState = {};
-
-const inputClassName =
-  "mt-1.5 w-full rounded-lg border border-black/10 bg-white px-2.5 py-2 text-sm outline-none focus:border-[#6354d4]";
-
-function initialsFromName(name: string, email: string) {
-  const parts = name.trim().split(/\s+/).filter(Boolean);
-  if (parts.length >= 2) {
-    return `${parts[0]![0] ?? ""}${parts[1]![0] ?? ""}`.toUpperCase();
-  }
-  if (parts.length === 1 && parts[0]!.length >= 2) {
-    return parts[0]!.slice(0, 2).toUpperCase();
-  }
-  const local = email.split("@")[0] || "PO";
-  return local.slice(0, 2).toUpperCase();
-}
-
-function ProfileFields({ defaultName }: { defaultName: string }) {
-  const router = useRouter();
-  const [state, action, pending] = useActionState(updateAccountProfile, initialState);
-
-  useEffect(() => {
-    if (state.success) router.refresh();
-  }, [state.success, router]);
-
+  className?: string;
+}) {
   return (
-    <form action={action} className="space-y-2">
-      <label className="block text-[10px] font-semibold uppercase tracking-[0.14em] text-black/40">
-        Name
-        <input
-          name="name"
-          type="text"
-          required
-          defaultValue={defaultName}
-          autoComplete="name"
-          className={inputClassName}
-        />
-      </label>
-      {state.error ? <p className="text-xs text-red-600">{state.error}</p> : null}
-      {state.success ? <p className="text-xs text-emerald-700">{state.success}</p> : null}
-      <button
-        type="submit"
-        disabled={pending}
-        className="inline-flex h-8 items-center rounded-lg bg-[var(--brand-surface)] px-3 text-xs font-semibold text-[var(--brand-soft)] transition hover:bg-[var(--brand-deep)] disabled:opacity-60"
-      >
-        {pending ? "Saving…" : "Save Name"}
-      </button>
-    </form>
-  );
-}
-
-function PasswordFields() {
-  const [state, action, pending] = useActionState(updateAccountPassword, initialState);
-  return (
-    <form action={action} className="space-y-2">
-      <label className="block text-[10px] font-semibold uppercase tracking-[0.14em] text-black/40">
-        Current password
-        <input
-          name="currentPassword"
-          type="password"
-          required
-          autoComplete="current-password"
-          className={inputClassName}
-        />
-      </label>
-      <label className="block text-[10px] font-semibold uppercase tracking-[0.14em] text-black/40">
-        New password
-        <input
-          name="password"
-          type="password"
-          required
-          minLength={8}
-          autoComplete="new-password"
-          className={inputClassName}
-        />
-      </label>
-      <label className="block text-[10px] font-semibold uppercase tracking-[0.14em] text-black/40">
-        Confirm new password
-        <input
-          name="confirm"
-          type="password"
-          required
-          minLength={8}
-          autoComplete="new-password"
-          className={inputClassName}
-        />
-      </label>
-      {state.error ? <p className="text-xs text-red-600">{state.error}</p> : null}
-      {state.success ? <p className="text-xs text-emerald-700">{state.success}</p> : null}
-      <button
-        type="submit"
-        disabled={pending}
-        className="inline-flex h-8 items-center rounded-lg border border-black/10 bg-white px-3 text-xs font-semibold text-black/65 transition hover:bg-black/[0.02] disabled:opacity-60"
-      >
-        {pending ? "Updating…" : "Update Password"}
-      </button>
-    </form>
+    <span
+      aria-hidden="true"
+      className={cn(
+        "flex size-8 shrink-0 items-center justify-center rounded-full bg-secondary text-xs font-semibold text-secondary-foreground ring-1 ring-border",
+        className,
+      )}
+    >
+      {getInitials(name)}
+    </span>
   );
 }
 
 export function AccountMenu({
   name,
   email,
-  roomCount,
-  maxActiveRooms,
-  usedBytes,
-  maxStorageBytes,
-  hasPassword,
-  compact = false,
-}: AccountMenuProps) {
-  const [open, setOpen] = useState(false);
-  const [accountOpen, setAccountOpen] = useState(false);
-  const rootRef = useRef<HTMLDivElement>(null);
-  const menuId = useId();
-  const initials = initialsFromName(name, email);
-  const usedLabel = formatStorageBytes(usedBytes);
-  const maxLabel = formatStorageBytes(maxStorageBytes);
-  const usagePct = maxStorageBytes > 0 ? Math.min(100, Math.round((usedBytes / maxStorageBytes) * 100)) : 0;
+  variant = "compact",
+}: {
+  name: string;
+  email?: string | null;
+  variant?: "compact" | "sidebar";
+}) {
+  const theme = useSyncExternalStore(
+    subscribeTheme,
+    getResolvedTheme,
+    () => "dark" as const,
+  );
+  const [pending, startTransition] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+  const nextTheme = theme === "dark" ? "light" : "dark";
 
-  useEffect(() => {
-    if (!open) return;
-    function onPointerDown(event: MouseEvent) {
-      if (!rootRef.current?.contains(event.target as Node)) {
-        setOpen(false);
-        setAccountOpen(false);
+  function handleSignOut() {
+    setError(null);
+    startTransition(async () => {
+      const result = await signOutAction();
+      if (result.status === "error") {
+        setError(result.message ?? "We couldn’t sign you out. Try again.");
       }
-    }
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        setOpen(false);
-        setAccountOpen(false);
-      }
-    }
-    window.addEventListener("mousedown", onPointerDown);
-    window.addEventListener("keydown", onKeyDown);
-    return () => {
-      window.removeEventListener("mousedown", onPointerDown);
-      window.removeEventListener("keydown", onKeyDown);
-    };
-  }, [open]);
+    });
+  }
 
   return (
-    <div ref={rootRef} className="relative">
-      <button
-        type="button"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        aria-controls={menuId}
-        onClick={() => setOpen((value) => !value)}
-        className={`inline-flex items-center gap-1.5 rounded-full border border-[#a594f5]/35 bg-white transition hover:border-[#a594f5]/55 hover:bg-[#f7f4ff] ${
-          compact ? "p-0.5" : "pl-0.5 pr-1.5 py-0.5"
-        }`}
-      >
-        <span
-          className="inline-flex size-8 items-center justify-center rounded-full bg-[var(--brand-surface)] text-[11px] font-semibold tracking-wide text-[var(--brand-soft)]"
-          aria-hidden
-        >
-          {initials}
-        </span>
-        {!compact ? (
-          <ChevronDown className={`size-3.5 text-black/35 transition ${open ? "rotate-180" : ""}`} />
-        ) : null}
-        <span className="sr-only">Account menu for {name || email}</span>
-      </button>
-
-      {open ? (
-        <div
-          id={menuId}
-          role="menu"
-          className="absolute right-0 z-50 mt-2 w-[min(20rem,calc(100vw-1.5rem))] overflow-hidden rounded-2xl border border-[#a594f5]/25 bg-[#faf8ff] shadow-[0_18px_40px_rgba(40,30,90,0.14)]"
-        >
-          <div className="border-b border-[#a594f5]/20 px-4 py-3">
-            <p className="truncate text-sm font-semibold text-[var(--brand-deep)]">{name || "Account"}</p>
-            <p className="mt-0.5 truncate text-xs text-black/45">{email}</p>
-          </div>
-
-          <div className="grid grid-cols-2 gap-2 border-b border-[#a594f5]/20 px-4 py-3">
-            <div className="rounded-xl border border-black/8 bg-white px-3 py-2.5">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-black/35">Rooms</p>
-              <p className="mt-1 text-sm font-semibold tabular-nums text-[var(--brand-deep)]">
-                {roomCount}
-                <span className="font-medium text-black/35"> / {maxActiveRooms}</span>
-              </p>
-            </div>
-            <div className="rounded-xl border border-black/8 bg-white px-3 py-2.5">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-black/35">Storage</p>
-              <p className="mt-1 text-sm font-semibold tabular-nums text-[var(--brand-deep)]">{usedLabel}</p>
-              <p className="text-[10px] text-black/40">of {maxLabel}</p>
-              <div className="mt-2 h-1 overflow-hidden rounded-full bg-black/5">
-                <div
-                  className="h-full rounded-full bg-[var(--brand)]"
-                  style={{ width: `${usagePct}%` }}
-                />
-              </div>
-            </div>
-          </div>
-
-          <div className="px-2 py-2">
-            <button
+    <>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          {variant === "sidebar" ? (
+            <Button
               type="button"
-              role="menuitem"
-              onClick={() => setAccountOpen((value) => !value)}
-              className="flex w-full items-center justify-between rounded-xl px-2.5 py-2 text-left text-sm font-semibold text-[var(--brand-deep)] transition hover:bg-white"
+              variant="ghost"
+              aria-label={`Account: ${name}`}
+              className="h-auto min-h-12 w-full justify-start gap-3 px-2 py-2 text-left hover:bg-sidebar-accent"
             >
-              Account
-              <ChevronDown className={`size-3.5 text-black/35 transition ${accountOpen ? "rotate-180" : ""}`} />
-            </button>
-
-            {accountOpen ? (
-              <div className="mx-1 mb-2 space-y-4 rounded-xl border border-black/8 bg-white p-3">
-                <ProfileFields defaultName={name} />
-                {hasPassword ? (
-                  <div className="border-t border-black/6 pt-3">
-                    <PasswordFields />
-                  </div>
-                ) : (
-                  <p className="border-t border-black/6 pt-3 text-xs leading-5 text-black/45">
-                    This account uses social sign-in. Password changes are not available here.
-                  </p>
-                )}
-                <Link
-                  href="/account"
-                  className="inline-flex text-xs font-semibold text-[var(--brand-ink)] hover:underline"
-                  onClick={() => setOpen(false)}
-                >
-                  Open full account page
-                </Link>
-              </div>
+              <Avatar name={name} />
+              <span className="grid min-w-0 flex-1">
+                <span className="truncate text-sm font-medium text-sidebar-foreground">
+                  {name}
+                </span>
+                {email && email !== name ? (
+                  <span className="truncate text-xs text-muted-foreground">
+                    {email}
+                  </span>
+                ) : null}
+              </span>
+              <ChevronsUpDown aria-hidden="true" className="text-muted-foreground" />
+            </Button>
+          ) : (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              aria-label={`Account: ${name}`}
+              className="rounded-full"
+            >
+              <Avatar name={name} />
+            </Button>
+          )}
+        </DropdownMenuTrigger>
+        <DropdownMenuContent
+          align={variant === "sidebar" ? "start" : "end"}
+          side={variant === "sidebar" ? "top" : "bottom"}
+          className="w-64"
+        >
+          <DropdownMenuLabel className="grid gap-0.5 py-2">
+            <span className="truncate text-sm font-medium text-foreground">
+              {name}
+            </span>
+            {email && email !== name ? (
+              <span className="truncate text-xs font-normal text-muted-foreground">
+                {email}
+              </span>
             ) : null}
-
-            <form action={signOutAction}>
-              <button
-                type="submit"
-                role="menuitem"
-                className="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-sm font-semibold text-black/55 transition hover:bg-white"
-              >
-                <LogOut className="size-3.5" />
-                Sign Out
-              </button>
-            </form>
-          </div>
+          </DropdownMenuLabel>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem onSelect={() => applyTheme(nextTheme)}>
+            {theme === "dark" ? <Sun aria-hidden="true" /> : <Moon aria-hidden="true" />}
+            {theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem disabled={pending} onSelect={handleSignOut}>
+            <LogOut aria-hidden="true" />
+            {pending ? "Signing out…" : "Sign out"}
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      {error ? (
+        <div className="fixed right-4 bottom-4 left-4 z-50 sm:left-auto sm:w-96">
+          <FormAlert title="Sign out didn’t finish" description={error} />
         </div>
       ) : null}
-    </div>
+    </>
   );
 }

@@ -1,69 +1,57 @@
 import type { Metadata } from "next";
-import { Figtree, Manrope } from "next/font/google";
+import { Geist, Geist_Mono } from "next/font/google";
+import { cookies } from "next/headers";
+import Script from "next/script";
 
-import { ToastViewport } from "@/components/ui/toast";
-import { getSiteUrl, siteConfig } from "@/lib/site";
+import { AppProviders } from "@/components/app-providers";
+import { siteConfig } from "@/lib/site";
+import { isTheme, THEME_STORAGE_KEY, themeInitScript } from "@/lib/theme";
 
 import "./globals.css";
 
-const figtree = Figtree({
-  variable: "--font-figtree",
+const geistSans = Geist({
+  variable: "--font-geist-sans",
   subsets: ["latin"],
-  display: "swap",
 });
 
-const manrope = Manrope({
-  variable: "--font-display",
+const geistMono = Geist_Mono({
+  variable: "--font-geist-mono",
   subsets: ["latin"],
-  display: "swap",
 });
-
-const siteUrl = getSiteUrl();
 
 export const metadata: Metadata = {
-  metadataBase: new URL(siteUrl),
+  metadataBase: new URL(siteConfig.url),
   title: {
-    default: `${siteConfig.productName} — ${siteConfig.tagline}`,
-    template: `%s | ${siteConfig.name}`,
+    default: "Passoff",
+    template: "%s | Passoff",
   },
   description: siteConfig.description,
-  keywords: [...siteConfig.keywords],
-  applicationName: siteConfig.productName,
-  authors: [{ name: siteConfig.name }],
-  creator: siteConfig.name,
+  applicationName: siteConfig.name,
+  category: "business",
   openGraph: {
-    type: "website",
-    locale: "en_US",
-    url: siteUrl,
     siteName: siteConfig.name,
-    title: `${siteConfig.productName} — ${siteConfig.tagline}`,
-    description: siteConfig.description,
-    images: [{ url: "/brand/passoff-mark.png", width: 512, height: 512, alt: "Pass-Off mark" }],
+    locale: "en_US",
+    type: "website",
   },
-  twitter: {
-    card: "summary",
-    title: `${siteConfig.productName} — ${siteConfig.tagline}`,
-    description: siteConfig.description,
-    images: ["/brand/passoff-mark.png"],
-  },
-  alternates: {
-    canonical: "/",
-  },
-  robots: {
-    index: true,
-    follow: true,
-  },
+  twitter: { card: "summary_large_image" },
 };
 
-export default function RootLayout({ children }: LayoutProps<"/">) {
+export default async function RootLayout({ children }: LayoutProps<"/">) {
+  const cookieStore = await cookies();
+  const storedTheme = cookieStore.get(THEME_STORAGE_KEY)?.value;
+  const themeClass = isTheme(storedTheme) ? storedTheme : "";
+
   return (
     <html
       lang="en"
-      className={`${figtree.variable} ${manrope.variable} h-full antialiased`}
+      className={`${geistSans.variable} ${geistMono.variable} ${themeClass} h-full antialiased`}
+      suppressHydrationWarning
     >
-      <body className="min-h-full flex flex-col font-[family-name:var(--font-figtree)]">
-        {children}
-        <ToastViewport />
+      <body className="min-h-full flex flex-col bg-background text-foreground">
+        <Script id="passoff-theme" strategy="beforeInteractive">
+          {themeInitScript}
+        </Script>
+        <AppProviders>{children}</AppProviders>
       </body>
     </html>
   );

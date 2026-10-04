@@ -1,0 +1,1 @@
+ALTER TABLE "website_installations" ADD COLUMN "starting_url" text DEFAULT '' NOT NULL;

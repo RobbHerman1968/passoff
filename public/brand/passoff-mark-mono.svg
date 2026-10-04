@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 80" role="img" aria-labelledby="title desc">
+  <title id="title">Passoff</title>
+  <desc id="desc">Two people passing a feedback card</desc>
+  <g fill="#171717">
+    <circle cx="22" cy="17" r="11"/>
+    <path d="M10 72C6 63 7 50 11 41c4-8 11-12 18-10 8 2 10 11 14 18 4 6 9 8 15 6l5-2 5 13-5 2c-13 6-25 1-32-7-1 7-7 12-14 13-3 0-5-1-7-2Z"/>
+    <circle cx="106" cy="17" r="11"/>
+    <path d="M118 72c4-9 3-22-1-31-4-8-11-12-18-10-8 2-10 11-14 18-4 6-9 8-15 6l-5-2-5 13 5 2c13 6 25 1 32-7 1 7 7 12 14 13 3 0 5-1 7-2Z"/>
+  </g>
+  <g transform="rotate(7 64 49)">
+    <rect x="54" y="39" width="20" height="19" rx="5" fill="none" stroke="#171717" stroke-width="4"/>
+    <circle cx="60" cy="46" r="2" fill="#171717"/>
+    <path d="M65 45h5M59 51h11" fill="none" stroke="#171717" stroke-width="2.5" stroke-linecap="round"/>
+  </g>
+</svg>

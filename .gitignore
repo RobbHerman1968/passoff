@@ -19,6 +19,12 @@
 
 # production
 /build
+/packages/website-sdk/dist
+/public/sdk
+/playwright-report
+/test-results
+/blob-report
+/playwright/.cache
 
 # misc
 .DS_Store
@@ -33,13 +39,6 @@ yarn-error.log*
 # env files (can opt-in for committing if needed)
 .env*
 !.env.example
-
-# local sqlite
-*.db
-*.db-*
-
-# local figma preview blobs
-.data/
 
 # vercel
 .vercel

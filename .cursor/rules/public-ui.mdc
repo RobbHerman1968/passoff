@@ -1,0 +1,18 @@
+---
+description: UI/UX rules for Passoff's signed-out public site (marketing, pricing, comparisons, auth screens)
+globs: src/app/(public)/**,src/app/(auth)/**,src/components/site-*.tsx,src/components/section-intro.tsx,src/components/review-preview.tsx,src/components/home-*.tsx,src/components/pricing-page.tsx,src/components/auth/**
+alwaysApply: false
+---
+
+# Public site UI
+
+Read `docs/UI_PUBLIC_GUIDELINES.md` before changing these files. Key rules:
+
+- Positioning: website review with issue evidence. Issues go Open → In progress → Ready for verification → Verified → Closed. Video is evidence on an issue, never a separate product.
+- No invented proof (quotes, logos, numbers) and no claims about unshipped features.
+- Prices, limits, and trial length come only from `src/lib/billing/plans.ts`.
+- Page rhythm: `.hero-backdrop` hero with one `h1` → sections using `SectionIntro` → `SiteCta`.
+- Auth links use `authRoutes` from `src/lib/site.ts`.
+- Cards: `rounded-2xl bg-card ring-1 ring-foreground/10`. Controls use `border-input`; `border-border` is decorative only.
+- Use tokens (`bg-surface`, `bg-brand-dark`, `text-brand-dark-accent`, …), never raw hex.
+- No horizontal scroll at 320–1440 px. Stretched card links need a visible `has-[a:focus-visible]` outline.

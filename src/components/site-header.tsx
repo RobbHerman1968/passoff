@@ -1,69 +1,112 @@
+"use client";
+
 import Link from "next/link";
+import { Menu } from "lucide-react";
+import * as React from "react";
 
-import { auth } from "@/auth";
-import { BrandMark } from "@/components/brand-mark";
+import { Logo } from "@/components/logo";
+import { ThemeToggle } from "@/components/theme-toggle";
+import { Button } from "@/components/ui/button";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+  SheetTrigger,
+} from "@/components/ui/sheet";
+import { authRoutes, publicNavItems } from "@/lib/site";
 
-export async function SiteHeader() {
-  const session = await auth();
-  const signedIn = Boolean(session?.user);
+export function SiteHeader() {
+  const [navOpen, setNavOpen] = React.useState(false);
 
   return (
-    <header className="fixed inset-x-0 top-0 z-50 border-b border-[color-mix(in_srgb,var(--brand-ink)_12%,transparent)] bg-[color-mix(in_srgb,var(--brand-muted)_88%,white)]/85 backdrop-blur-md">
-      <div className="mx-auto flex h-16 max-w-6xl flex-nowrap items-center justify-between gap-2 px-4 sm:gap-3 sm:px-8">
+    <header className="sticky top-0 z-50 border-b border-border bg-site-header backdrop-blur-md">
+      <div className="site-shell flex h-16 items-center gap-2 sm:gap-3">
+        <Sheet open={navOpen} onOpenChange={setNavOpen}>
+          <SheetTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="lg:hidden"
+              aria-label="Open navigation"
+            >
+              <Menu />
+            </Button>
+          </SheetTrigger>
+          <SheetContent side="left" className="w-[min(20rem,100%)] p-0">
+            <SheetHeader className="border-b border-border">
+              <SheetTitle>Passoff</SheetTitle>
+              <SheetDescription>
+                Choose a section or start a review.
+              </SheetDescription>
+            </SheetHeader>
+            <nav aria-label="Main navigation" className="grid gap-1 p-3">
+              {publicNavItems.map((item) => (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  onClick={() => setNavOpen(false)}
+                  className="flex min-h-11 items-center rounded-lg px-3 text-sm font-medium text-foreground hover:bg-muted"
+                >
+                  {item.label}
+                </Link>
+              ))}
+            </nav>
+            <div className="mt-auto grid gap-3 border-t border-border p-4">
+              <Button asChild size="lg">
+                <Link href={authRoutes.signUp} onClick={() => setNavOpen(false)}>
+                  Start a review
+                </Link>
+              </Button>
+              <Button asChild size="lg" variant="outline">
+                <Link href={authRoutes.signIn} onClick={() => setNavOpen(false)}>
+                  Sign in
+                </Link>
+              </Button>
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-sm text-muted-foreground">Appearance</p>
+                <ThemeToggle variant="ghost" size="icon" />
+              </div>
+            </div>
+          </SheetContent>
+        </Sheet>
+
         <Link
           href="/"
-          className="flex min-w-0 shrink-0 items-center gap-2 text-[1.05rem] font-semibold tracking-[-0.04em] text-[var(--brand-deep)] transition-opacity hover:opacity-80 sm:gap-2.5"
+          aria-label="Passoff home"
+          className="min-w-0 rounded-md text-foreground focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring"
         >
-          <BrandMark size={28} />
-          <span className="font-[family-name:var(--font-display)] whitespace-nowrap">Pass-Off</span>
+          <Logo className="flex items-center gap-2.5" />
         </Link>
-        <nav
-          aria-label="Primary"
-          className="flex min-w-0 shrink items-center justify-end gap-0.5 overflow-x-auto whitespace-nowrap sm:gap-2"
-        >
-          <Link
-            href="/solutions"
-            className="hidden h-10 items-center justify-center rounded-xl px-2.5 text-sm font-semibold text-[var(--brand-ink)] transition hover:bg-[color-mix(in_srgb,var(--brand)_10%,transparent)] sm:inline-flex sm:px-3"
-          >
-            Solutions
-          </Link>
-          <Link
-            href="/resources"
-            className="hidden h-10 items-center justify-center rounded-xl px-3 text-sm font-semibold text-[var(--brand-ink)] transition hover:bg-[color-mix(in_srgb,var(--brand)_10%,transparent)] md:inline-flex"
-          >
-            Resources
-          </Link>
-          <Link
-            href="/pricing"
-            className="hidden h-10 items-center justify-center rounded-xl px-2.5 text-sm font-semibold text-[var(--brand-ink)] transition hover:bg-[color-mix(in_srgb,var(--brand)_10%,transparent)] sm:inline-flex sm:px-3"
-          >
-            Pricing
-          </Link>
-          {signedIn ? (
+
+        <nav aria-label="Main navigation" className="ml-6 hidden items-center lg:flex">
+          {publicNavItems.map((item) => (
             <Link
-              href="/dashboard"
-              className="inline-flex h-10 shrink-0 items-center justify-center rounded-xl bg-[var(--brand-surface)] px-3 text-sm font-semibold text-[var(--brand-soft)] transition hover:bg-[var(--brand-deep)] sm:px-4"
+              key={item.href}
+              href={item.href}
+              className="flex min-h-11 items-center rounded-lg px-3 text-sm font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
             >
-              Dashboard
+              {item.label}
             </Link>
-          ) : (
-            <>
-              <Link
-                href="/login"
-                className="inline-flex h-10 shrink-0 items-center justify-center rounded-xl px-2.5 text-sm font-semibold text-[var(--brand-ink)] transition hover:bg-[color-mix(in_srgb,var(--brand)_10%,transparent)] sm:px-3"
-              >
-                Sign In
-              </Link>
-              <Link
-                href="/login?mode=signup"
-                className="inline-flex h-10 shrink-0 items-center justify-center rounded-xl bg-[var(--brand-surface)] px-3 text-sm font-semibold text-[var(--brand-soft)] transition hover:bg-[var(--brand-deep)] sm:px-4"
-              >
-                <span className="sm:hidden">Trial</span>
-                <span className="hidden sm:inline">Start Free Trial</span>
-              </Link>
-            </>
-          )}
+          ))}
         </nav>
+
+        <div className="ml-auto flex items-center gap-1 sm:gap-2">
+          <Link
+            href={authRoutes.signIn}
+            className="hidden min-h-11 items-center rounded-lg px-3 text-sm font-medium text-muted-foreground hover:bg-muted hover:text-foreground sm:inline-flex"
+          >
+            Sign in
+          </Link>
+          <Button asChild className="max-sm:px-3">
+            <Link href={authRoutes.signUp}>
+              Start a review
+            </Link>
+          </Button>
+          <ThemeToggle variant="ghost" size="icon" className="max-lg:hidden" />
+        </div>
       </div>
     </header>
   );

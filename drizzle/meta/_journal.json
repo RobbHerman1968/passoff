@@ -1,0 +1,90 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1791053292700,
+      "tag": "0000_workable_medusa",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1791062937797,
+      "tag": "0001_noisy_mattie_franklin",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1791064004855,
+      "tag": "0002_amused_vargas",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1791075682981,
+      "tag": "0003_condemned_husk",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1791144000000,
+      "tag": "0004_workspace_issue_model",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1791145200000,
+      "tag": "0005_issues_table",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1791200000000,
+      "tag": "0006_sdk_review_session",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1791201000000,
+      "tag": "0007_mux_video_playback",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1791202000000,
+      "tag": "0008_sdk_issue_anchors",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1791203000000,
+      "tag": "0009_sdk_issue_anchors_fix",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1791204000000,
+      "tag": "0010_website_analyses",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1791205000000,
+      "tag": "0011_platform_admin_role",
+      "breakpoints": true
+    }
+  ]
+}

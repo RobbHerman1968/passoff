@@ -1,0 +1,19 @@
+---
+description: UI/UX rules for Passoff's signed-in app (workspace shell, projects, reviews, issues, verification, approval, video evidence, usage)
+globs: src/app/(app)/**,src/components/app-shell.tsx,src/components/account-menu.tsx,src/components/page-header.tsx,src/components/resource-list.tsx,src/components/list-toolbar.tsx,src/components/summary-stats.tsx,src/components/setup-checklist.tsx,src/components/*-state.tsx,src/components/status-badge.tsx,src/components/workflow-status-badge.tsx,src/components/projects/**,src/components/reviews/**,src/components/issues/**,src/components/video/**,src/components/help/**
+alwaysApply: false
+---
+
+# Signed-in app UI
+
+Read `docs/UI_APP_GUIDELINES.md` before changing these files. Key rules:
+
+- The shell (`AppShell`) is rendered once by `src/app/(app)/layout.tsx`. Pages never render `<main>` or their own shell; they start with `PageHeader` (breadcrumbs, `h1`, status, one primary action, secondary actions in a "…" menu).
+- Use the three page patterns: list (`SummaryStats` → `ListToolbar` → `ResourceList`), detail (main column + `20rem` aside), triage (list + detail; full page on mobile).
+- Reuse `ResourceList`, `StatusPill`, `SetupChecklist`, `EmptyState`/`ErrorState`/`PermissionDeniedState`/`LoadingState`. Make a shared component before a pattern's second use.
+- Issue statuses only from `src/lib/issues/statuses.ts`. Show only transitions the person may make. Verified/Closed/approval require an authorized reviewer. Nothing closes automatically.
+- Evidence is honest: label screenshots Original / Reconstruction / Later capture / Unavailable; show anchor confidence with a relink option; deleted video becomes a deleted-evidence record.
+- Approval is tied to a version; older approvals become historical with a clear next action.
+- Limits come from `src/lib/billing/plans.ts`; at a limit block only that action and keep issues readable.
+- No navigation item, tab, or button may lead to an unbuilt page. Mark unbuilt steps as "Later" in a checklist.
+- Filters and selection live in the URL. Every screen designs loading, empty, filtered-empty, error, offline, permission-denied, and read-only states.

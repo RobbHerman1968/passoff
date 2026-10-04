@@ -1,19 +1,43 @@
-import { Pool, neonConfig } from "@neondatabase/serverless";
-import { drizzle } from "drizzle-orm/neon-serverless";
-import ws from "ws";
+import "server-only";
+
+import { attachDatabasePool } from "@vercel/functions";
+import { drizzle } from "drizzle-orm/node-postgres";
+import { Pool } from "pg";
 
 import * as schema from "./schema";
 
-// neon-http cannot run transactions; plugin import needs them for replace/append batches.
-neonConfig.webSocketConstructor = ws;
+const databaseUrl = process.env.DATABASE_URL;
 
-const globalForDb = globalThis as unknown as { __passoffPgPool?: Pool };
-
-function getPool() {
-  if (!globalForDb.__passoffPgPool) {
-    globalForDb.__passoffPgPool = new Pool({ connectionString: process.env.DATABASE_URL! });
-  }
-  return globalForDb.__passoffPgPool;
+if (!databaseUrl) {
+  throw new Error("DATABASE_URL is required to connect to PostgreSQL.");
 }
 
-export const db = drizzle({ client: getPool(), schema });
+const parsedPoolSize = Number.parseInt(process.env.DATABASE_POOL_MAX ?? "10", 10);
+const poolSize = Number.isFinite(parsedPoolSize) && parsedPoolSize > 0 ? parsedPoolSize : 10;
+
+const globalDatabase = globalThis as unknown as {
+  passoffPool?: Pool;
+  passoffPoolAttached?: boolean;
+};
+
+// Reuse one bounded pool per process. This avoids a new connection for every request
+// and prevents Next.js development reloads from leaking pools. Vercel's lifecycle
+// hook closes idle connections before a Fluid Compute instance is suspended.
+export const pool =
+  globalDatabase.passoffPool ??
+  new Pool({
+    connectionString: databaseUrl,
+    max: poolSize,
+    min: 1,
+    idleTimeoutMillis: 5_000,
+    connectionTimeoutMillis: 10_000,
+  });
+
+if (!globalDatabase.passoffPoolAttached) {
+  attachDatabasePool(pool);
+  globalDatabase.passoffPoolAttached = true;
+}
+
+globalDatabase.passoffPool = pool;
+
+export const db = drizzle({ client: pool, schema });
