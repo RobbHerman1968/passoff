@@ -18,13 +18,11 @@ describe("issue list URL filters", () => {
     const parsed = parseIssueListSearchParams({
       show: "nope",
       priority: "critical",
-      issue: "abc",
       p: "0",
       video: "maybe",
     });
     expect(parsed.show).toBe("active");
     expect(parsed.priority).toBeUndefined();
-    expect(parsed.issue).toBeUndefined();
     expect(parsed.p).toBe(1);
     expect(parsed.video).toBeUndefined();
   });
@@ -37,7 +35,6 @@ describe("issue list URL filters", () => {
       assignee: "unassigned",
       page: "/pricing",
       video: "1",
-      issue: "12",
       p: "2",
     });
     expect(parsed).toMatchObject({
@@ -47,9 +44,21 @@ describe("issue list URL filters", () => {
       assignee: "unassigned",
       page: "/pricing",
       video: true,
-      issue: 12,
       p: 2,
     });
     expect(issueListHasActiveFilters(parsed)).toBe(true);
+  });
+
+  it("ignores obsolete issue query parameters", () => {
+    const parsed = parseIssueListSearchParams({
+      issue: "12",
+      show: "active",
+    });
+    expect(parsed).toEqual({
+      q: "",
+      show: "active",
+      p: 1,
+    });
+    expect("issue" in parsed).toBe(false);
   });
 });

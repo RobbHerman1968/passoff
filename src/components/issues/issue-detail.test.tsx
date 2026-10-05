@@ -1,0 +1,244 @@
+import { fireEvent, render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { axe } from "jest-axe";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+
+import {
+  IssueDetailView,
+  IssueUnavailableView,
+} from "@/components/issues/issue-detail";
+import type { IssueDetail } from "@/lib/issues/list";
+
+const refresh = vi.fn();
+
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ refresh, replace: vi.fn(), push: vi.fn() }),
+}));
+
+beforeAll(() => {
+  class ResizeObserverStub {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+  vi.stubGlobal("ResizeObserver", ResizeObserverStub);
+});
+
+function makeDetail(overrides: Partial<IssueDetail> = {}): IssueDetail {
+  return {
+    id: "issue-1",
+    number: 3,
+    body: "Header overlaps navigation\nAlso wraps on mobile.",
+    displayTitle: "Header overlaps navigation",
+    status: "open",
+    priority: "high",
+    pageRoute: "/pricing",
+    pageTitle: "Pricing page with a very long title that must wrap safely",
+    pageUrl: "https://example.com/pricing?utm=long",
+    reporterDisplayName: "Guest Reviewer",
+    assigneeDisplayName: "Unassigned",
+    assigneeUserId: null,
+    hasScreenshotEvidence: true,
+    screenshotCaptureStatus: "ready",
+    hasVideoEvidence: false,
+    createdAt: new Date("2026-10-01T12:00:00.000Z"),
+    updatedAt: new Date("2026-10-02T12:00:00.000Z"),
+    environmentName: "Production",
+    versionLabel: "v1",
+    screenshotCaptureMethod: "browser_reconstruction",
+    screenshotAnnotation: null,
+    ...overrides,
+  };
+}
+
+describe("IssueDetailView", () => {
+  beforeEach(() => {
+    refresh.mockReset();
+  });
+
+  it("renders feedback, metadata, and a large screenshot", () => {
+    render(
+      <IssueDetailView
+        issue={makeDetail()}
+        projectId="p1"
+        reviewId="r1"
+        projectName="Acme"
+        reviewName="Launch"
+        backHref="/projects/p1/reviews/r1?q=header&p=2"
+      />,
+    );
+
+    expect(
+      screen.getByRole("heading", { level: 1, name: "Header overlaps navigation" }),
+    ).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Feedback" })).toBeVisible();
+    expect(
+      screen.getByText((_, element) => {
+        return (
+          element?.tagName === "P" &&
+          element.textContent ===
+            "Header overlaps navigation\nAlso wraps on mobile."
+        );
+      }),
+    ).toBeVisible();
+    expect(screen.getByText("Pricing page with a very long title that must wrap safely")).toBeVisible();
+    expect(screen.getByText("https://example.com/pricing?utm=long")).toBeVisible();
+    expect(
+      screen.getByRole("img", {
+        name: "Captured page context for issue 3.",
+      }),
+    ).toHaveAttribute(
+      "src",
+      expect.stringContaining("/api/projects/p1/reviews/r1/issues/3/screenshot"),
+    );
+    expect(
+      screen.getByText("The exact selected area was not recorded for this issue."),
+    ).toBeVisible();
+    expect(
+      screen.getByText(
+        /Captured in the reviewer’s browser\. Small visual differences from the live page are possible\./,
+      ),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("link", { name: "Back to issues" }),
+    ).toHaveAttribute("href", "/projects/p1/reviews/r1?q=header&p=2");
+  });
+
+  it("covers pending, unavailable, failed, and image-load-error screenshot states", async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <IssueDetailView
+        issue={makeDetail({ screenshotCaptureStatus: "pending" })}
+        projectId="p1"
+        reviewId="r1"
+        projectName="Acme"
+        reviewName="Launch"
+        backHref="/projects/p1/reviews/r1"
+      />,
+    );
+    expect(screen.getByText("Picture still preparing")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Refresh" })).toBeVisible();
+
+    rerender(
+      <IssueDetailView
+        issue={makeDetail({ screenshotCaptureStatus: "unavailable" })}
+        projectId="p1"
+        reviewId="r1"
+        projectName="Acme"
+        reviewName="Launch"
+        backHref="/projects/p1/reviews/r1"
+      />,
+    );
+    expect(screen.getByText("No picture available")).toBeVisible();
+
+    rerender(
+      <IssueDetailView
+        issue={makeDetail({ screenshotCaptureStatus: "failed" })}
+        projectId="p1"
+        reviewId="r1"
+        projectName="Acme"
+        reviewName="Launch"
+        backHref="/projects/p1/reviews/r1"
+      />,
+    );
+    expect(screen.getByText("Picture couldn’t be prepared")).toBeVisible();
+
+    rerender(
+      <IssueDetailView
+        issue={makeDetail({ screenshotCaptureStatus: "ready" })}
+        projectId="p1"
+        reviewId="r1"
+        projectName="Acme"
+        reviewName="Launch"
+        backHref="/projects/p1/reviews/r1"
+      />,
+    );
+    const image = screen.getByRole("img", {
+      name: "Captured page context for issue 3.",
+    });
+    fireEvent.error(image);
+    expect(await screen.findByText("We couldn’t show this picture")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Try again" }));
+    expect(refresh).toHaveBeenCalled();
+  });
+
+  it("opens and closes the full-size screenshot dialog accessibly", async () => {
+    const user = userEvent.setup();
+    const { container } = render(
+      <IssueDetailView
+        issue={makeDetail({
+          screenshotAnnotation: {
+            version: 1,
+            selectedBounds: { x: 0.1, y: 0.1, width: 0.2, height: 0.2 },
+            pin: { x: 0.2, y: 0.2 },
+          },
+        })}
+        projectId="p1"
+        reviewId="r1"
+        projectName="Acme"
+        reviewName="Launch"
+        backHref="/projects/p1/reviews/r1"
+      />,
+    );
+
+    expect(
+      screen.getByText(
+        "The orange outline and numbered pin show what the reviewer selected.",
+      ),
+    ).toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: "View full size" }));
+    const dialog = screen.getByRole("dialog", { name: "Full-size screenshot" });
+    expect(dialog).toBeVisible();
+    expect(
+      within(dialog).getByRole("img", {
+        name: "Captured page context for issue 3. The selected area is marked.",
+      }),
+    ).toBeVisible();
+
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("renders an unavailable state with a safe back link", () => {
+    render(
+      <IssueUnavailableView
+        projectId="p1"
+        projectName="Acme"
+        reviewId="r1"
+        reviewName="Launch"
+        backHref="/projects/p1/reviews/r1?show=closed"
+        issueNumber={99}
+      />,
+    );
+
+    expect(
+      screen.getByRole("heading", { name: "This issue isn’t available" }),
+    ).toBeVisible();
+    expect(
+      screen.getAllByRole("link", { name: "Back to issues" })[0],
+    ).toHaveAttribute("href", "/projects/p1/reviews/r1?show=closed");
+  });
+
+  it("stacks metadata without truncating important content", () => {
+    render(
+      <IssueDetailView
+        issue={makeDetail({
+          body: "Line one\nLine two with lots of detail about the overlap.",
+        })}
+        projectId="p1"
+        reviewId="r1"
+        projectName="Acme"
+        reviewName="Launch"
+        backHref="/projects/p1/reviews/r1"
+      />,
+    );
+
+    const feedback = screen.getByText(/Line one/);
+    expect(feedback.className).toMatch(/whitespace-pre-wrap/);
+    expect(feedback.className).toMatch(/break-words/);
+    expect(screen.queryByText(/\.\.\./)).toBeNull();
+  });
+});

@@ -41,12 +41,6 @@ export const issueListFiltersSchema = z.object({
     if (value === "1" || value === "true" || value === true) return true;
     return undefined;
   }, z.boolean().optional()),
-  issue: z.preprocess((value) => {
-    if (typeof value !== "string" && typeof value !== "number") return undefined;
-    const parsed = Number(value);
-    if (!Number.isInteger(parsed) || parsed < 1) return undefined;
-    return parsed;
-  }, z.number().int().positive().optional()),
   p: z.preprocess((value) => {
     if (typeof value !== "string" && typeof value !== "number") return 1;
     const parsed = Number(value);
@@ -67,7 +61,6 @@ export function parseIssueListSearchParams(
     assignee: typeof params.assignee === "string" ? params.assignee : undefined,
     page: typeof params.page === "string" ? params.page : undefined,
     video: typeof params.video === "string" ? params.video : undefined,
-    issue: typeof params.issue === "string" ? params.issue : undefined,
     p: typeof params.p === "string" ? params.p : undefined,
   };
 

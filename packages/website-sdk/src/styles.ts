@@ -132,9 +132,9 @@ export const REVIEW_STYLES = `
   z-index: 2;
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 2px;
   max-width: calc(100vw - 24px);
-  padding: 5px;
+  padding: 2px;
   background: var(--card);
   color: var(--foreground);
   border: 1px solid var(--border);
@@ -236,6 +236,45 @@ export const REVIEW_STYLES = `
 }
 
 .button[data-variant="primary"]:hover {
+  background: color-mix(in srgb, var(--primary) 88%, black);
+}
+
+/* Keep a 44px accessible target while making toolbar controls look compact. */
+.toolbar .button {
+  position: relative;
+  isolation: isolate;
+  padding-inline: 10px;
+  line-height: 1.1;
+}
+
+.toolbar .button,
+.toolbar .button:hover,
+.toolbar .button[aria-pressed="true"]:not([data-variant="primary"]),
+.toolbar .button[data-variant="primary"],
+.toolbar .button[data-variant="primary"]:hover {
+  background: transparent;
+}
+
+.toolbar .button::before {
+  content: "";
+  position: absolute;
+  inset: 4px 0;
+  z-index: -1;
+  border-radius: 8px;
+  background: transparent;
+  transition: background-color var(--motion);
+}
+
+.toolbar .button:hover::before,
+.toolbar .button[aria-pressed="true"]:not([data-variant="primary"])::before {
+  background: var(--subtle);
+}
+
+.toolbar .button[data-variant="primary"]::before {
+  background: var(--primary);
+}
+
+.toolbar .button[data-variant="primary"]:hover::before {
   background: color-mix(in srgb, var(--primary) 88%, black);
 }
 

@@ -35,6 +35,10 @@ import {
   type IssueShowFilter,
 } from "@/lib/issues/schemas";
 import {
+  parseScreenshotAnnotation,
+  type ScreenshotAnnotation,
+} from "@/lib/issues/screenshot-annotation";
+import {
   OPEN_ISSUE_STATUSES,
   type IssuePriority,
   type IssueStatus,
@@ -82,7 +86,8 @@ export type IssueListResult = {
   facets: IssueListFacets;
 };
 
-export type IssuePreview = IssueListItem & {
+export type IssueDetail = IssueListItem & {
+  pageUrl: string | null;
   environmentName: string;
   versionLabel: string;
   screenshotCaptureMethod:
@@ -91,7 +96,12 @@ export type IssuePreview = IssueListItem & {
     | "manual_attachment"
     | "host_upload"
     | null;
+  /** Normalized annotation for the selected element, when recorded. */
+  screenshotAnnotation: ScreenshotAnnotation | null;
 };
+
+/** @deprecated Use IssueDetail. Kept for transitional imports. */
+export type IssuePreview = IssueDetail;
 
 export type IssueScreenshotPayload =
   | {
@@ -503,12 +513,12 @@ export async function listIssuesForReview(
   };
 }
 
-export async function getIssuePreviewForReview(
+export async function getIssueDetailForReview(
   context: WorkspaceContext,
   projectId: string,
   reviewId: string,
   issueNumber: number,
-): Promise<IssuePreview | null | "unavailable"> {
+): Promise<IssueDetail | null | "unavailable"> {
   const review = await assertReviewInWorkspace(context, projectId, reviewId);
   if (!review) return null;
 
@@ -519,7 +529,7 @@ export async function getIssuePreviewForReview(
       email: users.email,
     })
     .from(users)
-    .as("preview_author_user");
+    .as("detail_author_user");
 
   const assigneeUser = db
     .select({
@@ -528,7 +538,7 @@ export async function getIssuePreviewForReview(
       email: users.email,
     })
     .from(users)
-    .as("preview_assignee_user");
+    .as("detail_assignee_user");
 
   const [row] = await db
     .select({
@@ -539,6 +549,7 @@ export async function getIssuePreviewForReview(
       priority: issues.priority,
       pageRoute: sql<string | null>`coalesce(${issueAnchors.route}, ${pages.normalizedRoute})`,
       pageTitle: sql<string | null>`coalesce(${issueAnchors.pageTitle}, ${pages.lastKnownTitle})`,
+      pageUrl: issueAnchors.pageUrl,
       authorUserName: authorUser.name,
       authorUserEmail: authorUser.email,
       authorGuestName: guestIdentities.name,
@@ -565,6 +576,15 @@ export async function getIssuePreviewForReview(
         | null
       >`(
         select ie.capture_method
+        from issue_evidence ie
+        where ie.issue_id = ${issues.id}
+          and ie.workspace_id = ${context.workspaceId}
+          and ie.kind = 'screenshot'
+        order by ie.created_at desc
+        limit 1
+      )`,
+      screenshotAnnotationRaw: sql<unknown>`(
+        select ie.sanitized_context -> 'annotation'
         from issue_evidence ie
         where ie.issue_id = ${issues.id}
           and ie.workspace_id = ${context.workspaceId}
@@ -606,11 +626,17 @@ export async function getIssuePreviewForReview(
       status: row.status as IssueStatus,
       priority: row.priority as IssuePriority,
     }),
+    pageUrl: row.pageUrl,
     environmentName: review.environmentName,
     versionLabel: review.versionLabel,
     screenshotCaptureMethod: row.screenshotCaptureMethod,
+    // Re-validate stored annotation; never expose pngBase64 or storage keys.
+    screenshotAnnotation: parseScreenshotAnnotation(row.screenshotAnnotationRaw),
   };
 }
+
+/** @deprecated Use getIssueDetailForReview. */
+export const getIssuePreviewForReview = getIssueDetailForReview;
 
 export async function getIssueScreenshotForReview(
   context: WorkspaceContext,

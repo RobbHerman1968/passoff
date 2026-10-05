@@ -23,10 +23,7 @@ import {
   resolveInstallationStatus,
   type InstallationStatus,
 } from "@/lib/installations/status";
-import {
-  getIssuePreviewForReview,
-  listIssuesForReview,
-} from "@/lib/issues/list";
+import { listIssuesForReview } from "@/lib/issues/list";
 import { parseIssueListSearchParams } from "@/lib/issues/schemas";
 import { listShareLinksForReview } from "@/lib/reviews/share-links";
 import { requireWorkspaceContext } from "@/lib/workspaces/context";
@@ -138,9 +135,6 @@ export default async function ReviewDetailPage({
 
   let issueListError = false;
   let issueList = null as Awaited<ReturnType<typeof listIssuesForReview>>;
-  let selectedIssue = null as Awaited<
-    ReturnType<typeof getIssuePreviewForReview>
-  >;
   try {
     issueList = await listIssuesForReview(
       auth.context,
@@ -148,14 +142,6 @@ export default async function ReviewDetailPage({
       review.id,
       issueFilters,
     );
-    if (issueFilters.issue) {
-      selectedIssue = await getIssuePreviewForReview(
-        auth.context,
-        review.projectId,
-        review.id,
-        issueFilters.issue,
-      );
-    }
   } catch {
     issueListError = true;
   }
@@ -314,15 +300,6 @@ export default async function ReviewDetailPage({
               page={issueList.page}
               pageCount={issueList.pageCount}
               facets={issueList.facets}
-              selectedIssueNumber={issueFilters.issue}
-              selectedIssue={
-                selectedIssue && selectedIssue !== "unavailable"
-                  ? selectedIssue
-                  : null
-              }
-              selectedUnavailable={
-                Boolean(issueFilters.issue) && selectedIssue === "unavailable"
-              }
               installed={installed}
             />
           )}

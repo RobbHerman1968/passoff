@@ -1,7 +1,7 @@
 "use client";
 
 import { Check, Filter, Search, X } from "lucide-react";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState, useTransition } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -109,15 +109,12 @@ function buildChips(
 export function IssueListFilters({
   filters,
   facets,
-  selectedIssue,
 }: {
   filters: IssueListFilters;
   facets: IssueListFacets;
-  selectedIssue?: number;
 }) {
   const router = useRouter();
   const pathname = usePathname();
-  const searchParams = useSearchParams();
   const [isPending, startTransition] = useTransition();
   const [query, setQuery] = useState(filters.q);
   const [syncedQuery, setSyncedQuery] = useState(filters.q);
@@ -141,11 +138,10 @@ export function IssueListFilters({
   const hasExtraFilters =
     showPriorityFilter || showAssigneeFilter || showPageFilter || showVideoFilter;
 
-  function navigate(next: Partial<IssueListFilters> & { issue?: number | null }) {
+  function navigate(next: Partial<IssueListFilters>) {
     const merged = {
       ...filters,
       ...next,
-      issue: next.issue === null ? null : (next.issue ?? selectedIssue ?? null),
       p:
         next.q !== undefined ||
         next.show !== undefined ||
@@ -181,14 +177,14 @@ export function IssueListFilters({
         role="search"
         aria-label="Search and filter issues"
         aria-busy={isPending}
-        className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between"
+        className="flex flex-col gap-3 lg:flex-row lg:items-end"
         onSubmit={(event) => {
           event.preventDefault();
           lastSubmitted.current = query.trim();
           navigate({ q: query });
         }}
       >
-        <div className="grid min-w-0 gap-1.5 md:max-w-sm md:flex-1">
+        <div className="grid min-w-0 flex-1 gap-1.5">
           <Label htmlFor="issue-search">Search issues</Label>
           <div className="relative">
             <Search
@@ -208,7 +204,7 @@ export function IssueListFilters({
           </div>
         </div>
 
-        <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-end">
+        <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-end lg:shrink-0">
           <fieldset className="grid min-w-0 gap-1.5">
             <legend className="mb-1.5 text-sm font-medium">Show</legend>
             <div className="flex max-w-full overflow-x-auto rounded-lg ring-1 ring-input ring-inset">
@@ -378,24 +374,7 @@ export function IssueListFilters({
                 setQuery("");
                 lastSubmitted.current = "";
                 startTransition(() => {
-                  const params = new URLSearchParams(searchParams.toString());
-                  for (const key of [
-                    "q",
-                    "show",
-                    "priority",
-                    "assignee",
-                    "page",
-                    "video",
-                    "p",
-                  ]) {
-                    params.delete(key);
-                  }
-                  // Keep selected issue if present.
-                  const queryString = params.toString();
-                  router.replace(
-                    queryString ? `${pathname}?${queryString}` : pathname,
-                    { scroll: false },
-                  );
+                  router.replace(pathname, { scroll: false });
                 });
               }}
             >

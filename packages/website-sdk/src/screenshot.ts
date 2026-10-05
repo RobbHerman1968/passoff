@@ -1,11 +1,20 @@
 import { toPng } from "html-to-image";
 
 import { isPrivateElement } from "./privacy";
+import {
+  buildScreenshotAnnotation,
+  type AnnotationClickPosition,
+} from "./screenshot-annotation";
 import { HOST_ROOT_ID } from "./styles";
 import type { ScreenshotResult, ScreenshotStatus } from "./types";
 
 export type ScreenshotAttemptInput = {
   element: Element;
+  /**
+   * Click position within the selected element (normalized 0–1).
+   * Used to place the issue-number pin inside the contextual screenshot.
+   */
+  clickPosition?: AnnotationClickPosition;
   /** Prototype seam: inject failure without throwing into the host. */
   forceUnavailable?: boolean;
 };
@@ -24,6 +33,8 @@ const MAX_DATA_URL_CHARS = 280_022;
 const CAPTURE_TIMEOUT_MS = 7_000;
 const MIN_CONTEXT_WIDTH = 480;
 const MIN_CONTEXT_HEIGHT = 240;
+const MIN_VERTICAL_GUTTER = 96;
+const MAX_VERTICAL_GUTTER = 160;
 const MAX_CONTEXT_WIDTH = 2_400;
 const MAX_CONTEXT_HEIGHT = 1_600;
 const TRANSPARENT_PIXEL =
@@ -150,11 +161,42 @@ function captureTargetFor(element: Element): HTMLElement | null {
   const initial = element instanceof HTMLElement ? element : element.parentElement;
   if (!initial) return null;
 
+  const selectedRect = element.getBoundingClientRect();
+  const desiredVerticalGutter = Math.min(
+    MAX_VERTICAL_GUTTER,
+    Math.max(MIN_VERTICAL_GUTTER, selectedRect.height * 0.75),
+  );
+
   let current: HTMLElement = initial;
   let best = current;
   while (current !== document.body && current !== document.documentElement) {
     const rect = current.getBoundingClientRect();
-    if (rect.width >= MIN_CONTEXT_WIDTH && rect.height >= MIN_CONTEXT_HEIGHT) {
+    const containsSelection =
+      rect.top <= selectedRect.top &&
+      rect.bottom >= selectedRect.bottom &&
+      rect.left <= selectedRect.left &&
+      rect.right >= selectedRect.right;
+    const spaceAbove = Math.max(0, selectedRect.top - rect.top);
+    const spaceBelow = Math.max(0, rect.bottom - selectedRect.bottom);
+    const usefulSize =
+      rect.width >= MIN_CONTEXT_WIDTH && rect.height >= MIN_CONTEXT_HEIGHT;
+
+    if (usefulSize) {
+      // Keep the largest safe candidate as a fallback. Positioned children can
+      // legitimately extend outside a parent's box; in that case annotation is
+      // omitted rather than losing the contextual picture.
+      best = current;
+    }
+
+    // Do not accept a merely large parent when the selected item sits against
+    // one edge. Keep climbing until there is useful real page context on both
+    // sides, or fall back to the best available bounded ancestor.
+    if (
+      containsSelection &&
+      usefulSize &&
+      spaceAbove >= desiredVerticalGutter &&
+      spaceBelow >= desiredVerticalGutter
+    ) {
       return current;
     }
     const parent: HTMLElement | null = current.parentElement;
@@ -168,7 +210,6 @@ function captureTargetFor(element: Element): HTMLElement | null {
     ) {
       break;
     }
-    best = parent;
     current = parent;
   }
 
@@ -227,11 +268,26 @@ export async function attemptScreenshot(
   const limitations = collectLimitations(target ?? input.element);
   const dataUrl = target ? await drawClone(target) : null;
   const status = statusFrom(limitations, Boolean(dataUrl));
+
+  let annotation: ScreenshotResult["annotation"];
+  if (dataUrl && target) {
+    try {
+      annotation = buildScreenshotAnnotation(
+        input.element,
+        target,
+        input.clickPosition,
+      );
+    } catch {
+      annotation = undefined;
+    }
+  }
+
   return {
     status,
     reason: reasonFrom(status, limitations),
     limitations,
     dataUrl: dataUrl ?? undefined,
+    annotation,
     capturedAt,
   };
 }

@@ -33,6 +33,7 @@ export type ReviewRuntime = {
 type ScreenshotModule = {
   attemptScreenshot: (input: {
     element: Element;
+    clickPosition?: { x: number; y: number };
     forceUnavailable?: boolean;
   }) => Promise<import("./types").ScreenshotResult>;
 };
@@ -592,18 +593,25 @@ export function mountReview(options: {
       cancelButton.hidden = false;
       setMode("browse");
       renderPanel();
-      void capturePicture(element);
+      void capturePicture(element, anchor);
     },
     onCancel() {
       setMode("browse");
     },
   });
 
-  async function capturePicture(element: Element) {
+  async function capturePicture(element: Element, anchor: PrototypeAnchor) {
     try {
       const screenshot = await loadScreenshotModule(options.assetBaseUrl);
-      lastScreenshot = await screenshot.attemptScreenshot({ element });
+      lastScreenshot = await screenshot.attemptScreenshot({
+        element,
+        clickPosition: {
+          x: anchor.normalizedPosition.x,
+          y: anchor.normalizedPosition.y,
+        },
+      });
     } catch {
+      // Annotation/screenshot failures must never block written feedback.
       lastScreenshot = {
         status: "unavailable",
         reason:
@@ -878,10 +886,10 @@ export function mountReview(options: {
     getMarkers: () => markers.records(),
     async attemptScreenshot() {
       const last = markers.records().at(-1);
-      if (!last?.element) {
+      if (!last?.element || !last.anchor) {
         return null;
       }
-      await capturePicture(last.element);
+      await capturePicture(last.element, last.anchor);
       return lastScreenshot;
     },
     removeCurrentTarget() {

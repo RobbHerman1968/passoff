@@ -410,6 +410,9 @@ export async function createSdkIssue(
             // Inline storage for SDK screenshots until object storage is wired.
             // Bounded by sanitizeScreenshot.
             pngBase64: screenshot.base64,
+            ...(screenshot.annotation
+              ? { annotation: screenshot.annotation }
+              : {}),
           },
           capturedAt: anchor.capturedAt ?? new Date(),
           createdByGuestId: session.guestIdentityId,

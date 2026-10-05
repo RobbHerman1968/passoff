@@ -4,7 +4,7 @@ import { axe } from "jest-axe";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { IssueTriage } from "@/components/issues/issue-triage";
-import type { IssueListItem, IssuePreview } from "@/lib/issues/list";
+import type { IssueListItem } from "@/lib/issues/list";
 
 const replace = vi.fn();
 const refresh = vi.fn();
@@ -33,16 +33,6 @@ function makeIssue(overrides: Partial<IssueListItem> = {}): IssueListItem {
     hasVideoEvidence: overrides.hasVideoEvidence ?? false,
     createdAt: overrides.createdAt ?? new Date("2026-10-01T12:00:00.000Z"),
     updatedAt: overrides.updatedAt ?? new Date("2026-10-02T12:00:00.000Z"),
-  };
-}
-
-function makePreview(overrides: Partial<IssuePreview> = {}): IssuePreview {
-  return {
-    ...makeIssue(overrides),
-    environmentName: "Production",
-    versionLabel: "v1",
-    screenshotCaptureMethod: "browser_reconstruction",
-    ...overrides,
   };
 }
 
@@ -89,15 +79,48 @@ describe("IssueTriage", () => {
 
     expect(
       screen.getByRole("link", {
-        name: "Issue 12: Header overlaps navigation, Open, High priority.",
+        name: "Issue 12: Header overlaps navigation, Open, High priority, has screenshot.",
       }),
     ).toBeVisible();
     expect(screen.getAllByText("High").length).toBeGreaterThan(0);
     expect(screen.getByText("Unassigned")).toBeVisible();
+    expect(screen.queryByText("Select an issue to read")).toBeNull();
   });
 
-  it("shows filtered-empty and unavailable selected issue states", () => {
-    const { rerender } = render(
+  it("links each row to the dedicated issue route and preserves list state", () => {
+    render(
+      <IssueTriage
+        projectId="p1"
+        reviewId="r1"
+        pathname="/projects/p1/reviews/r1"
+        filters={{ q: "header", show: "verified", p: 2 }}
+        issues={[makeIssue()]}
+        total={1}
+        page={2}
+        pageCount={3}
+        facets={{
+          priorities: ["high"],
+          pages: [],
+          assignees: [],
+          hasUnassigned: true,
+          hasVideo: false,
+        }}
+        installed
+      />,
+    );
+
+    const link = screen.getByRole("link", {
+      name: "Issue 12: Header overlaps navigation, Open, High priority, has screenshot.",
+    });
+    expect(link).toHaveAttribute(
+      "href",
+      "/projects/p1/reviews/r1/issues/12?return=q%3Dheader%26show%3Dverified%26p%3D2",
+    );
+    expect(link).not.toHaveAttribute("href", expect.stringContaining("issue="));
+  });
+
+  it("shows filtered-empty state without a side preview", () => {
+    render(
       <IssueTriage
         projectId="p1"
         reviewId="r1"
@@ -120,125 +143,10 @@ describe("IssueTriage", () => {
 
     expect(screen.getByRole("heading", { name: "No matching issues" })).toBeVisible();
     expect(screen.getByRole("link", { name: "Clear filters" })).toBeVisible();
-
-    rerender(
-      <IssueTriage
-        projectId="p1"
-        reviewId="r1"
-        pathname="/projects/p1/reviews/r1"
-        filters={{ q: "", show: "active", p: 1, issue: 99 }}
-        issues={[makeIssue()]}
-        total={1}
-        page={1}
-        pageCount={1}
-        facets={{
-          priorities: ["high"],
-          pages: [],
-          assignees: [],
-          hasUnassigned: true,
-          hasVideo: false,
-        }}
-        selectedIssueNumber={99}
-        selectedUnavailable
-        installed
-      />,
-    );
-
-    expect(
-      screen.getByRole("heading", { name: "This issue isn’t available" }),
-    ).toBeVisible();
-    expect(screen.getByRole("link", { name: "Back to issues" })).toBeVisible();
+    expect(screen.queryByRole("heading", { name: "This issue isn’t available" })).toBeNull();
   });
 
-  it("shows screenshot states in the selected issue preview", () => {
-    const { rerender } = render(
-      <IssueTriage
-        projectId="p1"
-        reviewId="r1"
-        pathname="/projects/p1/reviews/r1"
-        filters={{ q: "", show: "active", p: 1, issue: 12 }}
-        issues={[makeIssue()]}
-        total={1}
-        page={1}
-        pageCount={1}
-        facets={{
-          priorities: ["high"],
-          pages: [],
-          assignees: [],
-          hasUnassigned: true,
-          hasVideo: false,
-        }}
-        selectedIssueNumber={12}
-        selectedIssue={makePreview()}
-        installed
-      />,
-    );
-
-    expect(screen.getByText("Browser reconstruction")).toBeVisible();
-    expect(
-      screen.getByText(
-        /created in the reviewer’s browser and may not match the page pixel for pixel/i,
-      ),
-    ).toBeVisible();
-    expect(
-      screen.getByRole("img", {
-        name: "Browser reconstruction for issue 12",
-      }),
-    ).toHaveAttribute(
-      "src",
-      "/api/projects/p1/reviews/r1/issues/12/screenshot",
-    );
-
-    rerender(
-      <IssueTriage
-        projectId="p1"
-        reviewId="r1"
-        pathname="/projects/p1/reviews/r1"
-        filters={{ q: "", show: "active", p: 1, issue: 12 }}
-        issues={[makeIssue({ screenshotCaptureStatus: "pending" })]}
-        total={1}
-        page={1}
-        pageCount={1}
-        facets={{
-          priorities: ["high"],
-          pages: [],
-          assignees: [],
-          hasUnassigned: true,
-          hasVideo: false,
-        }}
-        selectedIssueNumber={12}
-        selectedIssue={makePreview({ screenshotCaptureStatus: "pending" })}
-        installed
-      />,
-    );
-    expect(screen.getByText("The picture is still being prepared.")).toBeVisible();
-
-    rerender(
-      <IssueTriage
-        projectId="p1"
-        reviewId="r1"
-        pathname="/projects/p1/reviews/r1"
-        filters={{ q: "", show: "active", p: 1, issue: 12 }}
-        issues={[makeIssue({ screenshotCaptureStatus: "failed" })]}
-        total={1}
-        page={1}
-        pageCount={1}
-        facets={{
-          priorities: ["high"],
-          pages: [],
-          assignees: [],
-          hasUnassigned: true,
-          hasVideo: false,
-        }}
-        selectedIssueNumber={12}
-        selectedIssue={makePreview({ screenshotCaptureStatus: "failed" })}
-        installed
-      />,
-    );
-    expect(screen.getByText("The picture could not be prepared.")).toBeVisible();
-  });
-
-  it("supports keyboard selection of an issue row", async () => {
+  it("supports keyboard focus on an issue row link", async () => {
     const user = userEvent.setup();
     render(
       <IssueTriage
@@ -262,13 +170,41 @@ describe("IssueTriage", () => {
     );
 
     const link = screen.getByRole("link", {
-      name: "Issue 12: Header overlaps navigation, Open, High priority.",
+      name: "Issue 12: Header overlaps navigation, Open, High priority, has screenshot.",
     });
     link.focus();
     expect(link).toHaveFocus();
     await user.keyboard("{Enter}");
-    // Link navigation is handled by Next; ensure the control remains operable.
-    expect(link).toHaveAttribute("href", expect.stringContaining("issue=12"));
+    expect(link).toHaveAttribute(
+      "href",
+      "/projects/p1/reviews/r1/issues/12",
+    );
+  });
+
+  it("keeps the list full width without a preview column", () => {
+    const { container } = render(
+      <IssueTriage
+        projectId="p1"
+        reviewId="r1"
+        pathname="/projects/p1/reviews/r1"
+        filters={{ q: "", show: "active", p: 1 }}
+        issues={[makeIssue()]}
+        total={1}
+        page={1}
+        pageCount={1}
+        facets={{
+          priorities: ["high"],
+          pages: [],
+          assignees: [],
+          hasUnassigned: true,
+          hasVideo: false,
+        }}
+        installed
+      />,
+    );
+
+    expect(container.querySelector(".lg\\:grid-cols-\\[minmax\\(0\\,1fr\\)_20rem\\]")).toBeNull();
+    expect(screen.queryByText("Browser reconstruction")).toBeNull();
   });
 
   it("has no automated accessibility violations", async () => {
@@ -277,8 +213,8 @@ describe("IssueTriage", () => {
         projectId="p1"
         reviewId="r1"
         pathname="/projects/p1/reviews/r1"
-        filters={{ q: "", show: "active", p: 1, issue: 12 }}
-        issues={[makeIssue()]}
+        filters={{ q: "", show: "active", p: 1 }}
+        issues={[makeIssue({ hasVideoEvidence: true })]}
         total={1}
         page={1}
         pageCount={1}
@@ -289,8 +225,6 @@ describe("IssueTriage", () => {
           hasUnassigned: true,
           hasVideo: true,
         }}
-        selectedIssueNumber={12}
-        selectedIssue={makePreview()}
         installed
       />,
     );

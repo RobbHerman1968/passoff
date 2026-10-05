@@ -23,7 +23,7 @@ async function signUpAndOnboard(
 }
 
 test.describe("review issue list", () => {
-  test("lists seeded issues, selects preview, and stays accessible", async ({
+  test("lists seeded issues, opens detail, and stays accessible", async ({
     page,
     request,
   }) => {
@@ -58,43 +58,59 @@ test.describe("review issue list", () => {
       issueNumber: number;
     };
 
-    await page.goto(
-      `/projects/${payload.projectId}/reviews/${payload.reviewId}`,
-    );
+    const reviewPath = `/projects/${payload.projectId}/reviews/${payload.reviewId}`;
+    const issuePath = `${reviewPath}/issues/${payload.issueNumber}`;
+
+    await page.goto(`${reviewPath}?q=Header&show=all`);
     await expect(
       page.getByRole("heading", { name: "Issues", exact: true }),
     ).toBeVisible();
     await expect(
       page.getByRole("link", {
-        name: /Issue \d+: Header overlaps navigation on pricing, Open, High priority\./i,
+        name: /Issue \d+: Header overlaps navigation on pricing, Open, High priority/i,
       }),
     ).toBeVisible();
 
     await page
       .getByRole("link", {
-        name: /Issue \d+: Header overlaps navigation on pricing, Open, High priority\./i,
+        name: /Issue \d+: Header overlaps navigation on pricing, Open, High priority/i,
       })
       .click();
-    await expect(page).toHaveURL(new RegExp(`[?&]issue=${payload.issueNumber}`));
-    await expect(page.getByText("Browser reconstruction")).toBeVisible();
+    await expect(page).toHaveURL(new RegExp(`${issuePath.replace(/\//g, "\\/")}(\\?|$)`));
     await expect(
-      page.getByRole("region", { name: /Header overlaps/i }).getByText("Unassigned"),
+      page.getByRole("heading", {
+        level: 1,
+        name: "Header overlaps navigation on pricing",
+      }),
+    ).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Feedback" })).toBeVisible();
+    await expect(
+      page.getByRole("img", {
+        name: /screenshot|reconstruction/i,
+      }),
     ).toBeVisible();
 
     await page.setViewportSize({ width: 375, height: 812 });
     await expect(page.getByRole("link", { name: "Back to issues" })).toBeVisible();
     await page.getByRole("link", { name: "Back to issues" }).click();
-    await expect(page).not.toHaveURL(/[?&]issue=/);
+    await expect(page).toHaveURL(/[?&]q=Header/);
+    await expect(page).toHaveURL(/[?&]show=all/);
+    await expect(page).not.toHaveURL(/\/issues\/\d+/);
     await expect(
       page.getByRole("link", {
-        name: /Issue \d+: Header overlaps navigation on pricing, Open, High priority\./i,
+        name: /Issue \d+: Header overlaps navigation on pricing, Open, High priority/i,
       }),
     ).toBeVisible();
 
     await page.setViewportSize({ width: 1280, height: 800 });
-    await page.goto(
-      `/projects/${payload.projectId}/reviews/${payload.reviewId}?issue=${payload.issueNumber}`,
-    );
+    await page.goto(issuePath);
+    await page.getByRole("button", { name: "View full size" }).click();
+    await expect(
+      page.getByRole("dialog", { name: "Full-size screenshot" }),
+    ).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+
     const accessibility = await new AxeBuilder({ page })
       .disableRules(["color-contrast"])
       .analyze();

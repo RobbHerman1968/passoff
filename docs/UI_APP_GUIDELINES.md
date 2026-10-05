@@ -69,10 +69,11 @@ Use one of these three layouts. Do not invent a fourth without updating this doc
 3. Two columns at `lg`: main work area (`minmax(0,1fr)`) and a `20rem` `<aside aria-label="… details">` for setup and metadata cards. One column below `lg`, with the main area first.
 4. `SetupChecklist` at the top of the main column until setup is finished.
 
-**Triage view** (issues inside a review, when built):
+**Triage view** (issues inside a review):
 
-- Desktop: issue list on the left, selected issue detail on the right (the URL holds `?issue=<number>`, so links and the back button work).
-- Below `lg`: the list is a full page; selecting an issue opens the full-page issue detail. Do not squeeze two columns onto a phone.
+- Keep the issue list full width on the review page. Do not use a desktop split-preview layout.
+- Selecting an issue navigates to `/projects/[projectId]/reviews/[reviewId]/issues/[issueNumber]`.
+- Preserve the list’s search, filters, status selection, and page in a validated `return` query on the detail URL so “Back to issues” restores the same list state. Never accept an external redirect.
 
 ## 5. Shared building blocks
 

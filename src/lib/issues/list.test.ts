@@ -13,7 +13,7 @@ import {
 import { createCredentialsUser } from "@/lib/auth/users";
 import { createOwnerWorkspace } from "@/lib/auth/workspace";
 import {
-  getIssuePreviewForReview,
+  getIssueDetailForReview,
   getIssueScreenshotForReview,
   listIssuesForReview,
 } from "@/lib/issues/list";
@@ -263,6 +263,11 @@ describe("listIssuesForReview", () => {
       const seeded = await seedReview("filters", "https://filters.example.com");
       const session = await sdkSessionFor(seeded);
 
+      const readyAnnotation = {
+        version: 1 as const,
+        selectedBounds: { x: 0.12, y: 0.18, width: 0.22, height: 0.1 },
+        pin: { x: 0.2, y: 0.22 },
+      };
       const guestReady = await createSdkIssue(session, {
         body: "Header overlaps navigation on pricing",
         priority: "high",
@@ -271,6 +276,7 @@ describe("listIssuesForReview", () => {
         screenshot: {
           status: "captured",
           dataUrl: `data:image/png;base64,${TINY_PNG_BASE64}`,
+          annotation: readyAnnotation,
         },
         idempotencyKey: `ready_${Date.now()}`,
       });
@@ -527,28 +533,57 @@ describe("listIssuesForReview", () => {
       const page1Ids = new Set(page1?.items.map((item) => item.id));
       expect(page2?.items.every((item) => !page1Ids.has(item.id))).toBe(true);
 
-      const preview = await getIssuePreviewForReview(
+      const detail = await getIssueDetailForReview(
         seeded.context,
         seeded.projectId,
         seeded.reviewId,
         guestReady.issue.number,
       );
-      expect(preview).not.toBeNull();
-      expect(preview).not.toBe("unavailable");
-      if (!preview || preview === "unavailable") return;
-      expect(preview.body).toContain("Header overlaps");
-      expect(preview.screenshotCaptureStatus).toBe("ready");
-      expect(preview.environmentName).toBeTruthy();
-      expect(preview.versionLabel).toBeTruthy();
+      expect(detail).not.toBeNull();
+      expect(detail).not.toBe("unavailable");
+      if (!detail || detail === "unavailable") return;
+      expect(detail.body).toContain("Header overlaps");
+      expect(detail.screenshotCaptureStatus).toBe("ready");
+      expect(detail.environmentName).toBeTruthy();
+      expect(detail.versionLabel).toBeTruthy();
+      expect(detail.pageUrl).toBeTruthy();
+      expect(detail.screenshotAnnotation).toEqual(readyAnnotation);
+      expect(JSON.stringify(detail)).not.toContain("pngBase64");
+      expect(JSON.stringify(detail)).not.toContain(TINY_PNG_BASE64);
+      expect(JSON.stringify(detail)).not.toContain("sdk-screenshots/");
+
+      const [storedEvidence] = await db
+        .select({ sanitizedContext: issueEvidence.sanitizedContext })
+        .from(issueEvidence)
+        .where(
+          and(
+            eq(issueEvidence.issueId, guestReady.issue.id),
+            eq(issueEvidence.kind, "screenshot"),
+          ),
+        )
+        .limit(1);
+      expect(storedEvidence?.sanitizedContext).toMatchObject({
+        annotation: readyAnnotation,
+      });
 
       expect(
-        await getIssuePreviewForReview(
+        await getIssueDetailForReview(
           seeded.context,
           seeded.projectId,
           seeded.reviewId,
           999_999,
         ),
       ).toBe("unavailable");
+
+      const otherWorkspace = await createWorkspaceContext("detail-other");
+      expect(
+        await getIssueDetailForReview(
+          otherWorkspace,
+          seeded.projectId,
+          seeded.reviewId,
+          guestReady.issue.number,
+        ),
+      ).toBeNull();
 
       const readyShot = await getIssueScreenshotForReview(
         seeded.context,

@@ -182,6 +182,7 @@ export async function createIssue(options: {
               status: options.screenshot.status,
               reason: options.screenshot.reason,
               dataUrl: options.screenshot.dataUrl,
+              annotation: options.screenshot.annotation,
             }
           : undefined,
         idempotencyKey: options.idempotencyKey,

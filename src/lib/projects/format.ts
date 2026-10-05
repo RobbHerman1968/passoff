@@ -1,16 +1,21 @@
-export function formatRelativeActivity(date: Date | string): string {
+export function formatRelativeActivity(
+  date: Date | string,
+  now: number = Date.now(),
+): string {
   const value = typeof date === "string" ? new Date(date) : date;
   const timestamp = value.getTime();
   if (Number.isNaN(timestamp)) {
     return "Unknown activity";
   }
 
-  const deltaSeconds = Math.round((timestamp - Date.now()) / 1000);
+  const deltaSeconds = Math.round((timestamp - now) / 1000);
   const abs = Math.abs(deltaSeconds);
   const formatter = new Intl.RelativeTimeFormat("en", { numeric: "auto" });
 
+  // Keep sub-minute activity as a stable label. Second-level strings change
+  // between SSR and hydration and trigger React text mismatches.
   if (abs < 60) {
-    return formatter.format(deltaSeconds, "second");
+    return "Just now";
   }
   if (abs < 3600) {
     return formatter.format(Math.round(deltaSeconds / 60), "minute");

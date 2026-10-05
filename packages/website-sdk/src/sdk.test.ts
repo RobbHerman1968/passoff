@@ -631,11 +631,141 @@ describe("website SDK prototype", () => {
     vi.mocked(toPng).mockResolvedValue("data:image/png;base64,aGVsbG8=");
 
     const anchor = captureAnchor(selected, { x: 40, y: 30 });
-    const result = await attemptScreenshot({ element: selected });
+    const result = await attemptScreenshot({
+      element: selected,
+      clickPosition: anchor.normalizedPosition,
+    });
 
     expect(anchor.elementTag).toBe("div");
     expect(toPng).toHaveBeenCalledWith(context, expect.any(Object));
     expect(result.status).toBe("captured");
+    expect(result.annotation).toEqual({
+      version: 1,
+      selectedBounds: {
+        x: 20 / 900,
+        y: 20 / 420,
+        width: 240 / 900,
+        height: 40 / 420,
+      },
+      pin: {
+        x: 40 / 900,
+        y: 30 / 420,
+      },
+    });
+  });
+
+  it("climbs past a lopsided parent to keep space above and below the selection", async () => {
+    const balancedContext = document.createElement("main");
+    const lopsidedParent = document.createElement("section");
+    const selected = document.createElement("div");
+    lopsidedParent.append(selected);
+    balancedContext.append(lopsidedParent);
+    document.body.append(balancedContext);
+
+    Object.defineProperty(selected, "getBoundingClientRect", {
+      configurable: true,
+      value: () => ({
+        x: 200,
+        y: 112,
+        top: 112,
+        left: 200,
+        bottom: 152,
+        right: 440,
+        width: 240,
+        height: 40,
+        toJSON() {},
+      }),
+    });
+    Object.defineProperty(lopsidedParent, "getBoundingClientRect", {
+      configurable: true,
+      value: () => ({
+        x: 80,
+        y: 100,
+        top: 100,
+        left: 80,
+        bottom: 420,
+        right: 880,
+        width: 800,
+        height: 320,
+        toJSON() {},
+      }),
+    });
+    Object.defineProperty(balancedContext, "getBoundingClientRect", {
+      configurable: true,
+      value: () => ({
+        x: 0,
+        y: 0,
+        top: 0,
+        left: 0,
+        bottom: 600,
+        right: 1000,
+        width: 1000,
+        height: 600,
+        toJSON() {},
+      }),
+    });
+    vi.mocked(toPng).mockResolvedValue("data:image/png;base64,aGVsbG8=");
+
+    const result = await attemptScreenshot({
+      element: selected,
+      clickPosition: { x: 0.5, y: 0.5 },
+    });
+
+    expect(toPng).toHaveBeenCalledWith(balancedContext, expect.any(Object));
+    expect(result.annotation?.selectedBounds.y).toBeCloseTo(112 / 600);
+    expect(result.annotation?.pin.y).toBeCloseTo(132 / 600);
+  });
+
+  it("omits annotation for private selections and still allows written feedback", async () => {
+    const privateBlock = document.getElementById("private-block")!;
+    const result = await attemptScreenshot({ element: privateBlock });
+    expect(result.annotation).toBeUndefined();
+    // Private capture target is unavailable; feedback path remains open.
+    expect(result.status).toBe("unavailable");
+  });
+
+  it("keeps a screenshot when annotation geometry fails", async () => {
+    const context = document.createElement("section");
+    const selected = document.createElement("div");
+    context.append(selected);
+    document.body.append(context);
+    Object.defineProperty(context, "getBoundingClientRect", {
+      configurable: true,
+      value: () => ({
+        x: 0,
+        y: 0,
+        top: 0,
+        left: 0,
+        bottom: 500,
+        right: 800,
+        width: 800,
+        height: 500,
+        toJSON() {},
+      }),
+    });
+    Object.defineProperty(selected, "getBoundingClientRect", {
+      configurable: true,
+      value: () => ({
+        x: 900,
+        y: 900,
+        top: 900,
+        left: 900,
+        bottom: 920,
+        right: 920,
+        width: 20,
+        height: 20,
+        toJSON() {},
+      }),
+    });
+    vi.mocked(toPng).mockResolvedValue("data:image/png;base64,aGVsbG8=");
+
+    const result = await attemptScreenshot({
+      element: selected,
+      clickPosition: { x: 0.5, y: 0.5 },
+    });
+    expect(result.status).toBe("captured");
+    expect(result.dataUrl).toBeTruthy();
+    expect(result.annotation).toBeUndefined();
   });
 });
 

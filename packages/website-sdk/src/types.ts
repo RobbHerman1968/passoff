@@ -24,6 +24,24 @@ export type NavigationType =
 
 export type ScreenshotStatus = "captured" | "partially-captured" | "unavailable";
 
+/**
+ * Normalized annotation for the selected element inside a wider contextual
+ * screenshot. Coordinates are relative to the capture target (0–1).
+ */
+export type ScreenshotAnnotation = {
+  version: 1;
+  selectedBounds: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
+  pin: {
+    x: number;
+    y: number;
+  };
+};
+
 export type PassoffTheme = "light" | "dark" | "system";
 
 /** Production configuration. Never put reusable secrets here. */
@@ -114,6 +132,8 @@ export type ScreenshotResult = {
   reason: string;
   limitations: string[];
   dataUrl?: string;
+  /** Present only when capture succeeded and geometry could be calculated. */
+  annotation?: ScreenshotAnnotation;
   capturedAt: string;
 };
 

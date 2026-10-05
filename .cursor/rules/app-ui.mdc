@@ -9,7 +9,7 @@ alwaysApply: false
 Read `docs/UI_APP_GUIDELINES.md` before changing these files. Key rules:
 
 - The shell (`AppShell`) is rendered once by `src/app/(app)/layout.tsx`. Pages never render `<main>` or their own shell; they start with `PageHeader` (breadcrumbs, `h1`, status, one primary action, secondary actions in a "…" menu).
-- Use the three page patterns: list (`SummaryStats` → `ListToolbar` → `ResourceList`), detail (main column + `20rem` aside), triage (list + detail; full page on mobile).
+- Use the three page patterns: list (`SummaryStats` → `ListToolbar` → `ResourceList`), detail (main column + `20rem` aside), triage (full-width issue list on the review; dedicated issue detail route with validated return state).
 - Reuse `ResourceList`, `StatusPill`, `SetupChecklist`, `EmptyState`/`ErrorState`/`PermissionDeniedState`/`LoadingState`. Make a shared component before a pattern's second use.
 - Issue statuses only from `src/lib/issues/statuses.ts`. Show only transitions the person may make. Verified/Closed/approval require an authorized reviewer. Nothing closes automatically.
 - Evidence is honest: label screenshots Original / Reconstruction / Later capture / Unavailable; show anchor confidence with a relink option; deleted video becomes a deleted-evidence record.

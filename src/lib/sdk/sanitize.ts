@@ -1,5 +1,9 @@
 import { z } from "zod";
 
+import {
+  parseScreenshotAnnotation,
+  type ScreenshotAnnotationV1,
+} from "@/lib/issues/screenshot-annotation";
 import { ISSUE_PRIORITIES, type IssuePriority } from "@/lib/issues/statuses";
 import { normalizePageUrl, pageRouteFromUrl } from "@/lib/sdk/page-url";
 
@@ -81,6 +85,8 @@ export type SanitizedScreenshot = {
   /** Raw base64 without data-url prefix. Capped server-side. */
   base64: string | null;
   byteLength: number | null;
+  /** Validated annotation, or null when missing/invalid. */
+  annotation: ScreenshotAnnotationV1 | null;
 };
 
 const MAX_SCREENSHOT_BASE64_CHARS = 280_000; // ~200KB binary
@@ -217,6 +223,7 @@ export function sanitizeScreenshot(raw: unknown): SanitizedScreenshot {
       mimeType: null,
       base64: null,
       byteLength: null,
+      annotation: null,
     };
   }
   const input = raw as Record<string, unknown>;
@@ -256,8 +263,16 @@ export function sanitizeScreenshot(raw: unknown): SanitizedScreenshot {
       mimeType: null,
       base64: null,
       byteLength: null,
+      annotation: null,
     };
   }
+
+  // Never trust SDK coordinates without validation. Invalid annotation is
+  // dropped without rejecting an otherwise valid screenshot.
+  const annotation =
+    base64 && status !== "unavailable"
+      ? parseScreenshotAnnotation(input.annotation)
+      : null;
 
   return {
     status,
@@ -265,6 +280,7 @@ export function sanitizeScreenshot(raw: unknown): SanitizedScreenshot {
     mimeType,
     base64,
     byteLength,
+    annotation,
   };
 }
 
