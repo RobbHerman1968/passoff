@@ -22,7 +22,7 @@ describe("embed config", () => {
 
   it("builds the production bootstrap URL", () => {
     expect(getSdkBootstrapUrl("https://app.example.com")).toBe(
-      "https://app.example.com/sdk/v1/passoff.js?v=1.0.9",
+      "https://app.example.com/sdk/v1/passoff.js?v=1.0.10",
     );
   });
 });

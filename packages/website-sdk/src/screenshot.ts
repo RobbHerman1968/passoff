@@ -224,31 +224,44 @@ async function drawClone(target: HTMLElement): Promise<string | null> {
   const canvasWidth = Math.max(1, Math.round(sourceWidth * scale));
   const canvasHeight = Math.max(1, Math.round(sourceHeight * scale));
 
-  try {
+  // Preserve the host's fonts first. Without them, text can wrap differently
+  // inside the reconstructed image and move the selected element away from
+  // its recorded annotation. Fall back to system fonts only if embedding is
+  // unavailable on the host page.
+  for (const skipFonts of [false, true]) {
     for (const pixelRatio of [1, 0.75, 0.5]) {
-      const dataUrl = await withTimeout(
-        toPng(target, {
-          width: sourceWidth,
-          height: sourceHeight,
-          canvasWidth,
-          canvasHeight,
-          pixelRatio,
-          skipFonts: true,
-          cacheBust: false,
-          imagePlaceholder: TRANSPARENT_PIXEL,
-          filter: canInclude,
-          fetchRequestInit: { credentials: "same-origin" },
-          onImageErrorHandler: () => undefined,
-        }),
-      );
-      if (dataUrl.startsWith("data:image/png;base64,") && dataUrl.length <= MAX_DATA_URL_CHARS) {
-        return dataUrl;
+      try {
+        const dataUrl = await withTimeout(
+          toPng(target, {
+            width: sourceWidth,
+            height: sourceHeight,
+            canvasWidth,
+            canvasHeight,
+            pixelRatio,
+            skipFonts,
+            cacheBust: false,
+            imagePlaceholder: TRANSPARENT_PIXEL,
+            filter: canInclude,
+            fetchRequestInit: { credentials: "same-origin" },
+            onImageErrorHandler: () => undefined,
+          }),
+        );
+        if (
+          dataUrl.startsWith("data:image/png;base64,") &&
+          dataUrl.length <= MAX_DATA_URL_CHARS
+        ) {
+          return dataUrl;
+        }
+      } catch {
+        // Pixel ratio cannot repair a font-fetch failure. Move directly to
+        // the compatibility fallback instead of waiting through more retries.
+        if (!skipFonts) {
+          break;
+        }
       }
     }
-    return null;
-  } catch {
-    return null;
   }
+  return null;
 }
 
 export async function attemptScreenshot(

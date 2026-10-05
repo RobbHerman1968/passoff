@@ -593,6 +593,35 @@ describe("website SDK prototype", () => {
 
     expect(result.status).toBe("captured");
     expect(result.dataUrl).toMatch(/^data:image\/png;base64,/);
+    expect(vi.mocked(toPng).mock.calls[0]?.[1]?.skipFonts).toBe(false);
+  });
+
+  it("falls back when a host font cannot be embedded", async () => {
+    vi.mocked(toPng)
+      .mockRejectedValueOnce(new Error("font unavailable"))
+      .mockResolvedValueOnce("data:image/png;base64,aGVsbG8=");
+    const section = document.createElement("section");
+    Object.defineProperty(section, "getBoundingClientRect", {
+      configurable: true,
+      value: () => ({
+        x: 0,
+        y: 0,
+        top: 0,
+        left: 0,
+        bottom: 400,
+        right: 800,
+        width: 800,
+        height: 400,
+        toJSON() {},
+      }),
+    });
+    document.body.append(section);
+
+    const result = await attemptScreenshot({ element: section });
+
+    expect(result.status).toBe("captured");
+    expect(vi.mocked(toPng).mock.calls[0]?.[1]?.skipFonts).toBe(false);
+    expect(vi.mocked(toPng).mock.calls[1]?.[1]?.skipFonts).toBe(true);
   });
 
   it("captures useful context while keeping the selected element as the anchor", async () => {
