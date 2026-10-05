@@ -288,6 +288,48 @@ export const REVIEW_STYLES = `
   right: 16px;
   bottom: 16px;
   z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  isolation: isolate;
+  padding-inline: 7px;
+  background: transparent;
+  line-height: 1;
+}
+
+.launcher:hover,
+.launcher[data-variant="primary"]:hover {
+  background: transparent;
+}
+
+.launcher::before {
+  content: "";
+  position: absolute;
+  inset: 6px 0;
+  z-index: -1;
+  border-radius: 7px;
+  background: var(--primary);
+  transition: background-color var(--motion);
+}
+
+.launcher:hover::before {
+  background: color-mix(in srgb, var(--primary) 88%, black);
+}
+
+.launcher-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  white-space: nowrap;
+}
+
+.launcher-brand svg {
+  width: 18px;
+  height: 12px;
 }
 
 .highlight {

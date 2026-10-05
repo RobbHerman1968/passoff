@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
-import Image from "next/image";
 
 import { ReviewLaunchForm } from "@/app/r/[token]/launch-form";
+import { LogoMark } from "@/components/logo";
 import { resolveShareLinkToken } from "@/lib/reviews/share-links";
 import { getReviewForSharePage } from "@/lib/reviews/share-page";
 
@@ -74,12 +74,10 @@ export default async function ReviewLaunchPage({
     return (
       <main className="bg-background text-foreground flex min-h-dvh flex-col items-center justify-center px-4 py-10">
         <div className="mb-8">
-          <Image
-            src="/brand/passoff-mark.svg"
-            alt="Passoff"
+          <LogoMark
             width={40}
-            height={40}
-            priority
+            height={25}
+            className="text-foreground"
           />
         </div>
         <div className="mx-auto w-full max-w-md space-y-3 text-center">
@@ -103,12 +101,10 @@ export default async function ReviewLaunchPage({
   return (
     <main className="bg-background text-foreground flex min-h-dvh flex-col items-center justify-center px-4 py-10">
       <div className="mb-8">
-        <Image
-          src="/brand/passoff-mark.svg"
-          alt="Passoff"
+        <LogoMark
           width={40}
-          height={40}
-          priority
+          height={25}
+          className="text-foreground"
         />
       </div>
       <ReviewLaunchForm

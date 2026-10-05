@@ -65,6 +65,7 @@ function savedPictureMessage(screenshot: ScreenshotResult | null): string | unde
 }
 
 const TOOLBAR_POSITION_KEY = "passoff.sdk.toolbar-position.v1";
+const TOOLBAR_COLLAPSED_KEY = "passoff.sdk.toolbar-collapsed.v1";
 const TOOLBAR_EDGE_GAP = 8;
 
 type ToolbarPosition = { left: number; top: number };
@@ -96,6 +97,26 @@ function writeToolbarPosition(position: ToolbarPosition | null): void {
     }
   } catch {
     // The toolbar can still move when browser storage is unavailable.
+  }
+}
+
+function readToolbarCollapsed(): boolean {
+  try {
+    return window.sessionStorage.getItem(TOOLBAR_COLLAPSED_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+function writeToolbarCollapsed(collapsed: boolean): void {
+  try {
+    if (collapsed) {
+      window.sessionStorage.setItem(TOOLBAR_COLLAPSED_KEY, "true");
+    } else {
+      window.sessionStorage.removeItem(TOOLBAR_COLLAPSED_KEY);
+    }
+  } catch {
+    // The toolbar still works when browser storage is unavailable.
   }
 }
 
@@ -222,7 +243,11 @@ export function mountReview(options: {
   launcher.className = "button launcher";
   launcher.type = "button";
   launcher.dataset.variant = "primary";
-  launcher.textContent = "Show Passoff";
+  launcher.setAttribute("aria-label", "Show Passoff");
+  launcher.title = "Show Passoff";
+  const launcherBrand = brand.cloneNode(true) as HTMLSpanElement;
+  launcherBrand.className = "launcher-brand";
+  launcher.append(launcherBrand);
   launcher.hidden = true;
 
   const highlight = document.createElement("div");
@@ -312,7 +337,7 @@ export function mountReview(options: {
   root.append(live, toolbar, launcher, highlight, banner, panel);
 
   let mode: ReviewMode = "browse";
-  let collapsed = false;
+  let collapsed = readToolbarCollapsed();
   let confirmation: ReviewerConfirmation | null = null;
   let lastScreenshot: ScreenshotResult | null = null;
   let pendingAnchor: PrototypeAnchor | null = null;
@@ -799,6 +824,7 @@ export function mountReview(options: {
 
   function setCollapsed(next: boolean) {
     collapsed = next;
+    writeToolbarCollapsed(collapsed);
     toolbar.hidden = collapsed;
     launcher.hidden = !collapsed;
     banner.hidden = collapsed || mode !== "add-feedback";
@@ -859,6 +885,7 @@ export function mountReview(options: {
   });
 
   setMode("browse");
+  setCollapsed(collapsed);
   void refreshIssues();
   const sessionCheckInterval = window.setInterval(() => {
     void refreshIssues();

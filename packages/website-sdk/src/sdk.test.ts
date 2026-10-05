@@ -187,10 +187,37 @@ describe("website SDK prototype", () => {
     hide.click();
     expect(toolbar.hidden).toBe(true);
     expect(launcher.hidden).toBe(false);
+    expect(launcher).toHaveAccessibleName("Show Passoff");
+    expect(launcher.querySelector(".launcher-brand > span")?.textContent).toBe(
+      "Passoff",
+    );
 
     launcher.click();
     expect(toolbar.hidden).toBe(false);
     expect(launcher.hidden).toBe(true);
+  });
+
+  it("keeps the toolbar collapsed after a refresh-style remount", async () => {
+    const api = await boot();
+    await api.init({ session: PROTOTYPE_SESSION_VALUE });
+    let shadow = document.getElementById(HOST_ROOT_ID)!.shadowRoot!;
+    const hide = [...shadow.querySelectorAll("button")].find(
+      (button) => button.textContent === "Hide",
+    ) as HTMLButtonElement;
+    hide.click();
+
+    api.destroy();
+    const remounted = await boot();
+    await remounted.init({ session: PROTOTYPE_SESSION_VALUE });
+    shadow = document.getElementById(HOST_ROOT_ID)!.shadowRoot!;
+
+    expect((shadow.querySelector(".toolbar") as HTMLElement).hidden).toBe(true);
+    expect((shadow.querySelector(".launcher") as HTMLButtonElement).hidden).toBe(
+      false,
+    );
+
+    (shadow.querySelector(".launcher") as HTMLButtonElement).click();
+    expect(window.sessionStorage.getItem("passoff.sdk.toolbar-collapsed.v1")).toBeNull();
   });
 
   it("moves the toolbar by pointer or keyboard and can reset its location", async () => {
@@ -594,6 +621,7 @@ describe("website SDK prototype", () => {
     expect(result.status).toBe("captured");
     expect(result.dataUrl).toMatch(/^data:image\/png;base64,/);
     expect(vi.mocked(toPng).mock.calls[0]?.[1]?.skipFonts).toBe(false);
+    expect(vi.mocked(toPng).mock.calls[0]?.[1]?.style).toEqual({ margin: "0" });
   });
 
   it("falls back when a host font cannot be embedded", async () => {

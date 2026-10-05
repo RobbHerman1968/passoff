@@ -237,6 +237,10 @@ async function drawClone(target: HTMLElement): Promise<string | null> {
             height: sourceHeight,
             canvasWidth,
             canvasHeight,
+            // getBoundingClientRect excludes margins, but html-to-image copies
+            // the capture root's margin into the SVG. Reset only that cloned
+            // root margin so annotation coordinates and PNG origin agree.
+            style: { margin: "0" },
             pixelRatio,
             skipFonts,
             cacheBust: false,
