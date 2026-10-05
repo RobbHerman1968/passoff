@@ -10,9 +10,31 @@ import {
 import type { IssueDetail } from "@/lib/issues/list";
 
 const refresh = vi.fn();
+const toastSuccess = vi.fn();
+const updateIssueStatusAction = vi.fn();
+const updateIssuePriorityAction = vi.fn();
+const updateIssueAssigneeAction = vi.fn();
+const listIssueHistoryAction = vi.fn();
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh, replace: vi.fn(), push: vi.fn() }),
+}));
+
+vi.mock("sonner", () => ({
+  toast: {
+    success: (...args: unknown[]) => toastSuccess(...args),
+    error: vi.fn(),
+    message: vi.fn(),
+  },
+}));
+
+vi.mock("@/app/(app)/projects/issue-triage-actions", () => ({
+  updateIssueStatusAction: (...args: unknown[]) => updateIssueStatusAction(...args),
+  updateIssuePriorityAction: (...args: unknown[]) =>
+    updateIssuePriorityAction(...args),
+  updateIssueAssigneeAction: (...args: unknown[]) =>
+    updateIssueAssigneeAction(...args),
+  listIssueHistoryAction: (...args: unknown[]) => listIssueHistoryAction(...args),
 }));
 
 beforeAll(() => {
@@ -47,6 +69,7 @@ function makeDetail(overrides: Partial<IssueDetail> = {}): IssueDetail {
     versionLabel: "v1",
     screenshotCaptureMethod: "browser_reconstruction",
     screenshotAnnotation: null,
+    version: 1,
     ...overrides,
   };
 }
@@ -54,6 +77,11 @@ function makeDetail(overrides: Partial<IssueDetail> = {}): IssueDetail {
 describe("IssueDetailView", () => {
   beforeEach(() => {
     refresh.mockReset();
+    toastSuccess.mockReset();
+    updateIssueStatusAction.mockReset();
+    updateIssuePriorityAction.mockReset();
+    updateIssueAssigneeAction.mockReset();
+    listIssueHistoryAction.mockReset();
   });
 
   it("renders feedback, metadata, and a large screenshot", () => {
@@ -240,5 +268,272 @@ describe("IssueDetailView", () => {
     expect(feedback.className).toMatch(/whitespace-pre-wrap/);
     expect(feedback.className).toMatch(/break-words/);
     expect(screen.queryByText(/\.\.\./)).toBeNull();
+  });
+
+  it("shows the matching primary action for each active status", () => {
+    const { rerender } = render(
+      <IssueDetailView
+        key="open"
+        issue={makeDetail({ status: "open" })}
+        projectId="p1"
+        reviewId="r1"
+        projectName="Acme"
+        reviewName="Launch"
+        backHref="/projects/p1/reviews/r1"
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Start work" })).toBeVisible();
+
+    rerender(
+      <IssueDetailView
+        key="in-progress"
+        issue={makeDetail({ status: "in_progress" })}
+        projectId="p1"
+        reviewId="r1"
+        projectName="Acme"
+        reviewName="Launch"
+        backHref="/projects/p1/reviews/r1"
+      />,
+    );
+    expect(
+      screen.getByRole("button", { name: "Mark ready for verification" }),
+    ).toBeVisible();
+
+    rerender(
+      <IssueDetailView
+        key="ready"
+        issue={makeDetail({ status: "ready_for_verification" })}
+        projectId="p1"
+        reviewId="r1"
+        projectName="Acme"
+        reviewName="Launch"
+        backHref="/projects/p1/reviews/r1"
+      />,
+    );
+    expect(
+      screen.getByRole("button", { name: "Return to in progress" }),
+    ).toBeVisible();
+  });
+
+  it("does not expose member-only transitions for verified or closed issues", () => {
+    const { rerender } = render(
+      <IssueDetailView
+        key="verified"
+        issue={makeDetail({ status: "verified" })}
+        projectId="p1"
+        reviewId="r1"
+        projectName="Acme"
+        reviewName="Launch"
+        backHref="/projects/p1/reviews/r1"
+      />,
+    );
+    expect(screen.getByText("Verified")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Start work" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Mark ready for verification" }),
+    ).toBeNull();
+    expect(
+      screen.getByText("Verification requires the reviewer workflow."),
+    ).toBeVisible();
+
+    rerender(
+      <IssueDetailView
+        key="closed"
+        issue={makeDetail({ status: "closed" })}
+        projectId="p1"
+        reviewId="r1"
+        projectName="Acme"
+        reviewName="Launch"
+        backHref="/projects/p1/reviews/r1"
+      />,
+    );
+    expect(screen.getByText("Closed")).toBeVisible();
+    expect(
+      screen.getByText("Reopening requires the reviewer workflow."),
+    ).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: "Return to in progress" }),
+    ).toBeNull();
+  });
+
+  it("labels assignee and priority controls and keeps unassigned with one member", () => {
+    render(
+      <IssueDetailView
+        issue={makeDetail()}
+        projectId="p1"
+        reviewId="r1"
+        projectName="Acme"
+        reviewName="Launch"
+        backHref="/projects/p1/reviews/r1"
+        members={[{ userId: "user-1", displayName: "Rob Owner" }]}
+      />,
+    );
+
+    expect(screen.getByLabelText("Assignee")).toBeVisible();
+    expect(screen.getByLabelText("Priority")).toBeVisible();
+    expect(screen.getByLabelText("Priority")).toHaveTextContent("High");
+  });
+
+  it("renders empty, loading, error, success, and conflict history states", async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <IssueDetailView
+        key="empty"
+        issue={makeDetail()}
+        projectId="p1"
+        reviewId="r1"
+        projectName="Acme"
+        reviewName="Launch"
+        backHref="/projects/p1/reviews/r1"
+      />,
+    );
+    expect(
+      screen.getByText(
+        "Changes to status, priority, and assignment will appear here.",
+      ),
+    ).toBeVisible();
+
+    rerender(
+      <IssueDetailView
+        key="error"
+        issue={makeDetail()}
+        projectId="p1"
+        reviewId="r1"
+        projectName="Acme"
+        reviewName="Launch"
+        backHref="/projects/p1/reviews/r1"
+        historyError="We couldn’t load history. Try again."
+      />,
+    );
+    expect(screen.getByText("We couldn’t load history. Try again.")).toBeVisible();
+
+    let resolveHistory: ((value: unknown) => void) | undefined;
+    listIssueHistoryAction.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveHistory = resolve;
+        }),
+    );
+    await user.click(screen.getByRole("button", { name: "Try again" }));
+    expect(screen.getByText("Loading history")).toBeVisible();
+    resolveHistory?.({
+      ok: true,
+      events: [
+        {
+          id: "evt-1",
+          type: "issue.status_changed",
+          createdAt: "2026-10-02T12:00:00.000Z",
+          actorDisplayName: "Rob",
+          summary: "Rob changed status from Open to In progress.",
+        },
+      ],
+    });
+    expect(
+      await screen.findByText("Rob changed status from Open to In progress."),
+    ).toBeVisible();
+    expect(screen.getByText("Rob changed status from Open to In progress.").closest("li")?.querySelector("time")).toHaveAttribute(
+      "dateTime",
+      "2026-10-02T12:00:00.000Z",
+    );
+
+    updateIssueStatusAction.mockResolvedValue({
+      ok: false,
+      error: "conflict",
+      message:
+        "This issue changed while you were viewing it. Refresh to see the latest details.",
+    });
+    rerender(
+      <IssueDetailView
+        key="conflict"
+        issue={makeDetail({ status: "open" })}
+        projectId="p1"
+        reviewId="r1"
+        projectName="Acme"
+        reviewName="Launch"
+        backHref="/projects/p1/reviews/r1"
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Start work" }));
+    expect(
+      await screen.findByText(
+        "This issue changed while you were viewing it. Refresh to see the latest details.",
+      ),
+    ).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Refresh" }));
+    expect(refresh).toHaveBeenCalled();
+  });
+
+  it("updates status from the keyboard and announces success", async () => {
+    const user = userEvent.setup();
+    updateIssueStatusAction.mockResolvedValue({
+      ok: true,
+      issue: {
+        version: 2,
+        status: "in_progress",
+        priority: "high",
+        assigneeUserId: null,
+        assigneeDisplayName: "Unassigned",
+        updatedAt: "2026-10-03T12:00:00.000Z",
+      },
+      event: {
+        id: "evt-status",
+        type: "issue.status_changed",
+        createdAt: "2026-10-03T12:00:00.000Z",
+        actorDisplayName: "Rob",
+        summary: "Rob changed status from Open to In progress.",
+      },
+    });
+
+    render(
+      <IssueDetailView
+        issue={makeDetail({ status: "open" })}
+        projectId="p1"
+        reviewId="r1"
+        projectName="Acme"
+        reviewName="Launch"
+        backHref="/projects/p1/reviews/r1"
+        members={[{ userId: "user-1", displayName: "Maya Member" }]}
+      />,
+    );
+
+    const startWork = screen.getByRole("button", { name: "Start work" });
+    startWork.focus();
+    await user.keyboard("{Enter}");
+    expect(await screen.findByText("In progress")).toBeVisible();
+    expect(
+      screen.getByText("Rob changed status from Open to In progress."),
+    ).toBeVisible();
+    expect(toastSuccess).toHaveBeenCalledWith("Status updated.");
+    expect(updateIssueStatusAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "in_progress",
+        version: 1,
+      }),
+    );
+  });
+
+  it("has no serious accessibility violations with triage controls", async () => {
+    const { container } = render(
+      <IssueDetailView
+        issue={makeDetail()}
+        projectId="p1"
+        reviewId="r1"
+        projectName="Acme"
+        reviewName="Launch"
+        backHref="/projects/p1/reviews/r1"
+        members={[{ userId: "user-1", displayName: "Rob Owner" }]}
+        history={[
+          {
+            id: "evt-1",
+            type: "issue.priority_changed",
+            createdAt: "2026-10-02T12:00:00.000Z",
+            actorDisplayName: "Rob",
+            summary: "Rob set priority to High.",
+          },
+        ]}
+      />,
+    );
+
+    expect(await axe(container)).toHaveNoViolations();
   });
 });

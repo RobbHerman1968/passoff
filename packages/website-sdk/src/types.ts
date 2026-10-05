@@ -13,7 +13,7 @@ export const PRIVACY_ATTRIBUTE = "data-passoff-private";
 
 export const KILL_SWITCH_STORAGE_KEY = "passoff.killSwitch";
 
-export type ReviewMode = "browse" | "add-feedback";
+export type ReviewMode = "browse" | "add-feedback" | "pins" | "heatmap";
 
 export type NavigationType =
   | "initial"

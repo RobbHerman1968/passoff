@@ -27,6 +27,17 @@ vi.mock("@/app/(auth)/actions", () => ({
   signOutAction: vi.fn(async () => ({ status: "success" })),
 }));
 
+vi.mock("@/app/(app)/notifications/actions", () => ({
+  listRecentNotificationsAction: vi.fn(async () => ({
+    ok: true,
+    items: [],
+    total: 0,
+    page: 1,
+    pageCount: 1,
+  })),
+  markAllNotificationsReadAction: vi.fn(async () => ({ ok: true })),
+}));
+
 function renderWithHelp(
   helpContext: HelpPageContext,
   children: React.ReactNode = <p>Essential status stays visible</p>,

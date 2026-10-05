@@ -3,9 +3,11 @@
 import Link from "next/link";
 import { WifiOff } from "lucide-react";
 import { useRouter } from "next/navigation";
+import { useState } from "react";
 
 import { IssueList } from "@/components/issues/issue-list";
 import { IssueListFilters } from "@/components/issues/issue-list-filters";
+import { ExportIssuesDialog } from "@/components/issues/export-issues-dialog";
 import { useOnlineStatus } from "@/components/issues/use-online-status";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -42,6 +44,7 @@ export function IssueTriage({
   const online = useOnlineStatus();
   const router = useRouter();
   const hasFilters = issueListHasActiveFilters(filters);
+  const [exportOpen, setExportOpen] = useState(false);
 
   return (
     <div className="grid gap-4">
@@ -69,6 +72,11 @@ export function IssueTriage({
         </Alert>
       ) : null}
 
+      <div className="flex flex-wrap items-center justify-end">
+        <Button type="button" variant="outline" onClick={() => setExportOpen(true)}>
+          Export issues
+        </Button>
+      </div>
       <IssueListFilters filters={filters} facets={facets} />
 
       <div className="grid min-w-0 gap-3">
@@ -142,6 +150,14 @@ export function IssueTriage({
           </nav>
         ) : null}
       </div>
+      <ExportIssuesDialog
+        open={exportOpen}
+        onOpenChange={setExportOpen}
+        projectId={projectId}
+        reviewId={reviewId}
+        filters={filters}
+        matchingCount={total}
+      />
     </div>
   );
 }

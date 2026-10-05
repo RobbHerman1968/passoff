@@ -110,6 +110,71 @@ function mapExchangeError(error?: string): string {
   }
 }
 
+export async function fetchHeatmapIssues(options: {
+  apiBaseUrl: string;
+  sessionToken: string;
+  pageUrl: string;
+  show?: string;
+  priority?: string;
+  weighting?: string;
+  version?: string;
+}): Promise<
+  | {
+      ok: true;
+      issues: import("./heatmap").HeatmapRemoteIssue[];
+      weighting: "equal" | "priority";
+      pageRoute?: string;
+      environmentName?: string;
+      versionLabel?: string;
+    }
+  | ApiFailure
+> {
+  try {
+    const url = new URL(`${options.apiBaseUrl}/api/sdk/v1/heatmap`);
+    url.searchParams.set("pageUrl", options.pageUrl);
+    if (options.show) url.searchParams.set("show", options.show);
+    if (options.priority) url.searchParams.set("priority", options.priority);
+    if (options.weighting) url.searchParams.set("weighting", options.weighting);
+    if (options.version) url.searchParams.set("version", options.version);
+    const response = await fetch(url, {
+      method: "GET",
+      mode: "cors",
+      credentials: "omit",
+      headers: {
+        Accept: "application/json",
+        Authorization: `Bearer ${options.sessionToken}`,
+      },
+    });
+    const payload = (await response.json().catch(() => null)) as {
+      ok?: boolean;
+      issues?: import("./heatmap").HeatmapRemoteIssue[];
+      weighting?: "equal" | "priority";
+      pageRoute?: string;
+      environmentName?: string;
+      versionLabel?: string;
+      message?: string;
+      error?: string;
+    } | null;
+    if (!response.ok || !payload?.ok || !Array.isArray(payload.issues)) {
+      return {
+        ok: false,
+        error: payload?.error,
+        message: payload?.message ?? "Passoff couldn’t load the issue heatmap.",
+      };
+    }
+    return {
+      ok: true,
+      issues: payload.issues,
+      weighting: payload.weighting === "priority" ? "priority" : "equal",
+      pageRoute: payload.pageRoute,
+      environmentName: payload.environmentName,
+      versionLabel: payload.versionLabel,
+    };
+  } catch {
+    return friendlyFromNetwork();
+  }
+}
+
 export async function fetchIssues(options: {
   apiBaseUrl: string;
   sessionToken: string;

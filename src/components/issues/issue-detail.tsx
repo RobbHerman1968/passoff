@@ -2,16 +2,23 @@ import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
 import type { ReactNode } from "react";
 
-import { IssuePriorityLabel } from "@/components/issues/issue-priority";
+import { IssueAssigneeField } from "@/components/issues/issue-assignee-field";
+import { IssueHistorySection } from "@/components/issues/issue-history";
+import { IssueLiveStatusBadge } from "@/components/issues/issue-live-status";
+import { IssuePriorityField } from "@/components/issues/issue-priority-field";
 import { IssueScreenshot } from "@/components/issues/issue-screenshot";
+import { IssueStatusAction } from "@/components/issues/issue-status-action";
+import { IssueTriageProvider } from "@/components/issues/issue-triage-context";
+import { IssueUpdatedTime } from "@/components/issues/issue-updated-time";
 import { PageHeader } from "@/components/page-header";
-import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
+import type { IssueHistoryEvent } from "@/lib/issues/history";
 import type { IssueDetail as IssueDetailData } from "@/lib/issues/list";
 import {
   ISSUE_PRIORITY_LABELS,
   ISSUE_STATUS_LABELS,
 } from "@/lib/issues/statuses";
+import type { AssignableMember } from "@/lib/issues/triage-types";
 import { formatRelativeActivity } from "@/lib/projects/format";
 
 function screenshotStateLabel(
@@ -30,6 +37,9 @@ export function IssueDetailView({
   projectName,
   reviewName,
   backHref,
+  members = [],
+  history = [],
+  historyError = null,
 }: {
   issue: IssueDetailData;
   projectId: string;
@@ -37,6 +47,9 @@ export function IssueDetailView({
   projectName: string;
   reviewName: string;
   backHref: string;
+  members?: AssignableMember[];
+  history?: IssueHistoryEvent[];
+  historyError?: string | null;
 }) {
   const pageLocation =
     issue.pageRoute || issue.pageUrl
@@ -55,7 +68,22 @@ export function IssueDetailView({
         );
 
   return (
-    <>
+    <IssueTriageProvider
+      projectId={projectId}
+      reviewId={reviewId}
+      issueNumber={issue.number}
+      members={members}
+      initialHistory={history}
+      initialHistoryError={historyError}
+      initialSnapshot={{
+        version: issue.version,
+        status: issue.status,
+        priority: issue.priority,
+        assigneeUserId: issue.assigneeUserId,
+        assigneeDisplayName: issue.assigneeDisplayName,
+        updatedAt: issue.updatedAt.toISOString(),
+      }}
+    >
       <PageHeader
         title={issue.displayTitle}
         breadcrumbs={[
@@ -67,12 +95,7 @@ export function IssueDetailView({
           },
           { label: `Issue #${issue.number}` },
         ]}
-        status={
-          <span className="flex flex-wrap items-center gap-2">
-            <StatusBadge status={issue.status} />
-            <IssuePriorityLabel priority={issue.priority} />
-          </span>
-        }
+        status={<IssueLiveStatusBadge />}
         description={
           <>
             Issue #{issue.number}
@@ -81,6 +104,7 @@ export function IssueDetailView({
             </span>
           </>
         }
+        primaryAction={<IssueStatusAction />}
         secondaryActions={
           <Button asChild variant="outline">
             <Link href={backHref}>
@@ -113,6 +137,8 @@ export function IssueDetailView({
               {issue.body}
             </p>
           </section>
+
+          <IssueHistorySection />
         </div>
 
         <aside aria-label="Issue details" className="grid min-w-0 gap-4">
@@ -123,9 +149,12 @@ export function IssueDetailView({
             <h2 id="issue-details-heading" className="type-section-title">
               Details
             </h2>
-            <dl className="mt-3 grid gap-3 text-sm">
+            <div className="mt-3 grid gap-4">
+              <IssueAssigneeField />
+              <IssuePriorityField />
+            </div>
+            <dl className="mt-4 grid gap-3 text-sm">
               <DetailRow label="Reporter" value={issue.reporterDisplayName} />
-              <DetailRow label="Assignee" value={issue.assigneeDisplayName} />
               <DetailRow
                 label="Page title"
                 value={issue.pageTitle ?? "Not recorded"}
@@ -141,14 +170,7 @@ export function IssueDetailView({
                   </time>
                 }
               />
-              <DetailRow
-                label="Updated"
-                value={
-                  <time dateTime={issue.updatedAt.toISOString()}>
-                    {formatRelativeActivity(issue.updatedAt)}
-                  </time>
-                }
-              />
+              <DetailRow label="Updated" value={<IssueUpdatedTime />} />
               <DetailRow
                 label="Screenshot"
                 value={screenshotStateLabel(issue.screenshotCaptureStatus)}
@@ -161,7 +183,7 @@ export function IssueDetailView({
           </section>
         </aside>
       </div>
-    </>
+    </IssueTriageProvider>
   );
 }
 

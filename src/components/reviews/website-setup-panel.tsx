@@ -442,6 +442,7 @@ export function WebsiteSetupPanel({
 
   return (
     <section
+      id="website-setup"
       aria-labelledby="website-setup-heading"
       className="rounded-xl border border-border bg-card p-4 text-card-foreground"
     >

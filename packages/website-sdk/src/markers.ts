@@ -24,6 +24,7 @@ export type MarkerLayer = {
   replaceWithRemote: (issues: SdkRemoteIssue[]) => void;
   records: () => MarkerRecord[];
   refresh: () => void;
+  focusIssue: (issueId: string) => MarkerRecord | null;
   start: () => void;
   stop: () => void;
 };
@@ -202,6 +203,15 @@ export function createMarkerLayer(options: {
       }
     },
     records: () => records,
+    focusIssue(issueId: string) {
+      const record = records.find((item) => item.issueId === issueId);
+      if (!record) return null;
+      const button = nodes.get(record.number);
+      button?.classList.add("marker-focused");
+      button?.focus();
+      window.setTimeout(() => button?.classList.remove("marker-focused"), 1600);
+      return record;
+    },
     refresh() {
       records.forEach((record) => {
         if (record.remote && (!record.element || !record.element.isConnected)) {

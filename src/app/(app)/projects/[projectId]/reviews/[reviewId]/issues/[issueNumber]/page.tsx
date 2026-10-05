@@ -7,12 +7,17 @@ import {
 } from "@/components/issues/issue-detail";
 import { PageHeader } from "@/components/page-header";
 import { PermissionDeniedState } from "@/components/permission-denied-state";
+import type { IssueHistoryEvent } from "@/lib/issues/history";
 import { getIssueDetailForReview } from "@/lib/issues/list";
 import {
   parseIssueNumberParam,
   resolveIssueListReturnHref,
   reviewIssuesPath,
 } from "@/lib/issues/url";
+import {
+  listAssignableMembers,
+  listIssueHistory,
+} from "@/lib/issues/triage";
 import { getReviewForWorkspace } from "@/lib/projects/service";
 import { requireWorkspaceContext } from "@/lib/workspaces/context";
 
@@ -141,6 +146,24 @@ export default async function IssueDetailPage({
     );
   }
 
+  const members = await listAssignableMembers(auth.context);
+  let history: IssueHistoryEvent[] = [];
+  let historyError: string | null = null;
+  try {
+    const loaded = await listIssueHistory(auth.context, {
+      projectId: review.projectId,
+      reviewId: review.id,
+      issueNumber,
+    });
+    if (!loaded) {
+      historyError = "We couldn’t load history. Try again.";
+    } else {
+      history = loaded;
+    }
+  } catch {
+    historyError = "We couldn’t load history. Try again.";
+  }
+
   return (
     <IssueDetailView
       issue={issue}
@@ -149,6 +172,9 @@ export default async function IssueDetailPage({
       projectName={review.projectName}
       reviewName={review.name}
       backHref={backHref}
+      members={members}
+      history={history}
+      historyError={historyError}
     />
   );
 }

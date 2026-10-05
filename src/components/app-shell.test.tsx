@@ -15,6 +15,17 @@ vi.mock("@/app/(auth)/actions", () => ({
   signOutAction: vi.fn(async () => ({ status: "success" })),
 }));
 
+vi.mock("@/app/(app)/notifications/actions", () => ({
+  listRecentNotificationsAction: vi.fn(async () => ({
+    ok: true,
+    items: [],
+    total: 0,
+    page: 1,
+    pageCount: 1,
+  })),
+  markAllNotificationsReadAction: vi.fn(async () => ({ ok: true })),
+}));
+
 function renderShell(options?: { showAdministration?: boolean }) {
   return render(
     <AppProviders>
@@ -49,6 +60,9 @@ describe("AppShell", () => {
       screen.getAllByRole("button", { name: "Account: Alex Rivera" }).length,
     ).toBeGreaterThan(0);
     expect(screen.getAllByRole("button", { name: "Help" }).length).toBeGreaterThan(0);
+    expect(
+      screen.getAllByRole("button", { name: "Notifications" }).length,
+    ).toBeGreaterThan(0);
   });
 
   it("marks the current project in the sidebar", () => {

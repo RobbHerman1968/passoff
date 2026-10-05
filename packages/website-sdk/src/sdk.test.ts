@@ -69,6 +69,7 @@ describe("website SDK prototype", () => {
     window.Passoff?.destroy();
     document.getElementById(HOST_ROOT_ID)?.remove();
     delete window.__PASSOFF_SCREENSHOT_LOADER__;
+    delete window.__PASSOFF_HEATMAP_LOADER__;
     __resetSdkStateForTests();
     vi.mocked(toPng).mockReset();
     vi.restoreAllMocks();
@@ -325,8 +326,10 @@ describe("website SDK prototype", () => {
     const api = await boot();
     await api.init({ session: PROTOTYPE_SESSION_VALUE });
     const host = document.getElementById(HOST_ROOT_ID)!;
-    const keyboardButton = host.shadowRoot!.querySelectorAll("button")[2] as HTMLButtonElement;
-    keyboardButton.click();
+    const feedbackButton = [...host.shadowRoot!.querySelectorAll("button")].find((button) =>
+      button.textContent === "Add feedback",
+    ) as HTMLButtonElement;
+    feedbackButton.click();
     expect(api.getState().mode).toBe("add-feedback");
     fireEvent.keyDown(document, { key: "Escape", bubbles: true });
     expect(api.getState().mode).toBe("browse");
@@ -877,6 +880,69 @@ describe("website SDK prototype", () => {
     expect(result.status).toBe("captured");
     expect(result.dataUrl).toBeTruthy();
     expect(result.annotation).toBeUndefined();
+  });
+
+  it("lazy-loads heatmap code, exits with Escape, and does not restore heatmap after Hide", async () => {
+    const loader = vi.fn(async () => import("./heatmap"));
+    window.__PASSOFF_HEATMAP_LOADER__ = loader;
+    const api = await boot();
+    await api.init({ session: PROTOTYPE_SESSION_VALUE });
+    const host = document.getElementById(HOST_ROOT_ID)!;
+    const shadow = host.shadowRoot!;
+    expect(loader).not.toHaveBeenCalled();
+    expect(shadow.querySelector(".heatmap-hotspot")).toBeNull();
+    expect(shadow.querySelector(".launcher")?.textContent).not.toContain("Issue heatmap");
+
+    const heatmapButton = [...shadow.querySelectorAll("button")].find((button) =>
+      button.getAttribute("aria-label") === "Issue heatmap",
+    ) as HTMLButtonElement;
+    heatmapButton.click();
+    await vi.waitFor(() => {
+      expect(loader).toHaveBeenCalled();
+      expect(api.getState().mode).toBe("heatmap");
+    });
+    await vi.waitFor(() => {
+      expect(shadow.querySelector("[aria-label='Issue concentrations']")).toBeTruthy();
+    });
+    expect(shadow.textContent).toContain("does not track website visitors");
+
+    fireEvent.keyDown(document, { key: "Escape", bubbles: true });
+    await vi.waitFor(() => {
+      expect(api.getState().mode).toBe("browse");
+    });
+
+    api.setMode("heatmap");
+    await vi.waitFor(() => expect(api.getState().mode).toBe("heatmap"));
+    const hide = [...shadow.querySelectorAll("button")].find(
+      (button) => button.textContent === "Hide",
+    ) as HTMLButtonElement;
+    hide.click();
+    expect(api.getState().mode).toBe("browse");
+    const launcher = shadow.querySelector(".launcher") as HTMLButtonElement;
+    launcher.click();
+    expect(api.getState().mode).toBe("browse");
+    expect(shadow.querySelector(".heatmap")?.hasAttribute("hidden") ?? true).toBe(true);
+  });
+
+  it("keeps browse, pins, heatmap, and add-feedback mutually exclusive", async () => {
+    window.__PASSOFF_HEATMAP_LOADER__ = () => import("./heatmap");
+    const api = await boot();
+    await api.init({ session: PROTOTYPE_SESSION_VALUE });
+    const shadow = document.getElementById(HOST_ROOT_ID)!.shadowRoot!;
+    const clickLabeled = (label: string) => {
+      const button = [...shadow.querySelectorAll("button")].find((item) =>
+        item.textContent?.includes(label) || item.getAttribute("aria-label") === label,
+      ) as HTMLButtonElement;
+      button.click();
+    };
+    clickLabeled("Issue heatmap");
+    await vi.waitFor(() => expect(api.getState().mode).toBe("heatmap"));
+    clickLabeled("Issue pins");
+    expect(api.getState().mode).toBe("pins");
+    clickLabeled("Add feedback");
+    expect(api.getState().mode).toBe("add-feedback");
+    clickLabeled("Browse");
+    expect(api.getState().mode).toBe("browse");
   });
 });
 

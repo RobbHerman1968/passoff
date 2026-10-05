@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { ISSUE_PRIORITIES } from "@/lib/issues/statuses";
+import { ISSUE_PRIORITIES, ISSUE_STATUSES } from "@/lib/issues/statuses";
 
 export const ISSUE_SHOW_FILTERS = [
   "active",
@@ -75,6 +75,33 @@ export function parseIssueListSearchParams(
     p: 1,
   };
 }
+
+const uuidField = z.string().uuid();
+
+export const issueTriageBaseSchema = z.object({
+  projectId: uuidField,
+  reviewId: uuidField,
+  issueNumber: z.coerce.number().int().positive(),
+  version: z.coerce.number().int().positive(),
+});
+
+export const updateIssueStatusSchema = issueTriageBaseSchema.extend({
+  status: z.enum(ISSUE_STATUSES),
+});
+
+export const updateIssuePrioritySchema = issueTriageBaseSchema.extend({
+  priority: z.enum(ISSUE_PRIORITIES),
+});
+
+export const updateIssueAssigneeSchema = issueTriageBaseSchema.extend({
+  assigneeUserId: z.string().uuid().nullable(),
+});
+
+export const listIssueHistorySchema = z.object({
+  projectId: uuidField,
+  reviewId: uuidField,
+  issueNumber: z.number().int().positive(),
+});
 
 export function issueListHasActiveFilters(filters: IssueListFilters): boolean {
   return Boolean(

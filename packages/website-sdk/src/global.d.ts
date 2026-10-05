@@ -12,6 +12,9 @@ declare global {
     __PASSOFF_SCREENSHOT_LOADER__?: (
       base: string,
     ) => Promise<typeof screenshot>;
+    __PASSOFF_HEATMAP_LOADER__?: (
+      base: string,
+    ) => Promise<typeof import("./heatmap")>;
   }
 }
 

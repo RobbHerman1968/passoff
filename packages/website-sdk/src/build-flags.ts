@@ -6,6 +6,7 @@
 declare const __PASSOFF_ALLOW_PROTOTYPE__: boolean | undefined;
 declare const __PASSOFF_REVIEW_CHUNK__: string | undefined;
 declare const __PASSOFF_SCREENSHOT_CHUNK__: string | undefined;
+declare const __PASSOFF_HEATMAP_CHUNK__: string | undefined;
 
 export const ALLOW_PROTOTYPE_SESSION =
   typeof __PASSOFF_ALLOW_PROTOTYPE__ === "boolean"
@@ -21,3 +22,8 @@ export const SCREENSHOT_CHUNK_FILE =
   typeof __PASSOFF_SCREENSHOT_CHUNK__ === "string"
     ? __PASSOFF_SCREENSHOT_CHUNK__
     : "passoff-sdk-screenshot.js";
+
+export const HEATMAP_CHUNK_FILE =
+  typeof __PASSOFF_HEATMAP_CHUNK__ === "string"
+    ? __PASSOFF_HEATMAP_CHUNK__
+    : "passoff-sdk-heatmap.js";

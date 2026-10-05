@@ -697,16 +697,25 @@ Exit criteria:
 
 ### Milestone 3: Video feedback
 
-- Upload and processing
-- Accessible player
-- Timestamped positional feedback
-- Timeline markers and thumbnails
-- Shared feedback workflow
+- Short clips inside a website review, backed by normal Passoff issues
+- Direct Mux upload, processing, signed playback, retention, and deletion
+- Accessible player with point-in-time numbered pins
+- Positions normalized to the video content rectangle so responsive and
+  full-screen playback do not move the annotation
+- Timeline markers, posters, thumbnails, and an equivalent accessible issue list
+- Shared assignment, discussion, verification, history, and approval workflow
+- A decision checkpoint before implementation for entry points, plan allowances,
+  resolution, clip limits, retention, approval meaning, and annotation scope
 
 Exit criteria:
 
-- A guest can review, discuss, and approve a supported video on desktop and mobile.
+- A guest can review and discuss short video evidence on a website issue using
+  touch, mouse, keyboard, or a screen reader on desktop and mobile.
+- Selecting a video issue opens the authorized clip at the correct timestamp and
+  shows the pin over the intended frame location.
 - Failed upload or processing states preserve context and offer recovery.
+- Video remains part of the website review; Phase 7 does not create standalone
+  video projects, cut/version comparison, or separate video-cut approval.
 
 ### Milestone 4: Completion workflow
 

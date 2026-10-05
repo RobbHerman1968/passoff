@@ -43,6 +43,7 @@ import {
   type IssuePriority,
   type IssueStatus,
 } from "@/lib/issues/statuses";
+import { personDisplayName } from "@/lib/users/display-name";
 import type { WorkspaceContext } from "@/lib/workspaces/context";
 
 export type IssueListItem = {
@@ -87,6 +88,7 @@ export type IssueListResult = {
 };
 
 export type IssueDetail = IssueListItem & {
+  version: number;
   pageUrl: string | null;
   environmentName: string;
   versionLabel: string;
@@ -116,10 +118,7 @@ export type IssueScreenshotPayload =
     };
 
 function displayName(name: string | null | undefined, email: string | null | undefined) {
-  const trimmed = name?.trim();
-  if (trimmed) return trimmed;
-  if (email?.trim()) return email.trim();
-  return "Unknown";
+  return personDisplayName(name, email);
 }
 
 function escapeLike(value: string) {
@@ -142,7 +141,7 @@ function showStatusCondition(show: IssueShowFilter): SQL | undefined {
   return undefined;
 }
 
-async function assertReviewInWorkspace(
+export async function assertReviewInWorkspace(
   context: WorkspaceContext,
   projectId: string,
   reviewId: string,
@@ -201,7 +200,7 @@ function scopedIssueConditions(
   ];
 }
 
-function buildFilterConditions(
+export function buildFilterConditions(
   context: WorkspaceContext,
   projectId: string,
   reviewId: string,
@@ -601,6 +600,7 @@ export async function getIssueDetailForReview(
       )`,
       createdAt: issues.createdAt,
       updatedAt: issues.updatedAt,
+      version: issues.version,
     })
     .from(issues)
     .leftJoin(issueAnchors, eq(issueAnchors.issueId, issues.id))
@@ -626,6 +626,7 @@ export async function getIssueDetailForReview(
       status: row.status as IssueStatus,
       priority: row.priority as IssuePriority,
     }),
+    version: row.version,
     pageUrl: row.pageUrl,
     environmentName: review.environmentName,
     versionLabel: review.versionLabel,

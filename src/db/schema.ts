@@ -131,6 +131,12 @@ export const notificationFrequency = pgEnum("notification_frequency", [
   "digest",
   "muted",
 ]);
+export const notificationEmailStatus = pgEnum("notification_email_status", [
+  "pending",
+  "sent",
+  "skipped",
+  "failed",
+]);
 export const deliveryStatus = pgEnum("delivery_status", [
   "pending",
   "processing",
@@ -1390,6 +1396,65 @@ export const notificationPreferences = pgTable(
   ],
 );
 
+export const userNotificationSettings = pgTable(
+  "user_notification_settings",
+  {
+    userId: uuid("user_id")
+      .primaryKey()
+      .references(() => users.id, { onDelete: "cascade" }),
+    emailAssignments: boolean("email_assignments").notNull().default(true),
+    emailReplies: boolean("email_replies").notNull().default(true),
+    emailVerification: boolean("email_verification").notNull().default(true),
+    emailApproval: boolean("email_approval").notNull().default(true),
+    ...timestamps,
+  },
+);
+
+export const notifications = pgTable(
+  "notifications",
+  {
+    id: id(),
+    recipientUserId: uuid("recipient_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    actorUserId: uuid("actor_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    projectId: uuid("project_id").references(() => projects.id, {
+      onDelete: "cascade",
+    }),
+    reviewId: uuid("review_id").references(() => reviews.id, {
+      onDelete: "cascade",
+    }),
+    issueId: uuid("issue_id").references(() => issues.id, {
+      onDelete: "cascade",
+    }),
+    type: text("type").notNull(),
+    dedupeKey: text("dedupe_key").notNull(),
+    hrefPath: text("href_path").notNull(),
+    data: jsonb("data").$type<Record<string, unknown>>().notNull().default({}),
+    readAt: timestamp("read_at", { withTimezone: true }),
+    emailStatus: notificationEmailStatus("email_status").notNull().default("pending"),
+    emailError: text("email_error"),
+    emailedAt: timestamp("emailed_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("notifications_dedupe_unique").on(table.dedupeKey),
+    index("notifications_recipient_created_idx").on(
+      table.recipientUserId,
+      table.createdAt,
+    ),
+    index("notifications_recipient_unread_idx")
+      .on(table.recipientUserId, table.createdAt)
+      .where(sql`${table.readAt} is null`),
+    index("notifications_workspace_idx").on(table.workspaceId),
+  ],
+);
+
 export const webhookEndpoints = pgTable(
   "webhook_endpoints",
   {
@@ -1417,6 +1482,7 @@ export const webhookDeliveries = pgTable(
       .notNull()
       .references(() => webhookEndpoints.id, { onDelete: "cascade" }),
     eventType: text("event_type").notNull(),
+    eventId: uuid("event_id").notNull(),
     payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
     status: deliveryStatus("status").notNull().default("pending"),
     attemptCount: integer("attempt_count").notNull().default(0),
@@ -1425,10 +1491,12 @@ export const webhookDeliveries = pgTable(
     claimedBy: text("claimed_by"),
     deliveredAt: timestamp("delivered_at", { withTimezone: true }),
     lastError: text("last_error"),
+    lastHttpStatus: integer("last_http_status"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [
     index("webhook_deliveries_claim_idx").on(table.status, table.availableAt, table.claimedAt),
+    uniqueIndex("webhook_deliveries_endpoint_event_unique").on(table.endpointId, table.eventId),
   ],
 );
 

@@ -10,6 +10,7 @@ import { ContextualHelpProvider } from "@/components/help/help-context";
 import { HelpDrawer } from "@/components/help/help-drawer";
 import { HelpTrigger } from "@/components/help/help-trigger";
 import { Logo } from "@/components/logo";
+import { NotificationBell } from "@/components/notifications/notification-bell";
 import { Button } from "@/components/ui/button";
 import {
   Sheet,
@@ -32,6 +33,7 @@ export type AppShellProps = {
   /** Shown only when the signed-in user is a platform administrator. */
   showAdministration?: boolean;
   recentProjects?: AppShellProject[];
+  unreadCount?: number;
   children: React.ReactNode;
 };
 
@@ -45,6 +47,8 @@ export function helpContextForPath(pathname: string): HelpPageContext {
     return "website-review-detail";
   }
   if (/^\/projects\/[^/]+/.test(pathname)) return "project-detail";
+  if (pathname.startsWith("/settings")) return "projects-dashboard";
+  if (pathname.startsWith("/notifications")) return "projects-dashboard";
   return "projects-dashboard";
 }
 
@@ -55,6 +59,7 @@ export function AppShell({
   accountEmail,
   showAdministration = false,
   recentProjects = [],
+  unreadCount = 0,
   children,
 }: AppShellProps) {
   const pathname = usePathname() ?? "/dashboard";
@@ -87,6 +92,9 @@ export function AppShell({
         >
           {sidebar}
           <div className="border-t border-sidebar-border p-3">
+            <div className="mb-2 flex justify-end">
+              <NotificationBell unreadCount={unreadCount} />
+            </div>
             <AccountMenu
               name={accountName}
               email={accountEmail}
@@ -129,6 +137,7 @@ export function AppShell({
               <Logo className="flex items-center gap-2" />
             </Link>
             <div className="ml-auto flex items-center gap-1">
+              <NotificationBell unreadCount={unreadCount} />
               <HelpTrigger placement="header" />
               <AccountMenu name={accountName} email={accountEmail} />
             </div>

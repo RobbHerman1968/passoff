@@ -15,9 +15,9 @@ import {
 } from "@/db/schema";
 import { ISSUE_STATUS_LABELS, type IssuePriority } from "@/lib/issues/statuses";
 import { allocateIssueNumber } from "@/lib/issues/service";
+import { enqueueWebhookEventSafely } from "@/lib/webhooks/enqueue";
 import {
   normalizePageUrl,
-  pageRouteFromUrl,
 } from "@/lib/sdk/page-url";
 import type { SdkSession } from "@/lib/sdk/session";
 import {
@@ -497,6 +497,21 @@ export async function createSdkIssue(
     const marker = await loadCreatedMarker(created.issueId, session.workspaceId);
     if (!marker) {
       return { ok: false, error: "unavailable" };
+    }
+    if (!created.replayed) {
+      await enqueueWebhookEventSafely({
+        eventId: created.issueId,
+        subscribedType: "issue.created",
+        eventType: "issue.created",
+        occurredAt: new Date().toISOString(),
+        workspaceId: session.workspaceId,
+        projectId: session.projectId,
+        reviewId: session.reviewId,
+        issueId: created.issueId,
+        issueNumber: marker.number,
+        actor: { type: "guest", name: session.guestName },
+        data: { status: marker.status },
+      });
     }
     return { ok: true, issue: marker, replayed: created.replayed };
   } catch {

@@ -103,6 +103,34 @@ test.describe("review issue list", () => {
     ).toBeVisible();
 
     await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto(`${issuePath}?return=${encodeURIComponent("q=Header&show=all")}`);
+    await expect(page.getByLabel("Assignee")).toBeVisible();
+    await page.getByLabel("Assignee").click();
+    await page.getByRole("option", { name: "E2E Issues" }).click();
+    await expect(page.getByText(/assigned this issue to E2E Issues/i)).toBeVisible();
+
+    await page.getByLabel("Priority").click();
+    await page.getByRole("option", { name: "Urgent" }).click();
+    await expect(page.getByText(/set priority to Urgent/i)).toBeVisible();
+
+    await page.getByRole("button", { name: "Start work" }).click();
+    await expect(page.getByText(/changed status from Open to In progress/i)).toBeVisible();
+    await page.getByRole("button", { name: "Mark ready for verification" }).click();
+    await expect(
+      page.getByText(/changed status from In progress to Ready for verification/i),
+    ).toBeVisible();
+
+    await page.getByRole("link", { name: "Back to issues" }).click();
+    await expect(page).toHaveURL(/[?&]q=Header/);
+    await expect(page).toHaveURL(/[?&]show=all/);
+    await expect(
+      page.getByRole("link", {
+        name: /Issue \d+: Header overlaps navigation on pricing, Ready for verification, Urgent priority/i,
+      }),
+    ).toBeVisible();
+    await expect(page.getByText("E2E Issues").first()).toBeVisible();
+
+    await page.setViewportSize({ width: 1280, height: 800 });
     await page.goto(issuePath);
     await page.getByRole("button", { name: "View full size" }).click();
     await expect(

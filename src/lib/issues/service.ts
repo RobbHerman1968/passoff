@@ -18,7 +18,10 @@ import type {
   IssuePriority,
   IssueStatus,
 } from "@/lib/issues/statuses";
+import { notifyVerificationRecorded } from "@/lib/notifications/events";
 import { canMutateProjects } from "@/lib/projects/permissions";
+import { enqueueWebhookEventSafely } from "@/lib/webhooks/enqueue";
+import { actorLabel } from "@/lib/notifications/service";
 import type { WorkspaceContext } from "@/lib/workspaces/context";
 
 export type ServiceError =
@@ -64,7 +67,7 @@ export async function createIssue(
   }
 
   try {
-    return await db.transaction(async (tx) => {
+    const result = await db.transaction(async (tx) => {
       const [review] = await tx
         .select({
           id: reviews.id,
@@ -104,8 +107,25 @@ export async function createIssue(
         })
         .returning({ id: issues.id, number: issues.number });
 
-      return { ok: true as const, issue };
+      return { ok: true as const, issue, review };
     });
+    if (result.ok) {
+      await enqueueWebhookEventSafely({
+        eventId: result.issue.id,
+        subscribedType: "issue.created",
+        eventType: "issue.created",
+        occurredAt: new Date().toISOString(),
+        workspaceId: context.workspaceId,
+        projectId: result.review.projectId,
+        reviewId: result.review.id,
+        issueId: result.issue.id,
+        issueNumber: result.issue.number,
+        actor: { type: "user", name: actorLabel(context) },
+        data: { status: "open" },
+      });
+      return { ok: true, issue: result.issue };
+    }
+    return result;
   } catch {
     return { ok: false, error: "unavailable" };
   }
@@ -295,7 +315,7 @@ export async function recordVerification(
   }
 
   try {
-    return await db.transaction(async (tx) => {
+    const result = await db.transaction(async (tx) => {
       const [issue] = await tx
         .select()
         .from(issues)
@@ -377,8 +397,45 @@ export async function recordVerification(
           );
       }
 
-      return { ok: true as const, verificationId: verification.id };
+      return {
+        ok: true as const,
+        verificationId: verification.id,
+        issue,
+      };
     });
+
+    if (result.ok) {
+      try {
+        await notifyVerificationRecorded({
+          context,
+          projectId: result.issue.projectId,
+          reviewId: result.issue.reviewId,
+          issueId: result.issue.id,
+          issueNumber: result.issue.number,
+          verificationId: result.verificationId,
+          outcome: input.outcome,
+          assigneeUserId: result.issue.assigneeUserId,
+        });
+      } catch {
+        // Keep the verification even if notifying fails.
+      }
+      await enqueueWebhookEventSafely({
+        eventId: result.verificationId,
+        subscribedType: "issue.verification_recorded",
+        eventType: "issue.verification_recorded",
+        occurredAt: new Date().toISOString(),
+        workspaceId: context.workspaceId,
+        projectId: result.issue.projectId,
+        reviewId: result.issue.reviewId,
+        issueId: result.issue.id,
+        issueNumber: result.issue.number,
+        actor: { type: "user", name: actorLabel(context) },
+        data: { outcome: input.outcome, method: input.method },
+      });
+      return { ok: true, verificationId: result.verificationId };
+    }
+
+    return result;
   } catch {
     return { ok: false, error: "unavailable" };
   }

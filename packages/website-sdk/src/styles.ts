@@ -568,6 +568,118 @@ export const REVIEW_STYLES = `
   pointer-events: none;
 }
 
+.heatmap {
+  position: fixed;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.heatmap-hotspot {
+  position: fixed;
+  z-index: 3;
+  min-width: 2.75rem;
+  min-height: 2.75rem;
+  transform: translate(-50%, -50%);
+  border-radius: 999px;
+  border: 2px solid var(--primary);
+  background: color-mix(in srgb, var(--primary) 28%, transparent);
+  color: var(--foreground);
+  font-weight: 700;
+  pointer-events: auto;
+  display: grid;
+  place-items: center;
+  gap: 0.15rem;
+  padding: 0.2rem 0.4rem;
+  font-size: 0.75rem;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--foreground) 35%, transparent);
+}
+
+.heatmap-hotspot-label {
+  max-width: 9rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.heatmap-hotspot[data-intensity="medium"] {
+  background: color-mix(in srgb, var(--primary) 48%, transparent);
+}
+
+.heatmap-hotspot[data-intensity="high"] {
+  background: color-mix(in srgb, var(--primary) 68%, transparent);
+}
+
+.heatmap-filters {
+  display: grid;
+  gap: 0.4rem;
+  margin-bottom: 0.6rem;
+}
+
+.heatmap-filters select,
+.heatmap-hotspot-list .button,
+.heatmap-list .button {
+  min-height: 2.75rem;
+}
+
+.heatmap-help {
+  margin: 0 0 0.5rem;
+  font-size: 0.8rem;
+  color: var(--muted-foreground);
+}
+
+.heatmap-hotspot-list {
+  position: fixed;
+  z-index: 5;
+  right: 0.75rem;
+  bottom: 4.5rem;
+  width: min(22rem, calc(100vw - 1.5rem));
+  max-height: min(16rem, 36vh);
+  overflow: auto;
+  pointer-events: auto;
+  background: var(--card);
+  color: var(--foreground);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.75rem;
+}
+
+.heatmap-list {
+  position: fixed;
+  z-index: 4;
+  left: 0.75rem;
+  bottom: 4.5rem;
+  width: min(22rem, calc(100vw - 1.5rem));
+  max-height: min(22rem, 46vh);
+  overflow: auto;
+  pointer-events: auto;
+  background: var(--card);
+  color: var(--foreground);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.75rem;
+}
+
+.heatmap-list h2,
+.heatmap-list h3,
+.heatmap-hotspot-list h2 {
+  margin: 0 0 0.5rem;
+  font-size: 0.9rem;
+}
+
+.marker-focused {
+  outline: 3px solid var(--primary);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .heatmap-hotspot,
+  .marker-focused {
+    transition: none;
+  }
+}
+
 @media (max-width: 40rem) {
   .toolbar {
     flex-wrap: wrap;

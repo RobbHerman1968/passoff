@@ -4,7 +4,10 @@ import { and, desc, eq } from "drizzle-orm";
 
 import { db } from "@/db";
 import { approvals, deployments, reviews } from "@/db/schema";
+import { notifyApprovalRecorded } from "@/lib/notifications/events";
+import { actorLabel } from "@/lib/notifications/service";
 import { canMutateProjects } from "@/lib/projects/permissions";
+import { enqueueWebhookEventSafely } from "@/lib/webhooks/enqueue";
 import type { WorkspaceContext } from "@/lib/workspaces/context";
 
 export type ServiceError = "forbidden" | "not_found" | "conflict" | "unavailable";
@@ -25,7 +28,7 @@ export async function recordApproval(
   }
 
   try {
-    return await db.transaction(async (tx) => {
+    const result = await db.transaction(async (tx) => {
       const [review] = await tx
         .select({
           id: reviews.id,
@@ -77,8 +80,49 @@ export async function recordApproval(
         ok: true as const,
         approvalId: approval.id,
         historical: Boolean(latest && latest.id !== approval.deploymentId),
+        projectId: review.projectId,
       };
     });
+
+    if (result.ok) {
+      try {
+        await notifyApprovalRecorded({
+          context,
+          projectId: result.projectId,
+          reviewId: input.reviewId,
+          approvalId: result.approvalId,
+          decision: input.decision,
+        });
+      } catch {
+        // Keep the approval even if notifying fails.
+      }
+      await enqueueWebhookEventSafely({
+        eventId: result.approvalId,
+        subscribedType:
+          input.decision === "approved"
+            ? "review.approval_recorded"
+            : "review.changes_requested",
+        eventType:
+          input.decision === "approved"
+            ? "review.approval_recorded"
+            : "review.changes_requested",
+        occurredAt: new Date().toISOString(),
+        workspaceId: context.workspaceId,
+        projectId: result.projectId,
+        reviewId: input.reviewId,
+        issueId: null,
+        issueNumber: null,
+        actor: { type: "user", name: actorLabel(context) },
+        data: { decision: input.decision },
+      });
+      return {
+        ok: true,
+        approvalId: result.approvalId,
+        historical: result.historical,
+      };
+    }
+
+    return result;
   } catch (error) {
     if (
       error &&

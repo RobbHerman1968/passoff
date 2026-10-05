@@ -4,6 +4,7 @@ import { Archive } from "lucide-react";
 import type { ReactNode } from "react";
 
 import { ErrorState } from "@/components/error-state";
+import { IssueHeatmapSummary } from "@/components/reviews/issue-heatmap-summary";
 import { IssueTriage } from "@/components/issues/issue-triage";
 import { PageHeader } from "@/components/page-header";
 import { PermissionDeniedState } from "@/components/permission-denied-state";
@@ -304,6 +305,11 @@ export default async function ReviewDetailPage({
             />
           )}
         </section>
+        <IssueHeatmapSummary
+          workspaceId={auth.context.workspaceId}
+          projectId={review.projectId}
+          reviewId={review.id}
+        />
       </div>
     </>
   );

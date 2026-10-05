@@ -1,7 +1,9 @@
 "use client";
 
-import { ChevronsUpDown, LogOut, Moon, Sun } from "lucide-react";
+import { ChevronsUpDown, LogOut, Moon, Settings, Sun } from "lucide-react";
 import { useState, useSyncExternalStore, useTransition } from "react";
+
+import { useRouter } from "next/navigation";
 
 import { signOutAction } from "@/app/(auth)/actions";
 import { FormAlert } from "@/components/auth/form-alert";
@@ -58,6 +60,7 @@ export function AccountMenu({
   email?: string | null;
   variant?: "compact" | "sidebar";
 }) {
+  const router = useRouter();
   const theme = useSyncExternalStore(
     subscribeTheme,
     getResolvedTheme,
@@ -132,6 +135,14 @@ export function AccountMenu({
           <DropdownMenuItem onSelect={() => applyTheme(nextTheme)}>
             {theme === "dark" ? <Sun aria-hidden="true" /> : <Moon aria-hidden="true" />}
             {theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            onSelect={() => {
+              router.push("/settings/webhooks");
+            }}
+          >
+            <Settings aria-hidden="true" />
+            Webhooks
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem disabled={pending} onSelect={handleSignOut}>

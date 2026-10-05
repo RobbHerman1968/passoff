@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   issueListHasActiveFilters,
   parseIssueListSearchParams,
+  updateIssueAssigneeSchema,
+  updateIssueStatusSchema,
 } from "@/lib/issues/schemas";
 
 describe("issue list URL filters", () => {
@@ -47,6 +49,28 @@ describe("issue list URL filters", () => {
       p: 2,
     });
     expect(issueListHasActiveFilters(parsed)).toBe(true);
+  });
+
+  it("validates triage mutation payloads", () => {
+    expect(
+      updateIssueStatusSchema.safeParse({
+        projectId: "not-a-uuid",
+        reviewId: "11111111-1111-4111-8111-111111111111",
+        issueNumber: 1,
+        version: 1,
+        status: "open",
+      }).success,
+    ).toBe(false);
+
+    expect(
+      updateIssueAssigneeSchema.safeParse({
+        projectId: "11111111-1111-4111-8111-111111111111",
+        reviewId: "11111111-1111-4111-8111-111111111111",
+        issueNumber: 1,
+        version: 1,
+        assigneeUserId: null,
+      }).success,
+    ).toBe(true);
   });
 
   it("ignores obsolete issue query parameters", () => {

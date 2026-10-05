@@ -1,6 +1,6 @@
 import { captureAnchor, reviewerDescription } from "./anchor";
-import { createIssue, fetchIssues, type SdkRemoteIssue } from "./api";
-import { SCREENSHOT_CHUNK_FILE } from "./build-flags";
+import { createIssue, fetchHeatmapIssues, fetchIssues, type SdkRemoteIssue } from "./api";
+import { SCREENSHOT_CHUNK_FILE, HEATMAP_CHUNK_FILE } from "./build-flags";
 import { createMarkerLayer, type MarkerRecord } from "./markers";
 import { createIdempotencyKey } from "./session-store";
 import { createSelectionController } from "./selection";
@@ -37,6 +37,20 @@ type ScreenshotModule = {
     forceUnavailable?: boolean;
   }) => Promise<import("./types").ScreenshotResult>;
 };
+
+function loadHeatmapModule(baseUrl: string): Promise<typeof import("./heatmap")> {
+  const injected = (
+    window as Window & {
+      __PASSOFF_HEATMAP_LOADER__?: (base: string) => Promise<typeof import("./heatmap")>;
+    }
+  ).__PASSOFF_HEATMAP_LOADER__;
+  if (injected) {
+    return injected(baseUrl);
+  }
+  const url = new URL(HEATMAP_CHUNK_FILE, baseUrl);
+  url.searchParams.set("v", VERSION);
+  return import(/* @vite-ignore */ url.href) as Promise<typeof import("./heatmap")>;
+}
 
 function loadScreenshotModule(baseUrl: string): Promise<ScreenshotModule> {
   const injected = (
@@ -218,6 +232,18 @@ export function mountReview(options: {
   feedbackButton.dataset.variant = "primary";
   feedbackButton.textContent = "Add feedback";
 
+  const pinsButton = document.createElement("button");
+  pinsButton.className = "button";
+  pinsButton.type = "button";
+  pinsButton.textContent = "Issue pins";
+
+  const heatmapButton = document.createElement("button");
+  heatmapButton.className = "button";
+  heatmapButton.type = "button";
+  heatmapButton.setAttribute("aria-label", "Issue heatmap");
+  heatmapButton.innerHTML =
+    '<span aria-hidden="true">▣</span> <span>Issue heatmap</span>';
+
   const keyboardButton = document.createElement("button");
   keyboardButton.className = "button";
   keyboardButton.type = "button";
@@ -234,6 +260,8 @@ export function mountReview(options: {
     brand,
     modeLabel,
     browseButton,
+    pinsButton,
+    heatmapButton,
     feedbackButton,
     keyboardButton,
     closeButton,
@@ -346,6 +374,7 @@ export function mountReview(options: {
   let submitting = false;
   let canComment = options.canComment !== false;
   let sessionEnded = false;
+  let destroyed = false;
   let previousFocus: Element | null = null;
   const anchors: PrototypeAnchor[] = [];
   const markerHost = document.createElement("div");
@@ -384,6 +413,99 @@ export function mountReview(options: {
     },
   });
   markers.start();
+  const heatmapHost = document.createElement("div");
+  root.append(heatmapHost);
+  let heatmapLayer: import("./heatmap").HeatmapLayer | null = null;
+  let heatmapFilters: import("./heatmap").HeatmapFilters = {
+    show: "active",
+    priority: "",
+    weighting: "equal",
+    version: "",
+  };
+
+  async function ensureHeatmap() {
+    if (heatmapLayer) return heatmapLayer;
+    const heatmapModule = await loadHeatmapModule(options.assetBaseUrl);
+    heatmapLayer = heatmapModule.createHeatmapLayer({
+      overlay: heatmapHost,
+      live,
+      onFiltersChange(next) {
+        heatmapFilters = next;
+        void startHeatmap();
+      },
+      onOpenIssue(issue) {
+        void openHeatmapIssue(issue);
+      },
+    });
+    return heatmapLayer;
+  }
+
+  async function openHeatmapIssue(issue: import("./heatmap").HeatmapRemoteIssue) {
+    composing = false;
+    setMode("pins");
+    await refreshIssues();
+    const record = markers.records().find((item) => item.issueId === issue.id);
+    const prefersReduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (record?.element?.isConnected) {
+      record.element.scrollIntoView({
+        block: "center",
+        inline: "nearest",
+        behavior: prefersReduce ? "auto" : "smooth",
+      });
+    }
+    markers.focusIssue(issue.id);
+    confirmation = {
+      title: `Issue ${issue.number}`,
+      description: issue.title,
+      markerNumber: issue.number,
+      issueId: issue.id,
+      summary: issue.title,
+      statusLabel: issue.statusLabel,
+      targetMissing: Boolean(record?.missing || !record?.element),
+    };
+    renderPanel();
+    live.textContent = `Issue ${issue.number}${issue.statusLabel ? `, ${issue.statusLabel}` : ""}.`;
+  }
+
+  async function startHeatmap() {
+    if (destroyed || collapsed || mode !== "heatmap") return;
+    const layer = await ensureHeatmap();
+    if (destroyed || collapsed || mode !== "heatmap") return;
+    if (!options.sessionToken || !options.apiBaseUrl) {
+      layer.setIssues([], heatmapFilters, { pageRoute: "/" });
+      layer.start();
+      return;
+    }
+    const pageUrl = normalizePageUrlClient(window.location.href);
+    if (!pageUrl) return;
+    const listed = await fetchHeatmapIssues({
+      apiBaseUrl: options.apiBaseUrl,
+      sessionToken: options.sessionToken,
+      pageUrl,
+      show: heatmapFilters.show,
+      priority: heatmapFilters.priority || undefined,
+      weighting: heatmapFilters.weighting,
+      version: heatmapFilters.version || undefined,
+    });
+    if (!listed.ok) {
+      live.textContent = listed.message ?? "Passoff couldn’t load the issue heatmap.";
+      return;
+    }
+    heatmapFilters = {
+      ...heatmapFilters,
+      weighting: listed.weighting,
+    };
+    layer.setIssues(listed.issues, heatmapFilters, {
+      pageRoute: listed.pageRoute,
+      environmentName: listed.environmentName,
+      versionLabel: listed.versionLabel,
+    });
+    layer.start();
+  }
+
+  function stopHeatmap() {
+    heatmapLayer?.stop();
+  }
 
   let toolbarPosition = readToolbarPosition();
 
@@ -509,8 +631,16 @@ export function mountReview(options: {
   });
 
   const renderMode = () => {
-    modeLabel.textContent = mode === "browse" ? "Browsing the page" : "Adding feedback";
+    const labels: Record<ReviewMode, string> = {
+      browse: "Browsing the page",
+      "add-feedback": "Adding feedback",
+      pins: "Issue pins",
+      heatmap: "Issue heatmap",
+    };
+    modeLabel.textContent = labels[mode];
     browseButton.setAttribute("aria-pressed", String(mode === "browse"));
+    pinsButton.setAttribute("aria-pressed", String(mode === "pins"));
+    heatmapButton.setAttribute("aria-pressed", String(mode === "heatmap"));
     feedbackButton.setAttribute("aria-pressed", String(mode === "add-feedback"));
     feedbackButton.disabled = !canComment;
     banner.hidden = mode !== "add-feedback" || collapsed;
@@ -518,7 +648,11 @@ export function mountReview(options: {
     live.textContent =
       mode === "add-feedback"
         ? "Add feedback is on. Move to an element, then press Enter to choose it. Press Escape to cancel."
-        : "Browse is on. The page works as usual.";
+        : mode === "heatmap"
+          ? "Issue heatmap is on. This map shows where review issues are concentrated. It does not track website visitors or their behavior. Press Escape to exit."
+          : mode === "pins"
+            ? "Issue pins are on."
+            : "Browse is on. The page works as usual.";
   };
 
   const setFieldError = (message: string | null) => {
@@ -814,8 +948,12 @@ export function mountReview(options: {
     mode = next;
     selection.stop();
     highlight.hidden = true;
+    if (mode !== "heatmap") stopHeatmap();
     if (mode === "add-feedback" && !collapsed && canComment) {
       selection.start("pointer");
+    }
+    if (mode === "heatmap" && !collapsed) {
+      void startHeatmap();
     }
     renderMode();
     options.onModeChange?.(mode);
@@ -830,9 +968,12 @@ export function mountReview(options: {
     if (collapsed) {
       selection.stop();
       highlight.hidden = true;
+      stopHeatmap();
+      if (mode === "heatmap") mode = "browse";
     } else if (mode === "add-feedback" && canComment) {
       selection.start("pointer");
     }
+    renderMode();
     renderPanel();
   }
 
@@ -856,6 +997,8 @@ export function mountReview(options: {
   });
 
   browseButton.addEventListener("click", () => setMode("browse"));
+  pinsButton.addEventListener("click", () => setMode("pins"));
+  heatmapButton.addEventListener("click", () => setMode("heatmap"));
   feedbackButton.addEventListener("click", () => setMode("add-feedback"));
   keyboardButton.addEventListener("click", () => {
     setMode("add-feedback");
@@ -867,6 +1010,12 @@ export function mountReview(options: {
   closeButton.addEventListener("click", () => setCollapsed(true));
   launcher.addEventListener("click", () => setCollapsed(false));
 
+  window.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && mode === "heatmap" && !composing) {
+      event.stopPropagation();
+      setMode("browse");
+    }
+  });
   panel.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
       event.stopPropagation();
@@ -928,8 +1077,10 @@ export function mountReview(options: {
     },
     refreshIssues,
     destroy() {
+      destroyed = true;
       selection.stop();
       markers.stop();
+      stopHeatmap();
       window.clearInterval(sessionCheckInterval);
       window.removeEventListener("resize", positionChrome);
       moveButton.removeEventListener("pointerdown", startToolbarDrag);

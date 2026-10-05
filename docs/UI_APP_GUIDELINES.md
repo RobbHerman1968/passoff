@@ -163,7 +163,9 @@ A verification is a record, not a checkbox.
 
 ## 10. Video evidence
 
-Video is a short clip on an issue (3 minutes, 250 MB, 1080p maximum, per plan entitlements). It is never a standalone review.
+Phase 7 video is a provisional hybrid workflow inside a website review, not a standalone project or review type. A short clip may be attached to an existing issue or may create a draft issue when the person starts "Add video feedback" from the review. Revisit limits, plan allowances, resolution, retention, and entry points at the Phase 7 decision checkpoint in `docs/VIDEO_PLATFORM_DIRECTION.md` before implementation.
+
+Point-in-time video feedback uses the normal issue workflow. A person pauses the video, places one numbered pin on the frame, and writes feedback. Store the timestamp and normalized coordinates relative to the rendered video content—not the player shell, controls, or letterbox space. Opening the issue seeks to that time, pauses, and reveals the pin. Timeline markers must also be available as a keyboard-operable, screen-reader accessible list.
 
 Player states, each with plain copy and a next step:
 
@@ -171,7 +173,7 @@ Player states, each with plain copy and a next step:
 | --- | --- |
 | Uploading | Progress bar with percentage and "Keep this tab open". Cancel available. |
 | Processing | "Getting your clip ready. You can keep working; we'll add it here." |
-| Ready | Player with captions control, keyboard-operable timeline, and timestamped replies. |
+| Ready | Player with captions control, keyboard-operable timeline, numbered point-in-time pins, and timestamped replies. |
 | Failed | "This clip couldn't be processed." Offer "Upload again". The written issue is unaffected. |
 | Allowance reached | Upload is blocked with the reason and who can raise it. Existing issues stay fully usable. |
 | Expired or deleted | A **deleted-evidence record** ("Clip removed on 3 Nov after 30-day retention"), never a broken player. |

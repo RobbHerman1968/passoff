@@ -6,7 +6,7 @@ import {
 } from "@/lib/issues/statuses";
 import { cn } from "@/lib/utils";
 
-const PRIORITY_ICONS: Record<IssuePriority, LucideIcon> = {
+export const ISSUE_PRIORITY_ICONS: Record<IssuePriority, LucideIcon> = {
   low: ArrowDown,
   normal: Minus,
   high: ArrowUp,
@@ -20,7 +20,7 @@ export function IssuePriorityLabel({
   priority: IssuePriority;
   className?: string;
 }) {
-  const Icon = PRIORITY_ICONS[priority];
+  const Icon = ISSUE_PRIORITY_ICONS[priority];
   const label = ISSUE_PRIORITY_LABELS[priority];
 
   return (
