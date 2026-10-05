@@ -82,7 +82,12 @@ function reasonFrom(status: ScreenshotStatus, limitations: string[]): string {
   return USER_REASONS[key] ?? USER_REASONS.failed;
 }
 
-function canInclude(node: HTMLElement): boolean {
+function canInclude(node: Node): boolean {
+  // html-to-image types this callback as HTMLElement, but it invokes the
+  // filter for every cloned child, including Text and Comment nodes.
+  if (!(node instanceof Element)) {
+    return true;
+  }
   if (node.id === HOST_ROOT_ID || isPrivateElement(node)) {
     return false;
   }

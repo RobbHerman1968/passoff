@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { axe } from "jest-axe";
 import { fireEvent } from "@testing-library/dom";
+import { toPng } from "html-to-image";
+
+vi.mock("html-to-image", () => ({ toPng: vi.fn() }));
 
 import {
   __getRuntime,
@@ -66,6 +69,7 @@ describe("website SDK prototype", () => {
     document.getElementById(HOST_ROOT_ID)?.remove();
     delete window.__PASSOFF_SCREENSHOT_LOADER__;
     __resetSdkStateForTests();
+    vi.mocked(toPng).mockReset();
     vi.restoreAllMocks();
   });
 
@@ -510,6 +514,19 @@ describe("website SDK prototype", () => {
     });
     expect(result.status).toBe("unavailable");
     expect(result.reason).not.toMatch(/Error|TypeError|stack/i);
+  });
+
+  it("captures elements containing text nodes", async () => {
+    vi.mocked(toPng).mockImplementation(async (_element, options) => {
+      const text = document.createTextNode("Visible heading text");
+      expect(options?.filter?.(text as unknown as HTMLElement)).toBe(true);
+      return "data:image/png;base64,aGVsbG8=";
+    });
+    const heading = document.getElementById("hero")!;
+    const result = await attemptScreenshot({ element: heading });
+
+    expect(result.status).toBe("captured");
+    expect(result.dataUrl).toMatch(/^data:image\/png;base64,/);
   });
 });
 
