@@ -50,6 +50,7 @@ describe("website SDK prototype", () => {
     document.documentElement.removeAttribute("data-passoff-disabled");
     window.__PASSOFF_DISABLE__ = false;
     window.localStorage.clear();
+    window.sessionStorage.clear();
     fixturePage();
     vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
       x: 0,
@@ -167,6 +168,10 @@ describe("website SDK prototype", () => {
     expect(styles).toMatch(/\[hidden\][^{]*\{[^}]*display:\s*none\s*!important/);
     expect(document.querySelector(".toolbar")).toBeNull();
     expect(host!.shadowRoot!.querySelector(".toolbar")).toBeTruthy();
+    expect(host!.shadowRoot!.querySelector(".brand svg")).toBeTruthy();
+    expect(host!.shadowRoot!.querySelector(".brand > span")?.textContent).toBe(
+      "Passoff",
+    );
   });
 
   it("hides and restores the review controls", async () => {
@@ -186,6 +191,36 @@ describe("website SDK prototype", () => {
     launcher.click();
     expect(toolbar.hidden).toBe(false);
     expect(launcher.hidden).toBe(true);
+  });
+
+  it("moves the toolbar by pointer or keyboard and can reset its location", async () => {
+    const api = await boot();
+    await api.init({ session: PROTOTYPE_SESSION_VALUE });
+    const shadow = document.getElementById(HOST_ROOT_ID)!.shadowRoot!;
+    const toolbar = shadow.querySelector(".toolbar") as HTMLElement;
+    const move = shadow.querySelector(
+      '[aria-label="Move Passoff toolbar"]',
+    ) as HTMLButtonElement;
+
+    fireEvent.pointerDown(move, {
+      button: 0,
+      pointerId: 1,
+      clientX: 10,
+      clientY: 10,
+    });
+    fireEvent.pointerMove(window, { pointerId: 1, clientX: 50, clientY: 60 });
+    fireEvent.pointerUp(window, { pointerId: 1, clientX: 50, clientY: 60 });
+
+    expect(toolbar.dataset.placement).toBe("custom");
+    expect(toolbar.style.left).not.toBe("");
+    expect(window.sessionStorage.getItem(TOOLBAR_POSITION_KEY_FOR_TEST)).toBeTruthy();
+
+    fireEvent.keyDown(move, { key: "ArrowRight" });
+    expect(toolbar.dataset.placement).toBe("custom");
+
+    fireEvent.keyDown(move, { key: "Home" });
+    expect(toolbar.dataset.placement).not.toBe("custom");
+    expect(window.sessionStorage.getItem(TOOLBAR_POSITION_KEY_FOR_TEST)).toBeNull();
   });
 
   it("leaves host clicks working in browse mode", async () => {
@@ -441,6 +476,32 @@ describe("website SDK prototype", () => {
     runtime.destroy();
   });
 
+  it("removes the review UI when its guest link is turned off", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        json: async () => ({
+          ok: false,
+          error: "revoked",
+          message: "This review link was turned off. Ask the team for a new link.",
+        }),
+      }),
+    );
+    const onSessionEnded = vi.fn();
+    const runtime = mountReview({
+      assetBaseUrl: "/",
+      apiBaseUrl: "https://passoff.example.com",
+      sessionToken: "session-token",
+      onSessionEnded,
+    });
+
+    await vi.waitFor(() => {
+      expect(onSessionEnded).toHaveBeenCalledWith("revoked");
+    });
+    runtime.destroy();
+  });
+
   it("supports keyboard-only feedback creation with focus restoration", async () => {
     const api = await boot();
     await api.init({ session: PROTOTYPE_SESSION_VALUE });
@@ -522,13 +583,63 @@ describe("website SDK prototype", () => {
       expect(options?.filter?.(text as unknown as HTMLElement)).toBe(true);
       return "data:image/png;base64,aGVsbG8=";
     });
-    const heading = document.getElementById("hero")!;
+    const section = document.createElement("section");
+    const heading = document.createElement("h2");
+    heading.textContent = "Visible heading text";
+    section.append(heading);
+    document.body.append(section);
     const result = await attemptScreenshot({ element: heading });
 
     expect(result.status).toBe("captured");
     expect(result.dataUrl).toMatch(/^data:image\/png;base64,/);
   });
+
+  it("captures useful context while keeping the selected element as the anchor", async () => {
+    const context = document.createElement("section");
+    const selected = document.createElement("div");
+    selected.textContent = "Small selected badge";
+    context.append(selected);
+    document.body.append(context);
+    Object.defineProperty(selected, "getBoundingClientRect", {
+      configurable: true,
+      value: () => ({
+        x: 20,
+        y: 20,
+        top: 20,
+        left: 20,
+        bottom: 60,
+        right: 260,
+        width: 240,
+        height: 40,
+        toJSON() {},
+      }),
+    });
+    Object.defineProperty(context, "getBoundingClientRect", {
+      configurable: true,
+      value: () => ({
+        x: 0,
+        y: 0,
+        top: 0,
+        left: 0,
+        bottom: 420,
+        right: 900,
+        width: 900,
+        height: 420,
+        toJSON() {},
+      }),
+    });
+    vi.mocked(toPng).mockResolvedValue("data:image/png;base64,aGVsbG8=");
+
+    const anchor = captureAnchor(selected, { x: 40, y: 30 });
+    const result = await attemptScreenshot({ element: selected });
+
+    expect(anchor.elementTag).toBe("div");
+    expect(toPng).toHaveBeenCalledWith(context, expect.any(Object));
+    expect(result.status).toBe("captured");
+  });
 });
+
+const TOOLBAR_POSITION_KEY_FOR_TEST = "passoff.sdk.toolbar-position.v1";
 
 function hostMarker(number: number) {
   return document

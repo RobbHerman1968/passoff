@@ -22,6 +22,10 @@ const USER_REASONS: Record<string, string> = {
 
 const MAX_DATA_URL_CHARS = 280_022;
 const CAPTURE_TIMEOUT_MS = 7_000;
+const MIN_CONTEXT_WIDTH = 480;
+const MIN_CONTEXT_HEIGHT = 240;
+const MAX_CONTEXT_WIDTH = 2_400;
+const MAX_CONTEXT_HEIGHT = 1_600;
 const TRANSPARENT_PIXEL =
   "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=";
 
@@ -139,14 +143,39 @@ function withTimeout<T>(promise: Promise<T>): Promise<T> {
   });
 }
 
-async function drawClone(element: Element): Promise<string | null> {
+function captureTargetFor(element: Element): HTMLElement | null {
   if (isPrivateElement(element)) {
     return null;
   }
-  const target = element instanceof HTMLElement ? element : element.parentElement;
-  if (!target) {
-    return null;
+  const initial = element instanceof HTMLElement ? element : element.parentElement;
+  if (!initial) return null;
+
+  let current: HTMLElement = initial;
+  let best = current;
+  while (current !== document.body && current !== document.documentElement) {
+    const rect = current.getBoundingClientRect();
+    if (rect.width >= MIN_CONTEXT_WIDTH && rect.height >= MIN_CONTEXT_HEIGHT) {
+      return current;
+    }
+    const parent: HTMLElement | null = current.parentElement;
+    if (!parent || parent === document.body || parent === document.documentElement) {
+      break;
+    }
+    const parentRect = parent.getBoundingClientRect();
+    if (
+      parentRect.width > MAX_CONTEXT_WIDTH ||
+      parentRect.height > MAX_CONTEXT_HEIGHT
+    ) {
+      break;
+    }
+    best = parent;
+    current = parent;
   }
+
+  return best;
+}
+
+async function drawClone(target: HTMLElement): Promise<string | null> {
   const rect = target.getBoundingClientRect();
   const sourceWidth = Math.max(1, Math.round(rect.width || target.clientWidth));
   const sourceHeight = Math.max(1, Math.round(rect.height || target.clientHeight));
@@ -194,8 +223,9 @@ export async function attemptScreenshot(
     };
   }
 
-  const limitations = collectLimitations(input.element);
-  const dataUrl = await drawClone(input.element);
+  const target = captureTargetFor(input.element);
+  const limitations = collectLimitations(target ?? input.element);
+  const dataUrl = target ? await drawClone(target) : null;
   const status = statusFrom(limitations, Boolean(dataUrl));
   return {
     status,

@@ -22,17 +22,19 @@ export const REVIEW_STYLES = `
   --background: #fafaf9;
   --foreground: #1c1917;
   --card: #ffffff;
+  --subtle: #f5f5f4;
   --muted-foreground: #57534e;
   --primary: #c2410c;
   --primary-foreground: #fff7ed;
-  --border: #78716c;
+  --border: #d6d3d1;
+  --control-border: #78716c;
   --ring: #c2410c;
   --danger: #b91c1c;
   --overlay: rgb(24 24 27 / 0.18);
   --warning: #9a3412;
   --success: #166534;
   --radius: 12px;
-  --shadow: 0 12px 32px rgb(28 25 23 / 0.18);
+  --shadow: 0 16px 40px rgb(28 25 23 / 0.16), 0 2px 8px rgb(28 25 23 / 0.08);
   --motion: 180ms;
   font-family: ui-sans-serif, system-ui, sans-serif;
   font-size: 14px;
@@ -50,16 +52,18 @@ export const REVIEW_STYLES = `
     --background: #18181b;
     --foreground: #fafafa;
     --card: #27272a;
+    --subtle: #3f3f46;
     --muted-foreground: #a1a1aa;
     --primary: #f97316;
     --primary-foreground: #18181b;
-    --border: #a1a1aa;
+    --border: #52525b;
+    --control-border: #a1a1aa;
     --ring: #f97316;
     --danger: #f87171;
     --overlay: rgb(0 0 0 / 0.4);
     --warning: #fdba74;
     --success: #86efac;
-    --shadow: 0 8px 24px rgb(0 0 0 / 0.4);
+    --shadow: 0 18px 44px rgb(0 0 0 / 0.42), 0 2px 8px rgb(0 0 0 / 0.28);
   }
 }
 
@@ -67,10 +71,12 @@ export const REVIEW_STYLES = `
   --background: #fafaf9;
   --foreground: #1c1917;
   --card: #ffffff;
+  --subtle: #f5f5f4;
   --muted-foreground: #57534e;
   --primary: #c2410c;
   --primary-foreground: #fff7ed;
-  --border: #78716c;
+  --border: #d6d3d1;
+  --control-border: #78716c;
   --ring: #c2410c;
   --danger: #b91c1c;
   --overlay: rgb(24 24 27 / 0.18);
@@ -82,10 +88,12 @@ export const REVIEW_STYLES = `
   --background: #18181b;
   --foreground: #fafafa;
   --card: #27272a;
+  --subtle: #3f3f46;
   --muted-foreground: #a1a1aa;
   --primary: #f97316;
   --primary-foreground: #18181b;
-  --border: #a1a1aa;
+  --border: #52525b;
+  --control-border: #a1a1aa;
   --ring: #f97316;
   --danger: #f87171;
   --overlay: rgb(0 0 0 / 0.4);
@@ -124,13 +132,13 @@ export const REVIEW_STYLES = `
   z-index: 2;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   max-width: calc(100vw - 24px);
-  padding: 6px;
+  padding: 5px;
   background: var(--card);
   color: var(--foreground);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: 14px;
   box-shadow: var(--shadow);
 }
 
@@ -147,10 +155,43 @@ export const REVIEW_STYLES = `
   justify-content: flex-end;
 }
 
+.toolbar[data-placement="custom"] {
+  right: auto;
+  bottom: auto;
+}
+
+.move-handle {
+  padding: 0;
+  color: var(--muted-foreground);
+  cursor: grab;
+  touch-action: none;
+}
+
+.toolbar[data-dragging="true"],
+.toolbar[data-dragging="true"] .move-handle {
+  cursor: grabbing;
+  user-select: none;
+}
+
+.move-handle svg {
+  width: 20px;
+  height: 20px;
+}
+
 .brand {
-  font-weight: 700;
-  font-size: 14px;
-  margin-inline: 6px 4px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  font-size: 1.05rem;
+  letter-spacing: -0.04em;
+  white-space: nowrap;
+  margin-inline: 8px 6px;
+}
+
+.brand svg {
+  display: block;
+  flex: none;
 }
 
 .mode-label {
@@ -171,12 +212,13 @@ export const REVIEW_STYLES = `
   min-width: 44px;
   padding: 0 14px;
   border-radius: 9px;
-  border: 1px solid var(--border);
-  background: var(--background);
+  border: 1px solid transparent;
+  background: transparent;
   color: var(--foreground);
   font: inherit;
   font-weight: 600;
   cursor: pointer;
+  transition: background-color var(--motion), border-color var(--motion), color var(--motion);
 }
 
 .button[data-variant="primary"] {
@@ -185,9 +227,16 @@ export const REVIEW_STYLES = `
   border-color: transparent;
 }
 
-.button[aria-pressed="true"] {
-  outline: 2px solid var(--ring);
-  outline-offset: 2px;
+.button[aria-pressed="true"]:not([data-variant="primary"]) {
+  background: var(--subtle);
+}
+
+.button:hover {
+  background: var(--subtle);
+}
+
+.button[data-variant="primary"]:hover {
+  background: color-mix(in srgb, var(--primary) 88%, black);
 }
 
 .button:focus-visible {
@@ -216,31 +265,39 @@ export const REVIEW_STYLES = `
   width: 44px;
   height: 44px;
   border-radius: 999px;
-  border: 2px solid var(--card);
-  background: var(--primary);
+  border: 0;
+  background: transparent;
   color: var(--primary-foreground);
   font-weight: 700;
   display: grid;
   place-items: center;
   transform: translate(-50%, -50%);
-  box-shadow: var(--shadow);
 }
 
-.marker[data-missing="true"] {
+.marker::before {
+  content: "";
+  position: absolute;
+  inset: 7px;
+  border: 2px solid var(--card);
+  border-radius: 999px;
+  background: var(--primary);
+  box-shadow: 0 4px 12px rgb(28 25 23 / 0.24);
+}
+
+.marker[data-missing="true"]::before {
   background: var(--danger);
-  color: #fff7ed;
 }
 
 .panel {
   position: fixed;
   z-index: 4;
-  width: min(360px, calc(100vw - 24px));
+  width: min(348px, calc(100vw - 24px));
   max-height: min(560px, calc(100vh - 96px));
   overflow-y: auto;
   background: var(--card);
   color: var(--foreground);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: 14px;
   box-shadow: var(--shadow);
   padding: 18px;
 }
@@ -274,7 +331,7 @@ export const REVIEW_STYLES = `
   display: block;
   padding: 10px 12px;
   border-radius: 9px;
-  background: color-mix(in srgb, var(--success) 16%, transparent);
+  background: color-mix(in srgb, var(--success) 11%, var(--card));
   color: var(--foreground);
   font-size: 13px;
   line-height: 1.45;
@@ -296,7 +353,7 @@ export const REVIEW_STYLES = `
   width: 100%;
   min-height: 112px;
   resize: vertical;
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   border-radius: 9px;
   padding: 10px 12px;
   font: inherit;
@@ -323,13 +380,18 @@ export const REVIEW_STYLES = `
   padding: 10px 12px;
   border-radius: 9px;
   color: var(--foreground);
-  background: color-mix(in srgb, var(--warning) 12%, transparent);
+  background: var(--subtle);
 }
 
 .form-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.form-actions .button:not([data-variant="primary"]),
+.panel > .button {
+  border-color: var(--control-border);
 }
 
 .marker[data-status] {
@@ -351,6 +413,15 @@ export const REVIEW_STYLES = `
   border-radius: 0.35rem;
   padding: 0.1rem 0.35rem;
   pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity var(--motion), visibility var(--motion);
+}
+
+.marker:hover::after,
+.marker:focus-visible::after {
+  opacity: 1;
+  visibility: visible;
 }
 
 .selecting-banner {
@@ -385,11 +456,25 @@ export const REVIEW_STYLES = `
 
 @media (max-width: 24rem) {
   .brand {
+    gap: 0;
+    margin-inline: 4px;
+  }
+
+  .brand > span {
     position: absolute;
     width: 1px;
     height: 1px;
+    padding: 0;
+    margin: -1px;
     overflow: hidden;
     clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  .brand svg {
+    width: 32px;
+    height: 20px;
   }
 
   .toolbar {

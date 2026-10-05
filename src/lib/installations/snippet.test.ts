@@ -18,7 +18,7 @@ describe("install snippet", () => {
     expect(snippet).toContain('window.Passoff("configure"');
     expect(snippet).toContain(KEY);
     expect(snippet).toContain(
-      'src="https://app.example.com/sdk/v1/passoff.js?v=1.0.2"',
+      'src="https://app.example.com/sdk/v1/passoff.js?v=1.0.4"',
     );
     expect(snippet).toContain(`data-passoff-key="${KEY}"`);
     expect(snippet).toMatch(/async/);

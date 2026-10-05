@@ -339,6 +339,15 @@ const api: PassoffApi = {
         sessionToken: merged.sessionToken ?? null,
         canComment: authorizedSession?.canComment ?? true,
         theme: merged.theme ?? storedConfig.theme,
+        onSessionEnded(reason) {
+          if (reason === "disabled") {
+            installationStatus = "disabled";
+          }
+          authorizedSession = null;
+          clearStoredSession();
+          setPrivateSelectors([]);
+          api.destroy();
+        },
       });
       navigation = createNavigationTracker(() => {
         withHostSafety(() => runtime?.revalidateMarkers(), undefined);
