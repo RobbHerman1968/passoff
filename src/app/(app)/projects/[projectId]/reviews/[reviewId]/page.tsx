@@ -1,9 +1,10 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
-import { Archive, Inbox } from "lucide-react";
+import { Archive } from "lucide-react";
 import type { ReactNode } from "react";
 
-import { EmptyState } from "@/components/empty-state";
+import { ErrorState } from "@/components/error-state";
+import { IssueTriage } from "@/components/issues/issue-triage";
 import { PageHeader } from "@/components/page-header";
 import { PermissionDeniedState } from "@/components/permission-denied-state";
 import { ReviewActionsMenu } from "@/components/reviews/review-actions-menu";
@@ -22,6 +23,11 @@ import {
   resolveInstallationStatus,
   type InstallationStatus,
 } from "@/lib/installations/status";
+import {
+  getIssuePreviewForReview,
+  listIssuesForReview,
+} from "@/lib/issues/list";
+import { parseIssueListSearchParams } from "@/lib/issues/schemas";
 import { listShareLinksForReview } from "@/lib/reviews/share-links";
 import { requireWorkspaceContext } from "@/lib/workspaces/context";
 import {
@@ -100,6 +106,7 @@ export default async function ReviewDetailPage({
   const paramsRecord = await searchParams;
   const notice =
     typeof paramsRecord.notice === "string" ? paramsRecord.notice : undefined;
+  const issueFilters = parseIssueListSearchParams(paramsRecord);
   const archived = Boolean(review.archivedAt);
   const projectArchived = review.projectStatus === "archived";
   const readOnly = archived || projectArchived;
@@ -128,6 +135,30 @@ export default async function ReviewDetailPage({
   const installed = installStatus === "installed";
   const shareLinks = await listShareLinksForReview(auth.context, review.id);
   const hasActiveShareLink = shareLinks.some((link) => !link.revokedAt);
+
+  let issueListError = false;
+  let issueList = null as Awaited<ReturnType<typeof listIssuesForReview>>;
+  let selectedIssue = null as Awaited<
+    ReturnType<typeof getIssuePreviewForReview>
+  >;
+  try {
+    issueList = await listIssuesForReview(
+      auth.context,
+      review.projectId,
+      review.id,
+      issueFilters,
+    );
+    if (issueFilters.issue) {
+      selectedIssue = await getIssuePreviewForReview(
+        auth.context,
+        review.projectId,
+        review.id,
+        issueFilters.issue,
+      );
+    }
+  } catch {
+    issueListError = true;
+  }
 
   const steps: SetupStep[] = [
     {
@@ -226,105 +257,151 @@ export default async function ReviewDetailPage({
         </Alert>
       ) : null}
 
-      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_20rem] lg:items-start">
-        <div className="grid min-w-0 gap-6">
-          {!installed && !readOnly ? (
+      <div className="grid gap-6">
+        {!installed && !readOnly ? (
+          <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_20rem] lg:items-start">
             <SetupChecklist
               headingId="review-setup-heading"
               title="Get this review ready"
               description="Finish these steps so your client can start pinning issues."
               steps={steps}
             />
-          ) : null}
-
-          <section aria-labelledby="issues-heading" className="grid gap-4">
-            <div className="flex flex-wrap items-baseline justify-between gap-2">
-              <h2 id="issues-heading" className="type-section-title">
-                Issues
-              </h2>
-              <p className="text-sm text-muted-foreground">
-                {formatOpenIssueCount(review.openIssueCount)}
-              </p>
-            </div>
-            <EmptyState
-              headingLevel={3}
-              icon={<Inbox />}
-              title={
-                review.openIssueCount > 0
-                  ? "Issue list is on its way"
-                  : "No issues yet"
-              }
-              description={
-                review.openIssueCount > 0
-                  ? "These issues are saved. The full list with screenshots and status controls will appear here soon."
-                  : installed
-                    ? "When someone pins feedback on the website, it shows up here with the page, element, and screenshot."
-                    : "Once Passoff is installed on the website, each issue your client pins will show up here."
-              }
-            />
-          </section>
-        </div>
-
-        <aside aria-label="Review details" className="grid min-w-0 gap-4">
-          {review.websitePublicKey ? (
-            <WebsiteSetupPanel
-              projectId={review.projectId}
-              reviewId={review.id}
-              startingUrl={review.websiteStartingUrl ?? ""}
-              allowedOrigins={review.websiteAllowedOrigins ?? []}
-              publicKey={review.websitePublicKey}
-              isEnabled={Boolean(review.websiteIsEnabled)}
-              verifiedAt={review.websiteVerifiedAt?.toISOString() ?? null}
-              lastSeenAt={review.websiteLastSeenAt?.toISOString() ?? null}
+            <aside aria-label="Review details" className="grid min-w-0 gap-4">
+              <ReviewDetailsAside
+                review={review}
+                installSnippet={installSnippet}
+                embedConfigured={embed.ok}
+                readOnly={readOnly}
+              />
+            </aside>
+          </div>
+        ) : (
+          <aside
+            aria-label="Review details"
+            className="grid min-w-0 gap-4 md:grid-cols-2"
+          >
+            <ReviewDetailsAside
+              review={review}
               installSnippet={installSnippet}
               embedConfigured={embed.ok}
-              disabled={readOnly}
+              readOnly={readOnly}
+            />
+          </aside>
+        )}
+
+        <section aria-labelledby="issues-heading" className="grid min-w-0 gap-4">
+          <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <h2 id="issues-heading" className="type-section-title">
+              Issues
+            </h2>
+            <p className="text-sm text-muted-foreground">
+              {formatOpenIssueCount(review.openIssueCount)}
+            </p>
+          </div>
+          {issueListError || !issueList ? (
+            <ErrorState
+              title="We couldn’t load issues"
+              description="Something went wrong while loading issues for this review. Try again in a moment."
             />
           ) : (
-            <section
-              aria-labelledby="website-setup-heading"
-              className="rounded-xl border border-border bg-card p-4 text-card-foreground"
-            >
-              <h2 id="website-setup-heading" className="type-section-title">
-                Website setup needs attention
-              </h2>
-              <p className="mt-2 text-sm text-muted-foreground">
-                Website details aren’t available for this review. Add a new
-                review with the website address to continue.
-              </p>
-            </section>
+            <IssueTriage
+              projectId={review.projectId}
+              reviewId={review.id}
+              pathname={`/projects/${review.projectId}/reviews/${review.id}`}
+              filters={issueFilters}
+              issues={issueList.items}
+              total={issueList.total}
+              page={issueList.page}
+              pageCount={issueList.pageCount}
+              facets={issueList.facets}
+              selectedIssueNumber={issueFilters.issue}
+              selectedIssue={
+                selectedIssue && selectedIssue !== "unavailable"
+                  ? selectedIssue
+                  : null
+              }
+              selectedUnavailable={
+                Boolean(issueFilters.issue) && selectedIssue === "unavailable"
+              }
+              installed={installed}
+            />
           )}
-
-          <section
-            aria-labelledby="review-details-heading"
-            className="rounded-xl border border-border bg-card p-4 text-card-foreground"
-          >
-            <h2 id="review-details-heading" className="type-section-title">
-              Details
-            </h2>
-            <dl className="mt-3 grid gap-3 text-sm">
-              <DetailRow label="Project" value={review.projectName} />
-              <DetailRow label="Environment" value={review.environmentName} />
-              <DetailRow
-                label="Version"
-                value={formatVersionLabel(
-                  review.deploymentIdentifier,
-                  review.isHistorical,
-                )}
-              />
-              <DetailRow label="Owner" value={review.ownerName} />
-              <DetailRow
-                label="Last activity"
-                value={
-                  <time dateTime={review.updatedAt.toISOString()}>
-                    {formatRelativeActivity(review.updatedAt)}
-                  </time>
-                }
-              />
-            </dl>
-          </section>
-        </aside>
+        </section>
       </div>
+    </>
+  );
+}
+
+function ReviewDetailsAside({
+  review,
+  installSnippet,
+  embedConfigured,
+  readOnly,
+}: {
+  review: NonNullable<Awaited<ReturnType<typeof getReviewForWorkspace>>>;
+  installSnippet: string | null;
+  embedConfigured: boolean;
+  readOnly: boolean;
+}) {
+  return (
+    <>
+      {review.websitePublicKey ? (
+        <WebsiteSetupPanel
+          projectId={review.projectId}
+          reviewId={review.id}
+          startingUrl={review.websiteStartingUrl ?? ""}
+          allowedOrigins={review.websiteAllowedOrigins ?? []}
+          publicKey={review.websitePublicKey}
+          isEnabled={Boolean(review.websiteIsEnabled)}
+          verifiedAt={review.websiteVerifiedAt?.toISOString() ?? null}
+          lastSeenAt={review.websiteLastSeenAt?.toISOString() ?? null}
+          installSnippet={installSnippet}
+          embedConfigured={embedConfigured}
+          disabled={readOnly}
+        />
+      ) : (
+        <section
+          aria-labelledby="website-setup-heading"
+          className="rounded-xl border border-border bg-card p-4 text-card-foreground"
+        >
+          <h2 id="website-setup-heading" className="type-section-title">
+            Website setup needs attention
+          </h2>
+          <p className="mt-2 text-sm text-muted-foreground">
+            Website details aren’t available for this review. Add a new review
+            with the website address to continue.
+          </p>
+        </section>
+      )}
+
+      <section
+        aria-labelledby="review-details-heading"
+        className="rounded-xl border border-border bg-card p-4 text-card-foreground"
+      >
+        <h2 id="review-details-heading" className="type-section-title">
+          Details
+        </h2>
+        <dl className="mt-3 grid gap-3 text-sm">
+          <DetailRow label="Project" value={review.projectName} />
+          <DetailRow label="Environment" value={review.environmentName} />
+          <DetailRow
+            label="Version"
+            value={formatVersionLabel(
+              review.deploymentIdentifier,
+              review.isHistorical,
+            )}
+          />
+          <DetailRow label="Owner" value={review.ownerName} />
+          <DetailRow
+            label="Last activity"
+            value={
+              <time dateTime={review.updatedAt.toISOString()}>
+                {formatRelativeActivity(review.updatedAt)}
+              </time>
+            }
+          />
+        </dl>
+      </section>
     </>
   );
 }

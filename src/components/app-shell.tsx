@@ -139,7 +139,7 @@ export function AppShell({
             tabIndex={-1}
             className="flex min-w-0 flex-1 flex-col bg-background outline-none lg:rounded-xl lg:ring-1 lg:ring-border lg:elevation-sm"
           >
-            <div className="mx-auto flex w-full max-w-6xl min-w-0 flex-1 flex-col page-padding">
+            <div className="mx-auto flex w-full max-w-7xl min-w-0 flex-1 flex-col page-padding">
               {children}
             </div>
           </main>

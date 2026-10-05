@@ -1,3 +1,5 @@
+import { PASSOFF_SDK_VERSION } from "../../../packages/website-sdk/version";
+
 export type EmbedBaseUrlResult =
   | { ok: true; baseUrl: string }
   | { ok: false; message: string };
@@ -56,5 +58,5 @@ export function getPassoffEmbedBaseUrl(env?: EmbedEnv): EmbedBaseUrlResult {
 }
 
 export function getSdkBootstrapUrl(embedBaseUrl: string): string {
-  return `${embedBaseUrl.replace(/\/$/, "")}/sdk/v1/passoff.js`;
+  return `${embedBaseUrl.replace(/\/$/, "")}/sdk/v1/passoff.js?v=${PASSOFF_SDK_VERSION}`;
 }

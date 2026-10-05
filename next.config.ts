@@ -8,7 +8,9 @@ const nextConfig: NextConfig = {
         headers: [
           {
             key: "Cache-Control",
-            value: "public, max-age=31536000, immutable",
+            // These filenames are stable rather than content-hashed. Browsers must
+            // revalidate them so a deployment can publish an SDK fix immediately.
+            value: "public, max-age=0, must-revalidate",
           },
           {
             key: "X-Content-Type-Options",

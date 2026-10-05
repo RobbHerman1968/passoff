@@ -33,8 +33,9 @@ export { PROTOTYPE_SESSION_VALUE, KILL_SWITCH_STORAGE_KEY, NEARBY_TEXT_LIMIT } f
 type ReviewLoader = (baseUrl: string) => Promise<{ mountReview: typeof import("./review").mountReview }>;
 
 function defaultReviewLoader(baseUrl: string) {
-  const url = new URL(REVIEW_CHUNK_FILE, baseUrl).href;
-  return import(/* @vite-ignore */ url) as ReturnType<ReviewLoader>;
+  const url = new URL(REVIEW_CHUNK_FILE, baseUrl);
+  url.searchParams.set("v", VERSION);
+  return import(/* @vite-ignore */ url.href) as ReturnType<ReviewLoader>;
 }
 
 function resolveScriptElement(): HTMLScriptElement | null {

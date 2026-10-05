@@ -828,6 +828,9 @@ export const issues = pgTable(
     authorGuestId: uuid("author_guest_id").references(() => guestIdentities.id, {
       onDelete: "set null",
     }),
+    assigneeUserId: uuid("assignee_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
     verifiedAt: timestamp("verified_at", { withTimezone: true }),
     closedAt: timestamp("closed_at", { withTimezone: true }),
     closedByUserId: uuid("closed_by_user_id").references(() => users.id, {
@@ -849,6 +852,7 @@ export const issues = pgTable(
       table.reviewId,
     ),
     index("issues_review_status_updated_idx").on(table.reviewId, table.status, table.updatedAt),
+    index("issues_workspace_assignee_idx").on(table.workspaceId, table.assigneeUserId),
     index("issues_workspace_idx").on(table.workspaceId),
     foreignKey({
       name: "issues_review_scope_fk",

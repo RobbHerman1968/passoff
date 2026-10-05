@@ -4,7 +4,7 @@ import { SCREENSHOT_CHUNK_FILE } from "./build-flags";
 import { createMarkerLayer, type MarkerRecord } from "./markers";
 import { createIdempotencyKey } from "./session-store";
 import { createSelectionController } from "./selection";
-import { HOST_ROOT_ID, REVIEW_STYLES } from "./styles";
+import { HOST_ROOT_ID, REVIEW_STYLES, VERSION } from "./styles";
 import { normalizePageUrlClient } from "./dom";
 import type {
   PrototypeAnchor,
@@ -46,8 +46,10 @@ function loadScreenshotModule(baseUrl: string): Promise<ScreenshotModule> {
   if (injected) {
     return injected(baseUrl);
   }
+  const url = new URL(SCREENSHOT_CHUNK_FILE, baseUrl);
+  url.searchParams.set("v", VERSION);
   return import(
-    /* @vite-ignore */ `${baseUrl}${SCREENSHOT_CHUNK_FILE}`
+    /* @vite-ignore */ url.href
   ) as Promise<ScreenshotModule>;
 }
 

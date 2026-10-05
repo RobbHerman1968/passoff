@@ -1,5 +1,7 @@
+import { PASSOFF_SDK_VERSION } from "../version";
+
 export const HOST_ROOT_ID = "passoff-sdk-root";
-export const VERSION = "1.0.0";
+export const VERSION = PASSOFF_SDK_VERSION;
 
 /**
  * Isolated Shadow DOM styles. Token hex values match src/lib/design-tokens.ts
