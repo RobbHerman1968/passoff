@@ -6,9 +6,17 @@ import {
   VersionChecker,
 } from "@/components/version-checker";
 
+function stubVisibility(state: DocumentVisibilityState) {
+  Object.defineProperty(document, "visibilityState", {
+    configurable: true,
+    get: () => state,
+  });
+}
+
 describe("VersionChecker", () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    stubVisibility("visible");
   });
 
   afterEach(() => {
@@ -18,7 +26,28 @@ describe("VersionChecker", () => {
     vi.restoreAllMocks();
   });
 
-  it("reloads when the polled version changes", async () => {
+  it("checks once on load and does not reload when the version is unchanged", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ version: "build-1" }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const reload = vi.fn();
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: { reload },
+    });
+
+    render(<VersionChecker />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(reload).not.toHaveBeenCalled();
+  });
+
+  it("reloads when the tab is focused and a new build is live", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce({
@@ -45,16 +74,23 @@ describe("VersionChecker", () => {
     expect(reload).not.toHaveBeenCalled();
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(APP_VERSION_POLL_MS);
+      window.dispatchEvent(new Event("focus"));
     });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(reload).toHaveBeenCalledTimes(1);
   });
 
-  it("does not reload when the version stays the same", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({ version: "build-1" }),
-    });
+  it("keeps polling in the background and reloads when the version changes", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ version: "build-1" }),
+      })
+      .mockResolvedValue({
+        ok: true,
+        json: async () => ({ version: "build-2" }),
+      });
     vi.stubGlobal("fetch", fetchMock);
 
     const reload = vi.fn();
@@ -69,10 +105,11 @@ describe("VersionChecker", () => {
     });
     expect(fetchMock).toHaveBeenCalledTimes(1);
 
+    stubVisibility("hidden");
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(APP_VERSION_POLL_MS * 2);
+      await vi.advanceTimersByTimeAsync(APP_VERSION_POLL_MS);
     });
-    expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(3);
-    expect(reload).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(reload).toHaveBeenCalledTimes(1);
   });
 });

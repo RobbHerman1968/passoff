@@ -266,28 +266,32 @@ export async function attemptScreenshot(
 
   const target = captureTargetFor(input.element);
   const limitations = collectLimitations(target ?? input.element);
-  const dataUrl = target ? await drawClone(target) : null;
-  const status = statusFrom(limitations, Boolean(dataUrl));
 
-  let annotation: ScreenshotResult["annotation"];
-  if (dataUrl && target) {
+  // Measure before html-to-image starts its asynchronous reconstruction. The
+  // host page can reflow, animate, or scroll while capture is in progress; a
+  // later measurement would describe a different layout than the saved image.
+  let measuredAnnotation: ScreenshotResult["annotation"];
+  if (target) {
     try {
-      annotation = buildScreenshotAnnotation(
+      measuredAnnotation = buildScreenshotAnnotation(
         input.element,
         target,
         input.clickPosition,
       );
     } catch {
-      annotation = undefined;
+      measuredAnnotation = undefined;
     }
   }
+
+  const dataUrl = target ? await drawClone(target) : null;
+  const status = statusFrom(limitations, Boolean(dataUrl));
 
   return {
     status,
     reason: reasonFrom(status, limitations),
     limitations,
     dataUrl: dataUrl ?? undefined,
-    annotation,
+    annotation: dataUrl ? measuredAnnotation : undefined,
     capturedAt,
   };
 }

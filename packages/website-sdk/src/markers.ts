@@ -98,11 +98,17 @@ export function createMarkerLayer(options: {
       button = document.createElement("button");
       button.type = "button";
       button.className = "marker";
+      const number = document.createElement("span");
+      number.className = "marker-number";
+      button.append(number);
       button.addEventListener("click", () => options.onSelect(record));
       options.overlay.append(button);
       nodes.set(record.number, button);
     }
-    button.textContent = String(record.number);
+    const number = button.querySelector(".marker-number");
+    if (number) {
+      number.textContent = String(record.number);
+    }
     button.dataset.status = record.statusLabel ?? "Open";
     button.setAttribute("aria-label", accessibleLabel(record));
     if (record.missing) {

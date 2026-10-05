@@ -255,6 +255,7 @@ describe("website SDK prototype", () => {
     expect(api.getConfirmation()?.description).not.toMatch(/nth-of-type|#hero/);
     const marker = hostMarker(1);
     expect(marker).toHaveAttribute("aria-label", expect.stringMatching(/Issue 1|Feedback 1/));
+    expect(marker.querySelector(".marker-number")).toHaveTextContent("1");
     Object.defineProperty(hero, "getBoundingClientRect", {
       configurable: true,
       value: () => ({
@@ -714,6 +715,58 @@ describe("website SDK prototype", () => {
     expect(toPng).toHaveBeenCalledWith(balancedContext, expect.any(Object));
     expect(result.annotation?.selectedBounds.y).toBeCloseTo(112 / 600);
     expect(result.annotation?.pin.y).toBeCloseTo(132 / 600);
+  });
+
+  it("keeps the annotation aligned when the host page moves during capture", async () => {
+    const context = document.createElement("section");
+    const selected = document.createElement("div");
+    context.append(selected);
+    document.body.append(context);
+
+    let layoutShifted = false;
+    Object.defineProperty(context, "getBoundingClientRect", {
+      configurable: true,
+      value: () => ({
+        x: 0,
+        y: 0,
+        top: 0,
+        left: 0,
+        bottom: 600,
+        right: 1000,
+        width: 1000,
+        height: 600,
+        toJSON() {},
+      }),
+    });
+    Object.defineProperty(selected, "getBoundingClientRect", {
+      configurable: true,
+      value: () => {
+        const top = layoutShifted ? 300 : 200;
+        return {
+          x: 200,
+          y: top,
+          top,
+          left: 200,
+          bottom: top + 80,
+          right: 600,
+          width: 400,
+          height: 80,
+          toJSON() {},
+        };
+      },
+    });
+    vi.mocked(toPng).mockImplementation(async () => {
+      layoutShifted = true;
+      return "data:image/png;base64,aGVsbG8=";
+    });
+
+    const result = await attemptScreenshot({
+      element: selected,
+      clickPosition: { x: 0.5, y: 0.5 },
+    });
+
+    expect(result.annotation?.selectedBounds.y).toBeCloseTo(200 / 600);
+    expect(result.annotation?.pin.y).toBeCloseTo(240 / 600);
   });
 
   it("omits annotation for private selections and still allows written feedback", async () => {

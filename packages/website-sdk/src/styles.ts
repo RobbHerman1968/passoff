@@ -323,6 +323,12 @@ export const REVIEW_STYLES = `
   box-shadow: 0 4px 12px rgb(28 25 23 / 0.24);
 }
 
+.marker-number {
+  position: relative;
+  z-index: 1;
+  line-height: 1;
+}
+
 .marker[data-missing="true"]::before {
   background: var(--danger);
 }
@@ -401,8 +407,9 @@ export const REVIEW_STYLES = `
 }
 
 .feedback-form textarea:focus-visible {
-  outline: 2px solid var(--ring);
-  outline-offset: 2px;
+  border-color: var(--ring);
+  outline: 0;
+  box-shadow: inset 0 0 0 1px var(--ring);
 }
 
 .field-error,
@@ -425,12 +432,50 @@ export const REVIEW_STYLES = `
 .form-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 4px;
 }
 
-.form-actions .button:not([data-variant="primary"]),
+.form-actions .button,
 .panel > .button {
-  border-color: var(--control-border);
+  position: relative;
+  isolation: isolate;
+  padding-inline: 12px;
+  line-height: 1.1;
+  border-color: transparent;
+  background: transparent;
+}
+
+.form-actions .button:hover,
+.form-actions .button[data-variant="primary"],
+.form-actions .button[data-variant="primary"]:hover,
+.panel > .button:hover {
+  background: transparent;
+}
+
+.form-actions .button::before,
+.panel > .button::before {
+  content: "";
+  position: absolute;
+  inset: 4px 0;
+  z-index: -1;
+  border: 1px solid var(--control-border);
+  border-radius: 8px;
+  background: transparent;
+  transition: background-color var(--motion), border-color var(--motion);
+}
+
+.form-actions .button:hover::before,
+.panel > .button:hover::before {
+  background: var(--subtle);
+}
+
+.form-actions .button[data-variant="primary"]::before {
+  border-color: transparent;
+  background: var(--primary);
+}
+
+.form-actions .button[data-variant="primary"]:hover::before {
+  background: color-mix(in srgb, var(--primary) 88%, black);
 }
 
 .marker[data-status] {

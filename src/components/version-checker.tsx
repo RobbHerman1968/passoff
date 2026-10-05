@@ -2,7 +2,7 @@
 
 import { useEffect } from "react";
 
-export const APP_VERSION_POLL_MS = 15_000;
+export const APP_VERSION_POLL_MS = 45_000;
 const VERSION_URL = "/api/version";
 
 async function fetchAppVersion(signal?: AbortSignal): Promise<string | null> {
@@ -20,31 +20,42 @@ async function fetchAppVersion(signal?: AbortSignal): Promise<string | null> {
       ? body.version
       : null;
   } catch {
-    // Offline / aborted / non-JSON responses are ignored until the next poll.
+    // Offline / aborted / non-JSON responses are ignored until the next check.
     return null;
   }
 }
 
 /**
- * Polls the deployment version and reloads the page when a new build is live.
+ * Reloads the page when a new deployment is live.
+ * Checks on load, whenever this tab receives focus, and every 45 seconds
+ * even if the tab is in the background.
  */
 export function VersionChecker() {
   useEffect(() => {
     let cancelled = false;
     let baseline: string | null = null;
+    let inFlight = false;
     const controller = new AbortController();
 
     const check = async () => {
-      const version = await fetchAppVersion(controller.signal);
-      if (cancelled || !version) {
+      if (cancelled || inFlight) {
         return;
       }
-      if (baseline === null) {
-        baseline = version;
-        return;
-      }
-      if (version !== baseline) {
-        window.location.reload();
+      inFlight = true;
+      try {
+        const version = await fetchAppVersion(controller.signal);
+        if (cancelled || !version) {
+          return;
+        }
+        if (baseline === null) {
+          baseline = version;
+          return;
+        }
+        if (version !== baseline) {
+          window.location.reload();
+        }
+      } finally {
+        inFlight = false;
       }
     };
 
@@ -53,18 +64,20 @@ export function VersionChecker() {
       void check();
     }, APP_VERSION_POLL_MS);
 
-    const onVisibilityChange = () => {
+    const onTabFocus = () => {
       if (document.visibilityState === "visible") {
         void check();
       }
     };
-    document.addEventListener("visibilitychange", onVisibilityChange);
+    window.addEventListener("focus", onTabFocus);
+    document.addEventListener("visibilitychange", onTabFocus);
 
     return () => {
       cancelled = true;
       controller.abort();
       window.clearInterval(intervalId);
-      document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.removeEventListener("focus", onTabFocus);
+      document.removeEventListener("visibilitychange", onTabFocus);
     };
   }, []);
 
