@@ -188,6 +188,7 @@ describe("website SDK prototype", () => {
     expect(toolbar.hidden).toBe(true);
     expect(launcher.hidden).toBe(false);
     expect(launcher).toHaveAccessibleName("Show Passoff");
+    expect(launcher).not.toHaveAttribute("data-variant", "primary");
     expect(launcher.querySelector(".launcher-brand > span")?.textContent).toBe(
       "Passoff",
     );

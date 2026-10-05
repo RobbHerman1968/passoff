@@ -298,7 +298,7 @@ export const REVIEW_STYLES = `
 }
 
 .launcher:hover,
-.launcher[data-variant="primary"]:hover {
+.launcher:active {
   background: transparent;
 }
 
@@ -307,13 +307,15 @@ export const REVIEW_STYLES = `
   position: absolute;
   inset: 6px 0;
   z-index: -1;
+  border: 1px solid var(--control-border);
   border-radius: 7px;
-  background: var(--primary);
-  transition: background-color var(--motion);
+  background: var(--card);
+  box-shadow: 0 3px 10px rgb(28 25 23 / 0.16);
+  transition: background-color var(--motion), border-color var(--motion);
 }
 
 .launcher:hover::before {
-  background: color-mix(in srgb, var(--primary) 88%, black);
+  background: var(--subtle);
 }
 
 .launcher-brand {
@@ -330,6 +332,7 @@ export const REVIEW_STYLES = `
 .launcher-brand svg {
   width: 18px;
   height: 12px;
+  color: var(--foreground);
 }
 
 .highlight {

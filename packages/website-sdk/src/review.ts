@@ -242,7 +242,6 @@ export function mountReview(options: {
   const launcher = document.createElement("button");
   launcher.className = "button launcher";
   launcher.type = "button";
-  launcher.dataset.variant = "primary";
   launcher.setAttribute("aria-label", "Show Passoff");
   launcher.title = "Show Passoff";
   const launcherBrand = brand.cloneNode(true) as HTMLSpanElement;
