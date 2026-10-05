@@ -14,6 +14,8 @@ export type PageSignals = {
   contentType: string | null;
   headers: Record<string, string>;
   body: string;
+  /** Hostname that serves Passoff’s install script, used for CSP allow checks. */
+  passoffScriptHost?: string | null;
 };
 
 const SAFE_HEADER_NAMES = [
@@ -91,6 +93,82 @@ function extractTagAttributes(
   return values;
 }
 
+function extractMetaContentSecurityPolicy(html: string): string | null {
+  const tags = html.match(/<meta\b[^>]*>/gi) ?? [];
+  for (const tag of tags) {
+    const httpEquiv = tag.match(/http-equiv\s*=\s*(["'])([^"']+)\1/i)?.[2];
+    if (!httpEquiv || httpEquiv.toLowerCase() !== "content-security-policy") {
+      continue;
+    }
+    const content = tag.match(/content\s*=\s*(["'])([\s\S]*?)\1/i)?.[2];
+    if (content?.trim()) return content.trim();
+  }
+  return null;
+}
+
+function scriptSrcTokensFromCsp(raw: string): {
+  names: string[];
+  tokens: string[];
+} {
+  const directives = raw
+    .split(";")
+    .map((part) => part.trim())
+    .filter(Boolean);
+  const names: string[] = [];
+  let scriptSrc = "";
+  for (const directive of directives) {
+    const [name, ...rest] = directive.split(/\s+/);
+    if (!name) continue;
+    names.push(name.toLowerCase().slice(0, 80));
+    if (
+      name.toLowerCase() === "script-src" ||
+      name.toLowerCase() === "default-src"
+    ) {
+      if (!scriptSrc || name.toLowerCase() === "script-src") {
+        scriptSrc = rest.join(" ");
+      }
+    }
+  }
+  return {
+    names,
+    tokens: scriptSrc.split(/\s+/).filter(Boolean),
+  };
+}
+
+/** True when CSP script-src/default-src would allow loading an external script from host. */
+export function cspAllowsExternalScriptHost(
+  scriptSrcTokens: string[],
+  scriptHost: string,
+): boolean {
+  const host = scriptHost.trim().toLowerCase().replace(/\.$/, "");
+  if (!host || scriptSrcTokens.length === 0) return false;
+  if (scriptSrcTokens.includes("*") || scriptSrcTokens.includes("https:")) {
+    return true;
+  }
+  if (scriptSrcTokens.includes("'none'")) return false;
+
+  for (const token of scriptSrcTokens) {
+    const normalized = token
+      .trim()
+      .toLowerCase()
+      .replace(/^https?:\/\//, "")
+      .replace(/\/.*$/, "");
+    if (!normalized || normalized.startsWith("'")) continue;
+    if (normalized === "*") return true;
+    if (normalized.startsWith("*.")) {
+      const suffix = normalized.slice(1); // ".example.com"
+      if (host.endsWith(suffix) || host === normalized.slice(2)) return true;
+      continue;
+    }
+    if (normalized.startsWith(".")) {
+      if (host.endsWith(normalized) || host === normalized.slice(1)) return true;
+      continue;
+    }
+    if (host === normalized || host.endsWith(`.${normalized}`)) return true;
+  }
+  return false;
+}
+
 function parseCsp(raw: string | undefined): SanitizedEvidence["csp"] {
   if (!raw) {
     return {
@@ -102,26 +180,14 @@ function parseCsp(raw: string | undefined): SanitizedEvidence["csp"] {
     };
   }
 
-  const directives = raw
-    .split(";")
-    .map((part) => part.trim())
-    .filter(Boolean);
-  const names: string[] = [];
-  let scriptSrc = "";
-  for (const directive of directives) {
-    const [name, ...rest] = directive.split(/\s+/);
-    if (!name) continue;
-    names.push(name.toLowerCase().slice(0, 80));
-    if (name.toLowerCase() === "script-src" || name.toLowerCase() === "default-src") {
-      if (!scriptSrc || name.toLowerCase() === "script-src") {
-        scriptSrc = rest.join(" ");
-      }
-    }
-  }
-
-  const tokens = scriptSrc.split(/\s+/).filter(Boolean);
+  const { names, tokens } = scriptSrcTokensFromCsp(raw);
   const hosts = tokens
-    .filter((token) => token.startsWith("http") || token.startsWith("*") || token.startsWith("."))
+    .filter(
+      (token) =>
+        token.startsWith("http") ||
+        token.startsWith("*") ||
+        token.startsWith("."),
+    )
     .map((token) => token.replace(/^https?:\/\//, "").slice(0, 253))
     .slice(0, 30);
   const blocksInline =
@@ -264,9 +330,19 @@ export function collectPageSignals(page: PageSignals): {
       has("<div id=\"app\"") ||
       has("__NEXT_DATA__"));
 
-  const csp = parseCsp(
+  const rawCsp =
     page.headers["content-security-policy"] ??
-      page.headers["content-security-policy-report-only"],
+    page.headers["content-security-policy-report-only"] ??
+    extractMetaContentSecurityPolicy(page.body) ??
+    undefined;
+  const csp = parseCsp(rawCsp);
+  const scriptSrcTokens = rawCsp ? scriptSrcTokensFromCsp(rawCsp).tokens : [];
+  const passoffScriptHost = page.passoffScriptHost?.trim().toLowerCase() || null;
+  const passoffBlockedByCsp = Boolean(
+    csp.present &&
+      passoffScriptHost &&
+      scriptSrcTokens.length > 0 &&
+      !cspAllowsExternalScriptHost(scriptSrcTokens, passoffScriptHost),
   );
 
   const candidates = new Map<DetectedPlatform, Candidate>();
@@ -307,14 +383,18 @@ export function collectPageSignals(page: PageSignals): {
   }
 
   const analyzerWarnings: string[] = [];
-  if (csp.present && csp.restrictsThirdPartyScripts) {
+  if (passoffBlockedByCsp && passoffScriptHost) {
+    analyzerWarnings.push(
+      `This site’s content security policy does not allow scripts from ${passoffScriptHost}. Add that host to script-src before Passoff can load.`,
+    );
+  } else if (csp.present && csp.restrictsThirdPartyScripts) {
     analyzerWarnings.push(
       "A content security policy may restrict third-party scripts such as Passoff.",
     );
   }
   if (csp.blocksInlineScripts) {
     analyzerWarnings.push(
-      "Inline scripts appear restricted by the content security policy.",
+      "Inline scripts appear restricted by the content security policy. Prefer the external Passoff script tag, and allow the Passoff script host in script-src.",
     );
   }
   if (appearsAuthenticated) {

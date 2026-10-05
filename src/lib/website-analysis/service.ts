@@ -34,8 +34,19 @@ import {
   type SanitizedEvidence,
 } from "@/lib/website-analysis/schema";
 import type { WebsiteAnalysisPublic } from "@/lib/website-analysis/types";
+import { getPassoffEmbedBaseUrl } from "@/lib/installations/embed-config";
 import { canMutateProjects } from "@/lib/projects/permissions";
 import type { WorkspaceContext } from "@/lib/workspaces/context";
+
+function passoffScriptHostFromEnv(): string | null {
+  const embed = getPassoffEmbedBaseUrl();
+  if (!embed.ok) return null;
+  try {
+    return new URL(embed.baseUrl).hostname;
+  } catch {
+    return null;
+  }
+}
 
 export type { WebsiteAnalysisPublic } from "@/lib/website-analysis/types";
 
@@ -418,6 +429,7 @@ export async function analyzeWebsiteForReview(
       contentType: fetched.page.headers["content-type"] ?? null,
       headers: fetched.page.headers,
       body: fetched.page.body,
+      passoffScriptHost: passoffScriptHostFromEnv(),
     });
 
     if (!input.force) {

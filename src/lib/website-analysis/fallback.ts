@@ -1,3 +1,4 @@
+import { applyCspGuidanceToResult } from "@/lib/website-analysis/cautions";
 import { pickDeterministicPlatform } from "@/lib/website-analysis/detect";
 import type { DetectedPlatform } from "@/lib/website-analysis/platforms";
 import {
@@ -20,20 +21,23 @@ export function buildDeterministicAnalysisResult(
   },
 ): WebsiteAnalysisResult {
   if (options?.manualPlatform) {
-    return buildResultFromTemplate({
-      platform: options.manualPlatform,
-      method: platformToDefaultMethod(options.manualPlatform),
-      confidence: "medium",
-      evidence: [
-        `You chose ${options.manualPlatform.replaceAll("_", " ")} as the platform.`,
-      ],
-      existingInstallationDetected: evidence.hasPassoffScript,
-      needsClarification: false,
-      clarificationQuestion: null,
-      cautions: evidence.analyzerWarnings.filter((warning) =>
-        /content security policy/i.test(warning),
-      ),
-    });
+    return applyCspGuidanceToResult(
+      buildResultFromTemplate({
+        platform: options.manualPlatform,
+        method: platformToDefaultMethod(options.manualPlatform),
+        confidence: "medium",
+        evidence: [
+          `You chose ${options.manualPlatform.replaceAll("_", " ")} as the platform.`,
+        ],
+        existingInstallationDetected: evidence.hasPassoffScript,
+        needsClarification: false,
+        clarificationQuestion: null,
+        cautions: evidence.analyzerWarnings.filter((warning) =>
+          /content security policy/i.test(warning),
+        ),
+      }),
+      evidence,
+    );
   }
 
   const picked = pickDeterministicPlatform(evidence);
@@ -54,20 +58,23 @@ export function buildDeterministicAnalysisResult(
     ),
   ];
 
-  return buildResultFromTemplate({
-    platform: picked.platform,
-    method: platformToDefaultMethod(picked.platform),
-    confidence: picked.confidence,
-    evidence: evidenceLines,
-    existingInstallationDetected: evidence.hasPassoffScript,
-    needsClarification:
-      picked.confidence === "low" || evidence.conflictingEvidence.length > 0,
-    clarificationQuestion:
-      picked.confidence === "low" || evidence.conflictingEvidence.length > 0
-        ? "Which platform do you use to manage this website?"
-        : null,
-    cautions,
-  });
+  return applyCspGuidanceToResult(
+    buildResultFromTemplate({
+      platform: picked.platform,
+      method: platformToDefaultMethod(picked.platform),
+      confidence: picked.confidence,
+      evidence: evidenceLines,
+      existingInstallationDetected: evidence.hasPassoffScript,
+      needsClarification:
+        picked.confidence === "low" || evidence.conflictingEvidence.length > 0,
+      clarificationQuestion:
+        picked.confidence === "low" || evidence.conflictingEvidence.length > 0
+          ? "Which platform do you use to manage this website?"
+          : null,
+      cautions,
+    }),
+    evidence,
+  );
 }
 
 export function buildUnreachableAnalysisResult(input: {

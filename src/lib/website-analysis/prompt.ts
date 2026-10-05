@@ -21,6 +21,8 @@ Task rules:
 - Do not claim you visited pages or admin screens that are not present in the evidence.
 - Do not invent dashboard menu names that are not part of the supported methods below.
 - Distinguish observed evidence from inference in the evidence array.
+- Put CSP observations in evidence when useful. For cautions, add at most one CSP warning, and only if it is newly actionable.
+- If analyzerWarnings already mention content security policy, do not repeat the same CSP caution.
 - Never output secrets, API keys, cookies, or executable installation JavaScript.
 - Never provide a replacement Passoff script. The product already shows the trusted install code.
 - Choose recommendedMethod only from the supported methods list.

@@ -13,6 +13,7 @@ import {
   type SanitizedEvidence,
   type WebsiteAnalysisResult,
 } from "@/lib/website-analysis/schema";
+import { applyCspGuidanceToResult } from "@/lib/website-analysis/cautions";
 import {
   buildResultFromTemplate,
   getInstallationTemplate,
@@ -76,32 +77,35 @@ function adaptModelResult(
 
   // Keep customer-facing steps grounded in reviewed templates.
   // The model may refine evidence/cautions/clarification only.
-  const grounded = buildResultFromTemplate({
-    platform,
-    method,
-    confidence,
-    evidence: parsed.evidence.length
-      ? parsed.evidence
-      : deterministic.platform === platform
-        ? evidence.deterministicCandidates[0]?.reasons ?? [
-            "Limited platform signals were available.",
-          ]
-        : ["Limited platform signals were available."],
-    cautions: [
-      ...parsed.cautions,
-      ...evidence.analyzerWarnings.filter((warning) =>
-        /content security policy|sign-in/i.test(warning),
-      ),
-    ],
-    existingInstallationDetected:
-      parsed.existingInstallationDetected || evidence.hasPassoffScript,
-    needsClarification:
-      parsed.needsClarification ||
-      confidence === "low" ||
-      evidence.conflictingEvidence.length > 0,
-    clarificationQuestion: parsed.clarificationQuestion,
-    requiresDeveloper: parsed.requiresDeveloper || template.requiresDeveloper,
-  });
+  const grounded = applyCspGuidanceToResult(
+    buildResultFromTemplate({
+      platform,
+      method,
+      confidence,
+      evidence: parsed.evidence.length
+        ? parsed.evidence
+        : deterministic.platform === platform
+          ? evidence.deterministicCandidates[0]?.reasons ?? [
+              "Limited platform signals were available.",
+            ]
+          : ["Limited platform signals were available."],
+      cautions: [
+        ...parsed.cautions,
+        ...evidence.analyzerWarnings.filter((warning) =>
+          /content security policy|sign-in/i.test(warning),
+        ),
+      ],
+      existingInstallationDetected:
+        parsed.existingInstallationDetected || evidence.hasPassoffScript,
+      needsClarification:
+        parsed.needsClarification ||
+        confidence === "low" ||
+        evidence.conflictingEvidence.length > 0,
+      clarificationQuestion: parsed.clarificationQuestion,
+      requiresDeveloper: parsed.requiresDeveloper || template.requiresDeveloper,
+    }),
+    evidence,
+  );
 
   return websiteAnalysisResultSchema.parse(grounded);
 }

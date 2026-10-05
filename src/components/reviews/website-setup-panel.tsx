@@ -48,8 +48,34 @@ import {
   confidenceLabel,
   recommendedMethodLabel,
 } from "@/lib/website-analysis/copy";
+import { isCspCaution } from "@/lib/website-analysis/cautions";
 import { MANUAL_PLATFORM_OPTIONS } from "@/lib/website-analysis/templates";
 import type { WebsiteAnalysisPublic } from "@/lib/website-analysis/types";
+import type { WebsiteAnalysisResult } from "@/lib/website-analysis/schema";
+
+function cspUpdateGuidance(
+  analysis: WebsiteAnalysisPublic | null,
+  result: WebsiteAnalysisResult | null,
+): string | null {
+  if (!result && !analysis?.evidenceSummary) return null;
+
+  const fromStep = result?.steps.find((step) => isCspCaution(step));
+  if (fromStep) return fromStep;
+
+  const fromCaution = result?.cautions.find((item) => isCspCaution(item));
+  if (fromCaution) return fromCaution;
+
+  const fromWarning = analysis?.evidenceSummary?.warnings.find((item) =>
+    isCspCaution(item),
+  );
+  if (fromWarning) return fromWarning;
+
+  if (analysis?.evidenceSummary?.restrictsThirdPartyScripts) {
+    return "Update your website’s content security policy (CSP): add the Passoff script host to the script-src directive so the browser can load Passoff.";
+  }
+
+  return null;
+}
 
 export type WebsiteSetupPanelProps = {
   projectId: string;
@@ -186,6 +212,7 @@ export function WebsiteSetupPanel({
   const detectedLabel = formatDetectedAt(toDate(localLastSeenAt ?? localVerifiedAt));
   const allowedOrigin = allowedOrigins[0] ?? "Not set";
   const result = analysis?.result ?? null;
+  const cspGuidance = cspUpdateGuidance(analysis, result);
 
   const applyInstallation = (installation: {
     isEnabled: boolean;
@@ -585,6 +612,24 @@ export function WebsiteSetupPanel({
                           {result.placement}
                         </p>
                       </div>
+
+                      {cspGuidance ? (
+                        <div
+                          className="rounded-lg border border-border bg-card p-3"
+                          role="status"
+                          aria-labelledby="csp-update-heading"
+                        >
+                          <p
+                            id="csp-update-heading"
+                            className="font-medium text-foreground"
+                          >
+                            Update your content security policy
+                          </p>
+                          <p className="mt-1 text-muted-foreground">
+                            {cspGuidance}
+                          </p>
+                        </div>
+                      ) : null}
 
                       <div>
                         <p className="font-medium text-foreground">

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   collectPageSignals,
+  cspAllowsExternalScriptHost,
   pickDeterministicPlatform,
 } from "@/lib/website-analysis/detect";
 import { FIXTURE_HTML, STRICT_CSP } from "@/lib/website-analysis/fixtures";
@@ -9,12 +10,14 @@ import { FIXTURE_HTML, STRICT_CSP } from "@/lib/website-analysis/fixtures";
 function analyze(
   html: string,
   headers: Record<string, string> = { "content-type": "text/html" },
+  options?: { passoffScriptHost?: string },
 ) {
   return collectPageSignals({
     finalUrl: "https://example.com/",
     contentType: headers["content-type"] ?? "text/html",
     headers,
     body: html,
+    passoffScriptHost: options?.passoffScriptHost,
   });
 }
 
@@ -60,6 +63,48 @@ describe("deterministic website detection", () => {
         /content security policy/i.test(warning),
       ),
     ).toBe(true);
+  });
+
+  it("names the Passoff script host when CSP would block it", () => {
+    const { evidence } = analyze(
+      FIXTURE_HTML.genericHtml,
+      {
+        "content-type": "text/html",
+        "content-security-policy":
+          "default-src 'self'; script-src 'self' 'unsafe-inline' https://js.stripe.com",
+      },
+      { passoffScriptHost: "127.0.0.1" },
+    );
+    expect(
+      evidence.analyzerWarnings.some((warning) =>
+        /does not allow scripts from 127\.0\.0\.1/i.test(warning),
+      ),
+    ).toBe(true);
+  });
+
+  it("reads CSP from a meta http-equiv tag", () => {
+    const html = `<html><head><meta http-equiv="Content-Security-Policy" content="script-src 'self'"></head><body></body></html>`;
+    const { evidence } = analyze(html, { "content-type": "text/html" });
+    expect(evidence.csp.present).toBe(true);
+    expect(evidence.csp.restrictsThirdPartyScripts).toBe(true);
+  });
+
+  it("matches CSP host allowlists for external scripts", () => {
+    expect(
+      cspAllowsExternalScriptHost(
+        ["'self'", "https://cdn.passoff.io"],
+        "cdn.passoff.io",
+      ),
+    ).toBe(true);
+    expect(
+      cspAllowsExternalScriptHost(
+        ["'self'", "https://*.passoff.io"],
+        "cdn.passoff.io",
+      ),
+    ).toBe(true);
+    expect(
+      cspAllowsExternalScriptHost(["'self'", "https://js.stripe.com"], "cdn.passoff.io"),
+    ).toBe(false);
   });
 
   it("flags authenticated lookalike pages", () => {

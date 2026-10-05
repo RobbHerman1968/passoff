@@ -1,3 +1,4 @@
+import { mergeInstallationCautions } from "@/lib/website-analysis/cautions";
 import {
   METHOD_LABELS,
   PLATFORM_LABELS,
@@ -44,9 +45,7 @@ export const INSTALLATION_TEMPLATES: Record<
       "Publish or deploy the change, then open the live page once.",
     ],
     verificationSteps: SHARED_VERIFICATION,
-    cautions: [
-      "If your site uses a content security policy, Passoff may also need to be allowed there.",
-    ],
+    cautions: [],
     alternateMethods: ["gtm_custom_html"],
   },
   nextjs_script: {
@@ -65,7 +64,6 @@ export const INSTALLATION_TEMPLATES: Record<
     verificationSteps: SHARED_VERIFICATION,
     cautions: [
       "Load Passoff only in environments you intend to review.",
-      "If a content security policy is set, allow the Passoff script host.",
     ],
     alternateMethods: ["gtm_custom_html", "generic_html_body"],
   },
@@ -246,10 +244,10 @@ export function buildResultFromTemplate(input: {
 }): WebsiteAnalysisResult {
   const method = input.method ?? platformToDefaultMethod(input.platform);
   const template = getInstallationTemplate(method);
-  const cautions = [
-    ...template.cautions,
-    ...(input.cautions ?? []),
-  ].slice(0, 8);
+  const cautions = mergeInstallationCautions(
+    template.cautions,
+    input.cautions,
+  );
 
   return {
     detectedPlatform: input.platform,

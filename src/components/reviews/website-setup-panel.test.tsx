@@ -197,6 +197,16 @@ describe("WebsiteSetupPanel", () => {
       ).toBeGreaterThan(0);
     });
     expect(within(dialog).getByText(/Strong match/i)).toBeInTheDocument();
+    expect(
+      within(dialog).getByRole("status", {
+        name: /Update your content security policy/i,
+      }),
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).getAllByText(
+        /Passoff may need to be added to your Content Security Policy/i,
+      ).length,
+    ).toBeGreaterThan(0);
     expect(within(dialog).getByText(SNIPPET)).toBeInTheDocument();
     expect(analyzeWebsiteAction).toHaveBeenCalledWith({
       projectId: "project-1",
