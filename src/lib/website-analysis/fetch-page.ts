@@ -1,6 +1,7 @@
 import http from "node:http";
 import https from "node:https";
 import type { IncomingMessage } from "node:http";
+import type { LookupFunction } from "node:net";
 
 import {
   defaultDnsLookup,
@@ -119,6 +120,43 @@ function readLimitedBody(
   });
 }
 
+type PinnedLookupAddress = { address: string; family: 4 | 6 };
+
+/**
+ * Custom DNS lookup that pins to a pre-validated address.
+ * Supports both Node callback shapes: single address and `{ all: true }`.
+ */
+export function createPinnedLookup(address: PinnedLookupAddress): LookupFunction {
+  const lookup: LookupFunction = (hostname, options, callback) => {
+    const cb = typeof options === "function" ? options : callback;
+    const opts =
+      typeof options === "function" || typeof options === "number"
+        ? undefined
+        : options;
+    if (typeof cb !== "function") {
+      return;
+    }
+    void hostname;
+    if (opts?.all) {
+      (
+        cb as (
+          err: NodeJS.ErrnoException | null,
+          addresses: PinnedLookupAddress[],
+        ) => void
+      )(null, [{ address: address.address, family: address.family }]);
+      return;
+    }
+    (
+      cb as (
+        err: NodeJS.ErrnoException | null,
+        address: string,
+        family: number,
+      ) => void
+    )(null, address.address, address.family);
+  };
+  return lookup;
+}
+
 async function pinnedRequest(input: {
   url: URL;
   addresses: Array<{ address: string; family: 4 | 6 }>;
@@ -154,9 +192,7 @@ async function pinnedRequest(input: {
         servername: input.url.hostname,
         timeout: FETCH_CONNECT_TIMEOUT_MS,
         // Pin DNS to pre-validated addresses to reduce DNS rebinding risk.
-        lookup: (_hostname, _options, callback) => {
-          callback(null, address.address, address.family);
-        },
+        lookup: createPinnedLookup(address),
       },
       (response) => {
         readLimitedBody(response, input.maxBytes, input.signal)
