@@ -11,8 +11,9 @@ const proposed = {
   dormantGzipKb: 8,
   reviewParsedKb: 45,
   reviewGzipKb: 15,
-  screenshotParsedKb: 12,
-  screenshotGzipKb: 5,
+  // Loaded only after a reviewer selects an area. Includes reliable DOM capture.
+  screenshotParsedKb: 18,
+  screenshotGzipKb: 7,
   initMs: 50,
   addFeedbackReadyMs: 100,
   selectionDelayMs: 50,

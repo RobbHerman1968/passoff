@@ -29,12 +29,18 @@ export const REVIEW_STYLES = `
   --overlay: rgb(24 24 27 / 0.18);
   --warning: #9a3412;
   --success: #166534;
-  --radius: 0.625rem;
-  --shadow: 0 8px 24px rgb(28 25 23 / 0.14);
+  --radius: 12px;
+  --shadow: 0 12px 32px rgb(28 25 23 / 0.18);
   --motion: 180ms;
   font-family: ui-sans-serif, system-ui, sans-serif;
+  font-size: 14px;
   color: var(--foreground);
   line-height: 1.4;
+}
+
+/* Author styles otherwise override the browser's [hidden] rule. */
+.passoff-root [hidden] {
+  display: none !important;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -115,11 +121,10 @@ export const REVIEW_STYLES = `
   position: fixed;
   z-index: 2;
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 0.5rem;
-  max-width: calc(100vw - 1rem);
-  padding: 0.5rem;
+  gap: 6px;
+  max-width: calc(100vw - 24px);
+  padding: 6px;
   background: var(--card);
   color: var(--foreground);
   border: 1px solid var(--border);
@@ -128,34 +133,42 @@ export const REVIEW_STYLES = `
 }
 
 .toolbar[data-placement="desktop"] {
-  top: 0.75rem;
-  right: 0.75rem;
+  right: 16px;
+  bottom: 16px;
 }
 
 .toolbar[data-placement="mobile"] {
-  left: 0.5rem;
-  right: 0.5rem;
-  bottom: 0.5rem;
+  left: 8px;
+  right: 8px;
+  bottom: 8px;
   top: auto;
+  justify-content: flex-end;
 }
 
 .brand {
   font-weight: 700;
-  font-size: 0.875rem;
-  margin-inline-end: 0.25rem;
+  font-size: 14px;
+  margin-inline: 6px 4px;
 }
 
 .mode-label {
-  font-size: 0.875rem;
-  color: var(--muted-foreground);
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .button {
   appearance: none;
   min-height: 44px;
   min-width: 44px;
-  padding: 0 0.85rem;
-  border-radius: calc(var(--radius) * 0.8);
+  padding: 0 14px;
+  border-radius: 9px;
   border: 1px solid var(--border);
   background: var(--background);
   color: var(--foreground);
@@ -182,8 +195,8 @@ export const REVIEW_STYLES = `
 
 .launcher {
   position: fixed;
-  right: 0.75rem;
-  bottom: 0.75rem;
+  right: 16px;
+  bottom: 16px;
   z-index: 2;
 }
 
@@ -219,67 +232,71 @@ export const REVIEW_STYLES = `
 .panel {
   position: fixed;
   z-index: 4;
-  width: min(22rem, calc(100vw - 1rem));
+  width: min(360px, calc(100vw - 24px));
+  max-height: min(560px, calc(100vh - 96px));
+  overflow-y: auto;
   background: var(--card);
   color: var(--foreground);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   box-shadow: var(--shadow);
-  padding: 1rem;
+  padding: 18px;
 }
 
 .panel[data-placement="desktop"] {
-  top: 5rem;
-  right: 0.75rem;
+  right: 16px;
+  bottom: 76px;
 }
 
 .panel[data-placement="mobile"] {
-  left: 0.5rem;
-  right: 0.5rem;
-  bottom: 5.5rem;
+  left: 8px;
+  right: 8px;
+  bottom: 68px;
   width: auto;
+  max-height: calc(100vh - 84px);
 }
 
 .panel h2 {
-  margin: 0 0 0.5rem;
-  font-size: 1.05rem;
+  margin: 0 0 6px;
+  font-size: 18px;
+  line-height: 1.3;
 }
 
 .panel p {
-  margin: 0 0 0.75rem;
+  margin: 0 0 14px;
   color: var(--muted-foreground);
-  font-size: 0.95rem;
+  font-size: 14px;
 }
 
 .status {
-  display: inline-flex;
-  min-height: 1.75rem;
-  align-items: center;
-  padding: 0.15rem 0.55rem;
-  border-radius: 999px;
+  display: block;
+  padding: 10px 12px;
+  border-radius: 9px;
   background: color-mix(in srgb, var(--success) 16%, transparent);
   color: var(--foreground);
-  font-size: 0.8rem;
-  font-weight: 700;
+  font-size: 13px;
+  line-height: 1.45;
+  font-weight: 600;
+  margin-bottom: 12px;
 }
 
 .feedback-form {
   display: grid;
-  gap: 0.65rem;
+  gap: 10px;
 }
 
 .field-label {
-  font-size: 0.875rem;
+  font-size: 14px;
   font-weight: 700;
 }
 
 .feedback-form textarea {
   width: 100%;
-  min-height: 6rem;
+  min-height: 112px;
   resize: vertical;
   border: 1px solid var(--border);
-  border-radius: calc(var(--radius) * 0.8);
-  padding: 0.65rem 0.75rem;
+  border-radius: 9px;
+  padding: 10px 12px;
   font: inherit;
   color: var(--foreground);
   background: var(--background);
@@ -293,7 +310,7 @@ export const REVIEW_STYLES = `
 .field-error,
 .form-status {
   margin: 0;
-  font-size: 0.85rem;
+  font-size: 13px;
 }
 
 .field-error {
@@ -301,13 +318,16 @@ export const REVIEW_STYLES = `
 }
 
 .form-status {
-  color: var(--muted-foreground);
+  padding: 10px 12px;
+  border-radius: 9px;
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--warning) 12%, transparent);
 }
 
 .form-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.5rem;
+  gap: 8px;
 }
 
 .marker[data-status] {
@@ -347,9 +367,35 @@ export const REVIEW_STYLES = `
 }
 
 @media (max-width: 40rem) {
+  .toolbar {
+    flex-wrap: wrap;
+  }
+
+  .brand {
+    margin-right: auto;
+  }
+
   .selecting-banner {
     top: auto;
-    bottom: 5.5rem;
+    bottom: 68px;
+  }
+}
+
+@media (max-width: 24rem) {
+  .brand {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+  }
+
+  .toolbar {
+    justify-content: center;
+  }
+
+  .toolbar .button {
+    flex: 1 1 auto;
   }
 }
 `;

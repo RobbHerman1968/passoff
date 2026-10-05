@@ -458,11 +458,6 @@ export function WebsiteSetupPanel({
           <p className="text-sm text-muted-foreground break-all">
             {startingUrl || "Website address unavailable"}
           </p>
-          {status === "installed" && detectedLabel ? (
-            <p className="text-sm text-foreground">
-              Passoff is live on this website. Last detected {detectedLabel}.
-            </p>
-          ) : null}
         </div>
         <div className="grid gap-2">
           <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>

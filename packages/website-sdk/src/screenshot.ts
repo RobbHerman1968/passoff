@@ -1,4 +1,7 @@
+import { toPng } from "html-to-image";
+
 import { isPrivateElement } from "./privacy";
+import { HOST_ROOT_ID } from "./styles";
 import type { ScreenshotResult, ScreenshotStatus } from "./types";
 
 export type ScreenshotAttemptInput = {
@@ -16,6 +19,11 @@ const USER_REASONS: Record<string, string> = {
   private: "A private area was hidden from the picture.",
   failed: "Passoff couldn't capture a picture of this page. You can still send your feedback.",
 };
+
+const MAX_DATA_URL_CHARS = 280_022;
+const CAPTURE_TIMEOUT_MS = 7_000;
+const TRANSPARENT_PIXEL =
+  "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=";
 
 function collectLimitations(element: Element): string[] {
   const limitations: string[] = [];
@@ -62,55 +70,109 @@ function statusFrom(limitations: string[], captured: boolean): ScreenshotStatus 
 
 function reasonFrom(status: ScreenshotStatus, limitations: string[]): string {
   if (status === "captured") {
-    return "Passoff captured a picture of this area.";
+    return "Picture captured and ready to send.";
+  }
+  if (status === "partially-captured") {
+    if (limitations.includes("private")) {
+      return "Picture captured and ready to send. Private information was left out.";
+    }
+    return "Picture captured and ready to send, but part of the selected area could not be included.";
   }
   const key = limitations[0] ?? "failed";
   return USER_REASONS[key] ?? USER_REASONS.failed;
 }
 
-async function drawClone(element: Element): Promise<string | null> {
-  const rect = element.getBoundingClientRect();
-  const width = Math.max(1, Math.round(rect.width));
-  const height = Math.max(1, Math.round(rect.height));
-  const clone = element.cloneNode(true) as Element;
-  clone.querySelectorAll("[data-passoff-private], input[type='password']").forEach((node) => {
-    node.replaceWith(document.createComment("passoff-redacted"));
-  });
-  const serialized = new XMLSerializer().serializeToString(clone);
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">
-    <foreignObject width="100%" height="100%">
-      <div xmlns="http://www.w3.org/1999/xhtml">${serialized}</div>
-    </foreignObject>
-  </svg>`;
-  const blob = new Blob([svg], { type: "image/svg+xml;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  try {
-    const image = new Image();
-    image.decoding = "sync";
-    const loaded = new Promise<void>((resolve, reject) => {
-      image.onload = () => resolve();
-      image.onerror = () => reject(new Error("image"));
-    });
-    image.src = url;
-    await Promise.race([
-      loaded,
-      new Promise<void>((_, reject) => {
-        window.setTimeout(() => reject(new Error("timeout")), 80);
-      }),
-    ]);
-    const canvas = document.createElement("canvas");
-    canvas.width = width;
-    canvas.height = height;
-    const context = canvas.getContext("2d");
-    if (!context) {
-      return null;
+function canInclude(node: HTMLElement): boolean {
+  if (node.id === HOST_ROOT_ID || isPrivateElement(node)) {
+    return false;
+  }
+  if (
+    node instanceof HTMLInputElement ||
+    node instanceof HTMLTextAreaElement ||
+    node instanceof HTMLSelectElement ||
+    node instanceof HTMLOptionElement
+  ) {
+    return false;
+  }
+  if (
+    node instanceof HTMLVideoElement ||
+    node instanceof HTMLCanvasElement ||
+    node instanceof HTMLIFrameElement ||
+    node instanceof HTMLObjectElement ||
+    node instanceof HTMLEmbedElement ||
+    node instanceof HTMLScriptElement ||
+    node.tagName === "NOSCRIPT"
+  ) {
+    return false;
+  }
+  if (node instanceof HTMLImageElement) {
+    try {
+      const src = new URL(node.currentSrc || node.src, window.location.href);
+      if (src.origin !== window.location.origin && node.crossOrigin !== "anonymous") {
+        return false;
+      }
+    } catch {
+      return false;
     }
-    context.drawImage(image, 0, 0, width, height);
-    return canvas.toDataURL("image/png");
+  }
+  return true;
+}
+
+function withTimeout<T>(promise: Promise<T>): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = window.setTimeout(() => reject(new Error("capture-timeout")), CAPTURE_TIMEOUT_MS);
+    promise.then(
+      (value) => {
+        window.clearTimeout(timer);
+        resolve(value);
+      },
+      (error: unknown) => {
+        window.clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
+async function drawClone(element: Element): Promise<string | null> {
+  if (isPrivateElement(element)) {
+    return null;
+  }
+  const target = element instanceof HTMLElement ? element : element.parentElement;
+  if (!target) {
+    return null;
+  }
+  const rect = target.getBoundingClientRect();
+  const sourceWidth = Math.max(1, Math.round(rect.width || target.clientWidth));
+  const sourceHeight = Math.max(1, Math.round(rect.height || target.clientHeight));
+  const scale = Math.min(1, 1200 / sourceWidth, 900 / sourceHeight);
+  const canvasWidth = Math.max(1, Math.round(sourceWidth * scale));
+  const canvasHeight = Math.max(1, Math.round(sourceHeight * scale));
+
+  try {
+    for (const pixelRatio of [1, 0.75, 0.5]) {
+      const dataUrl = await withTimeout(
+        toPng(target, {
+          width: sourceWidth,
+          height: sourceHeight,
+          canvasWidth,
+          canvasHeight,
+          pixelRatio,
+          skipFonts: true,
+          cacheBust: false,
+          imagePlaceholder: TRANSPARENT_PIXEL,
+          filter: canInclude,
+          fetchRequestInit: { credentials: "same-origin" },
+          onImageErrorHandler: () => undefined,
+        }),
+      );
+      if (dataUrl.startsWith("data:image/png;base64,") && dataUrl.length <= MAX_DATA_URL_CHARS) {
+        return dataUrl;
+      }
+    }
+    return null;
   } catch {
     return null;
-  } finally {
-    URL.revokeObjectURL(url);
   }
 }
 
@@ -140,9 +202,9 @@ export async function attemptScreenshot(
 }
 
 export const SCREENSHOT_FEATURE_LIMITS = [
-  "Cross-origin images without CORS permission taint or omit visual content.",
+  "Cross-origin images without CORS permission are omitted from the picture.",
   "Cross-origin iframes cannot be read by the embedding page.",
-  "Video frames are not copied by this prototype.",
+  "Video frames are not copied.",
   "Canvas contents may be origin-tainted and are treated as incomplete.",
-  "Privacy-marked regions and password fields are removed before capture.",
+  "Privacy-marked regions and form fields are removed before capture.",
 ];

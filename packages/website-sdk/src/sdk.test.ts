@@ -14,6 +14,7 @@ import { captureAnchor } from "./anchor";
 import { NEARBY_TEXT_LIMIT } from "./types";
 import { attemptScreenshot } from "./screenshot";
 import { createNavigationTracker } from "./navigation";
+import { mountReview } from "./review";
 import { HOST_ROOT_ID } from "./styles";
 
 async function boot() {
@@ -157,9 +158,30 @@ describe("website SDK prototype", () => {
     const hostile = document.createElement("style");
     hostile.textContent = `* { color: rgb(255, 0, 0) !important; font-size: 80px !important; }`;
     document.head.append(hostile);
-    expect(host?.shadowRoot?.querySelector("style")?.textContent).toContain(":host");
+    const styles = host?.shadowRoot?.querySelector("style")?.textContent ?? "";
+    expect(styles).toContain(":host");
+    expect(styles).toMatch(/\[hidden\][^{]*\{[^}]*display:\s*none\s*!important/);
     expect(document.querySelector(".toolbar")).toBeNull();
     expect(host!.shadowRoot!.querySelector(".toolbar")).toBeTruthy();
+  });
+
+  it("hides and restores the review controls", async () => {
+    const api = await boot();
+    await api.init({ session: PROTOTYPE_SESSION_VALUE });
+    const shadow = document.getElementById(HOST_ROOT_ID)!.shadowRoot!;
+    const toolbar = shadow.querySelector(".toolbar") as HTMLElement;
+    const launcher = shadow.querySelector(".launcher") as HTMLButtonElement;
+    const hide = [...shadow.querySelectorAll("button")].find(
+      (button) => button.textContent === "Hide",
+    ) as HTMLButtonElement;
+
+    hide.click();
+    expect(toolbar.hidden).toBe(true);
+    expect(launcher.hidden).toBe(false);
+
+    launcher.click();
+    expect(toolbar.hidden).toBe(false);
+    expect(launcher.hidden).toBe(true);
   });
 
   it("leaves host clicks working in browse mode", async () => {
@@ -335,6 +357,84 @@ describe("website SDK prototype", () => {
     await completeFeedback("Still send this");
     expect(api.getAnchors()).toHaveLength(1);
     expect(hostMarker(1)).toBeTruthy();
+    const shadow = document.getElementById(HOST_ROOT_ID)!.shadowRoot!;
+    expect((shadow.querySelector(".feedback-form") as HTMLFormElement).hidden).toBe(true);
+    expect((shadow.querySelector(".status") as HTMLElement).hidden).toBe(false);
+  });
+
+  it("shows when the picture is ready and confirms feedback was sent", async () => {
+    window.__PASSOFF_SCREENSHOT_LOADER__ = async () => ({
+      attemptScreenshot: async () => ({
+        status: "captured" as const,
+        reason: "Picture captured and ready to send.",
+        limitations: [],
+        dataUrl: "data:image/png;base64,aGVsbG8=",
+        capturedAt: new Date().toISOString(),
+      }),
+      SCREENSHOT_FEATURE_LIMITS: [],
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        if (init?.method === "POST") {
+          return {
+            ok: true,
+            json: async () => ({
+              ok: true,
+              issue: {
+                id: "issue-7",
+                number: 7,
+                status: "open",
+                statusLabel: "Open",
+                summary: "Update the headline",
+                marker: {
+                  normalizedX: 0.5,
+                  normalizedY: 0.5,
+                  stableElementId: "hero",
+                  approvedDataAttributes: {},
+                  cssSelector: "#hero",
+                  ancestryFingerprint: null,
+                  elementTag: "h1",
+                  accessibleName: "Pricing",
+                  documentX: 20,
+                  documentY: 20,
+                },
+              },
+            }),
+          };
+        }
+        return {
+          ok: true,
+          json: async () => ({ ok: true, issues: [], canComment: true }),
+        };
+      }),
+    );
+
+    const runtime = mountReview({
+      assetBaseUrl: "/",
+      apiBaseUrl: "https://passoff.example.com",
+      sessionToken: "session-token",
+    });
+    runtime.setMode("add-feedback");
+    const hero = document.getElementById("hero")!;
+    vi.spyOn(document, "elementsFromPoint").mockReturnValue([hero]);
+    fireEvent.pointerDown(hero, { clientX: 10, clientY: 10, bubbles: true });
+
+    const shadow = document.getElementById(HOST_ROOT_ID)!.shadowRoot!;
+    await vi.waitFor(() => {
+      expect(shadow.querySelector(".form-status")?.textContent).toBe(
+        "Picture captured and ready to send.",
+      );
+    });
+    await completeFeedback("Update the headline");
+    await vi.waitFor(() => {
+      expect(shadow.querySelector("h2")?.textContent).toBe("Feedback sent");
+    });
+    expect(shadow.querySelector(".status")?.textContent).toContain("Issue 7");
+    expect(shadow.querySelector(".status")?.textContent).toContain(
+      "Picture saved with this feedback.",
+    );
+    runtime.destroy();
   });
 
   it("supports keyboard-only feedback creation with focus restoration", async () => {

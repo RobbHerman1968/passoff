@@ -51,6 +51,16 @@ function loadScreenshotModule(baseUrl: string): Promise<ScreenshotModule> {
   ) as Promise<ScreenshotModule>;
 }
 
+function savedPictureMessage(screenshot: ScreenshotResult | null): string | undefined {
+  if (!screenshot || screenshot.status === "unavailable") {
+    return screenshot?.reason;
+  }
+  if (screenshot.status === "partially-captured") {
+    return "Picture saved with this feedback. Some parts could not be included.";
+  }
+  return "Picture saved with this feedback.";
+}
+
 export function mountReview(options: {
   buildId?: string | null;
   assetBaseUrl: string;
@@ -113,7 +123,7 @@ export function mountReview(options: {
   const closeButton = document.createElement("button");
   closeButton.className = "button";
   closeButton.type = "button";
-  closeButton.textContent = "Hide Passoff";
+  closeButton.textContent = "Hide";
 
   toolbar.append(
     brand,
@@ -324,7 +334,8 @@ export function mountReview(options: {
         formStatus.hidden = false;
         formStatus.textContent = lastScreenshot.reason;
       } else {
-        formStatus.hidden = true;
+        formStatus.hidden = false;
+        formStatus.textContent = "Saving picture…";
       }
       queueMicrotask(() => textarea.focus());
       return;
@@ -337,6 +348,7 @@ export function mountReview(options: {
       panelTitle.textContent = confirmation.title;
       panelBody.textContent = confirmation.description;
       const bits = [
+        confirmation.issueId ? `Issue ${confirmation.markerNumber}` : null,
         confirmation.statusLabel ? `Status: ${confirmation.statusLabel}` : null,
         confirmation.screenshotReason,
       ].filter(Boolean);
@@ -518,18 +530,18 @@ export function mountReview(options: {
       summary: result.issue.summary,
     });
     confirmation = {
-      title: `Issue ${result.issue.number} saved`,
+      title: "Feedback sent",
       description: result.issue.summary,
       markerNumber: result.issue.number,
       issueId: result.issue.id,
       statusLabel: result.issue.statusLabel,
       summary: result.issue.summary,
       screenshotStatus: lastScreenshot?.status,
-      screenshotReason: lastScreenshot?.reason,
+      screenshotReason: savedPictureMessage(lastScreenshot),
     };
     clearComposer();
     renderPanel();
-    live.textContent = `Issue ${result.issue.number} saved.`;
+    live.textContent = `Feedback sent. Issue ${result.issue.number} was saved.`;
     restoreFocus();
   }
 

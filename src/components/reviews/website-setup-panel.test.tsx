@@ -175,8 +175,8 @@ describe("WebsiteSetupPanel", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("Installed")).toBeInTheDocument();
     expect(
-      screen.getByText(/Passoff is live on this website\. Last detected/i),
-    ).toBeInTheDocument();
+      screen.queryByText(/Passoff is live on this website/i),
+    ).not.toBeInTheDocument();
   });
 
   it("toasts success when installation is detected", async () => {
