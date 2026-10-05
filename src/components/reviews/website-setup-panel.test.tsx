@@ -11,6 +11,9 @@ const checkWebsiteInstallationAction = vi.fn();
 const setWebsiteInstallationEnabledAction = vi.fn();
 const analyzeWebsiteAction = vi.fn();
 const loadWebsiteAnalysisAction = vi.fn();
+const toastSuccess = vi.fn();
+const toastError = vi.fn();
+const toastMessage = vi.fn();
 
 vi.mock("@/app/(app)/projects/actions", () => ({
   checkWebsiteInstallationAction: (...args: unknown[]) =>
@@ -24,6 +27,14 @@ vi.mock("@/app/(app)/projects/actions", () => ({
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: vi.fn() }),
+}));
+
+vi.mock("sonner", () => ({
+  toast: {
+    success: (...args: unknown[]) => toastSuccess(...args),
+    error: (...args: unknown[]) => toastError(...args),
+    message: (...args: unknown[]) => toastMessage(...args),
+  },
 }));
 
 const KEY = "pk_0123456789abcdef0123456789abcdef";
@@ -58,6 +69,9 @@ describe("WebsiteSetupPanel", () => {
     setWebsiteInstallationEnabledAction.mockReset();
     analyzeWebsiteAction.mockReset();
     loadWebsiteAnalysisAction.mockReset();
+    toastSuccess.mockReset();
+    toastError.mockReset();
+    toastMessage.mockReset();
     loadWebsiteAnalysisAction.mockResolvedValue({ status: "success" });
   });
 
@@ -142,13 +156,64 @@ describe("WebsiteSetupPanel", () => {
     );
 
     await waitFor(() => {
-      expect(
-        within(dialog).getAllByText(
-          "We haven’t detected Passoff on this website yet.",
-        ).length,
-      ).toBeGreaterThan(0);
+      expect(toastError).toHaveBeenCalledWith(
+        "We haven’t detected Passoff on this website yet. Open the live site, then check again.",
+      );
     });
     expect(checkWebsiteInstallationAction).toHaveBeenCalled();
+  });
+
+  it("calls out installed status on the review card", () => {
+    const detectedAt = new Date("2026-10-04T18:00:00.000Z");
+    renderPanel({
+      verifiedAt: detectedAt.toISOString(),
+      lastSeenAt: detectedAt.toISOString(),
+    });
+
+    expect(
+      screen.getByRole("heading", { name: "Website setup" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Installed")).toBeInTheDocument();
+    expect(
+      screen.getByText(/Passoff is live on this website\. Last detected/i),
+    ).toBeInTheDocument();
+  });
+
+  it("toasts success when installation is detected", async () => {
+    const detectedAt = new Date("2026-10-04T18:00:00.000Z");
+    checkWebsiteInstallationAction.mockResolvedValue({
+      status: "success",
+      installation: {
+        id: "inst-1",
+        reviewId: "review-1",
+        publicKey: KEY,
+        startingUrl: "https://example.com/start",
+        allowedOrigins: ["https://example.com"],
+        isEnabled: true,
+        verifiedAt: detectedAt,
+        lastSeenAt: detectedAt,
+        status: "installed",
+        installSnippet: SNIPPET,
+        embedConfigured: true,
+      },
+    });
+    const user = userEvent.setup();
+    renderPanel({
+      verifiedAt: detectedAt.toISOString(),
+      lastSeenAt: detectedAt.toISOString(),
+    });
+
+    await user.click(screen.getByRole("button", { name: "Website setup" }));
+    const dialog = screen.getByRole("dialog", { name: "Website setup" });
+    await user.click(
+      within(dialog).getByRole("button", { name: "Check installation" }),
+    );
+
+    await waitFor(() => {
+      expect(toastSuccess).toHaveBeenCalledWith(
+        expect.stringMatching(/^Passoff is installed on this website\./),
+      );
+    });
   });
 
   it("analyzes the website and keeps the trusted install snippet", async () => {

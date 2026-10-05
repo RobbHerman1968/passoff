@@ -54,6 +54,32 @@ export function installationStatusLabel(status: InstallationStatus): string {
   }
 }
 
+/** Matches StatusPill tones without importing UI components into this lib module. */
+export type InstallationStatusTone =
+  | "open"
+  | "in-progress"
+  | "ready"
+  | "positive"
+  | "neutral"
+  | "muted";
+
+export function installationStatusTone(
+  status: InstallationStatus,
+): InstallationStatusTone {
+  switch (status) {
+    case "installed":
+      return "positive";
+    case "checking":
+      return "in-progress";
+    case "needs_attention":
+      return "ready";
+    case "disabled":
+      return "muted";
+    case "not_detected":
+      return "open";
+  }
+}
+
 export function formatDetectedAt(date: Date | null | undefined): string | null {
   if (!date) {
     return null;

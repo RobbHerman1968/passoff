@@ -77,7 +77,7 @@ test.describe("project and review management", () => {
     await expect(page.getByRole("heading", { name: websiteReview })).toBeVisible();
     await expect(page.getByText("Draft")).toBeVisible();
     await expect(
-      page.getByRole("heading", { name: "Website setup: Not detected" }),
+      page.getByRole("heading", { name: "Website setup" }),
     ).toBeVisible();
     await page.getByRole("button", { name: "Website setup", exact: true }).click();
     const websiteSetup = page.getByRole("dialog", { name: "Website setup" });

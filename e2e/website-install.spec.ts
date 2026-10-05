@@ -54,7 +54,7 @@ test.describe("website installation workflow", () => {
     await addReview.getByRole("button", { name: "Add review" }).click();
 
     await expect(
-      page.getByRole("heading", { name: "Website setup: Not detected" }),
+      page.getByRole("heading", { name: "Website setup" }),
     ).toBeVisible();
     const reviewUrl = page.url();
 

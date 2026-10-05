@@ -2,6 +2,7 @@
 
 import { useEffect, useId, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 
 import {
   analyzeWebsiteAction,
@@ -37,9 +38,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { StatusPill } from "@/components/status-badge";
 import {
   formatDetectedAt,
   installationStatusLabel,
+  installationStatusTone,
   resolveInstallationStatus,
   type InstallationStatus,
 } from "@/lib/installations/status";
@@ -269,29 +272,43 @@ export function WebsiteSetupPanel({
         });
         if (next === "installed") {
           const when = formatDetectedAt(
-            checkResult.installation.lastSeenAt ?? checkResult.installation.verifiedAt,
+            checkResult.installation.lastSeenAt ??
+              checkResult.installation.verifiedAt,
           );
-          setAnnouncement(
-            when
-              ? `Installation status: Installed. Last detected ${when}.`
-              : "Installation status: Installed.",
-          );
+          const message = when
+            ? `Passoff is installed on this website. Last detected ${when}.`
+            : "Passoff is installed on this website.";
+          setAnnouncement(message);
+          toast.success(message);
         } else if (next === "disabled") {
-          setAnnouncement("Installation status: Disabled.");
+          const message =
+            "Passoff is installed, but it’s currently disabled for this website.";
+          setAnnouncement(message);
+          toast.message(message);
         } else if (next === "needs_attention") {
-          setAnnouncement("Installation status: Needs attention.");
+          const message =
+            "Passoff may be partially set up. Open the website, then check again.";
+          setAnnouncement(message);
+          toast.error(message);
         } else {
-          setAnnouncement(
-            "We haven’t detected Passoff on this website yet.",
-          );
+          const message =
+            "We haven’t detected Passoff on this website yet. Open the live site, then check again.";
+          setAnnouncement(message);
+          toast.error(message);
         }
       } else {
-        setAnnouncement(
+        const message =
           checkResult.message ??
-            "We couldn’t check the installation right now. Try again.",
-        );
+          "We couldn’t check the installation right now. Try again.";
+        setAnnouncement(message);
+        toast.error(message);
       }
       router.refresh();
+    } catch {
+      const message =
+        "We couldn’t check the installation right now. Try again.";
+      setAnnouncement(message);
+      toast.error(message);
     } finally {
       setChecking(false);
     }
@@ -430,12 +447,22 @@ export function WebsiteSetupPanel({
     >
       <div className="grid gap-4">
         <div className="grid min-w-0 gap-2">
-          <h2 id="website-setup-heading" className="type-section-title">
-            Website setup: {statusLabel}
-          </h2>
+          <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
+            <h2 id="website-setup-heading" className="type-section-title">
+              Website setup
+            </h2>
+            <StatusPill tone={installationStatusTone(status)}>
+              {statusLabel}
+            </StatusPill>
+          </div>
           <p className="text-sm text-muted-foreground break-all">
             {startingUrl || "Website address unavailable"}
           </p>
+          {status === "installed" && detectedLabel ? (
+            <p className="text-sm text-foreground">
+              Passoff is live on this website. Last detected {detectedLabel}.
+            </p>
+          ) : null}
         </div>
         <div className="grid gap-2">
           <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>

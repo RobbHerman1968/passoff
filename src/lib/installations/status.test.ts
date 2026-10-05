@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   installationStatusLabel,
+  installationStatusTone,
   resolveInstallationStatus,
 } from "@/lib/installations/status";
 
@@ -62,5 +63,12 @@ describe("installation status", () => {
         }),
       ),
     ).toBe("Needs attention");
+  });
+
+  it("calls out installed status with a positive tone", () => {
+    expect(installationStatusTone("installed")).toBe("positive");
+    expect(installationStatusTone("not_detected")).toBe("open");
+    expect(installationStatusTone("needs_attention")).toBe("ready");
+    expect(installationStatusTone("disabled")).toBe("muted");
   });
 });
