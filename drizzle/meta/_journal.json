@@ -113,6 +113,97 @@
       "when": 1791209000000,
       "tag": "0015_issue_comments",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1791220000000,
+      "tag": "0016_behavioral_telemetry",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1791221000000,
+      "tag": "0017_behavioral_findings",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1791222000000,
+      "tag": "0018_verification_runs",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1791223000000,
+      "tag": "0019_distinct_telemetry_sessions",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1791224000000,
+      "tag": "0020_comment_author_display_name",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1791225000000,
+      "tag": "0021_issue_attachment_visibility",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1791226000000,
+      "tag": "0022_approval_requests",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1791227000000,
+      "tag": "0023_issue_video_lifecycle",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1791228000000,
+      "tag": "0024_webhook_deliveries_workspace",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1791229000000,
+      "tag": "0025_video_annotations",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1791230000000,
+      "tag": "0026_workspace_members_and_invitations",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1791231000000,
+      "tag": "0027_stripe_billing",
+      "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1791232000000,
+      "tag": "0028_issue_assignments_and_verifications",
+      "breakpoints": true
     }
   ]
 }

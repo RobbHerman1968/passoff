@@ -5,6 +5,7 @@ import { and, asc, desc, eq, inArray, isNull } from "drizzle-orm";
 import { db } from "@/db";
 import {
   activityEvents,
+  guestIdentities,
   issues,
   projects,
   reviews,
@@ -563,9 +564,15 @@ export async function listIssueHistory(
       createdAt: activityEvents.createdAt,
       actorName: users.name,
       actorEmail: users.email,
+      guestName: guestIdentities.name,
+      guestEmail: guestIdentities.email,
     })
     .from(activityEvents)
     .leftJoin(users, eq(users.id, activityEvents.actorUserId))
+    .leftJoin(
+      guestIdentities,
+      eq(guestIdentities.id, activityEvents.actorGuestId),
+    )
     .where(
       and(
         eq(activityEvents.issueId, existing.id),
@@ -586,7 +593,9 @@ export async function listIssueHistory(
       id: row.id,
       type: row.type as IssueActivityType,
       createdAt: row.createdAt,
-      actorDisplayName: personDisplayName(row.actorName, row.actorEmail),
+      actorDisplayName: row.guestName || row.guestEmail
+        ? personDisplayName(row.guestName, row.guestEmail)
+        : personDisplayName(row.actorName, row.actorEmail),
       data: (row.data ?? {}) as Record<string, unknown>,
     });
     if (event) events.push(event);

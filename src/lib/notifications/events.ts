@@ -136,7 +136,9 @@ export async function notifyIssueStatusChanged(input: {
 }
 
 export async function notifyIssueComment(input: {
-  context: WorkspaceContext;
+  workspaceId: string;
+  actorUserId: string | null;
+  actorName: string;
   projectId: string;
   reviewId: string;
   issueId: string;
@@ -144,27 +146,37 @@ export async function notifyIssueComment(input: {
   commentId: string;
   issueAuthorUserId: string | null;
   mentionedUserIds?: string[];
+  /** Private notes never notify guests and never use the public reply event. */
+  isPrivate?: boolean;
 }): Promise<void> {
   const data = await payloadFor(
-    input.context.workspaceId,
+    input.workspaceId,
     input.projectId,
     input.reviewId,
-    actorLabel(input.context),
+    input.actorName,
     { issueNumber: input.issueNumber },
   );
   if (!data) return;
 
   const members = new Set(
-    await listActiveWorkspaceMemberIds(input.context.workspaceId, input.context.userId),
+    await listActiveWorkspaceMemberIds(
+      input.workspaceId,
+      input.actorUserId ?? undefined,
+    ),
   );
   const events: CreateNotificationInput[] = [];
   const href = issueHref(input.projectId, input.reviewId, input.issueNumber);
+  const isPrivate = Boolean(input.isPrivate);
 
-  if (input.issueAuthorUserId && members.has(input.issueAuthorUserId)) {
+  if (
+    !isPrivate &&
+    input.issueAuthorUserId &&
+    members.has(input.issueAuthorUserId)
+  ) {
     events.push({
       recipientUserId: input.issueAuthorUserId,
-      actorUserId: input.context.userId,
-      workspaceId: input.context.workspaceId,
+      actorUserId: input.actorUserId,
+      workspaceId: input.workspaceId,
       projectId: input.projectId,
       reviewId: input.reviewId,
       issueId: input.issueId,
@@ -179,8 +191,8 @@ export async function notifyIssueComment(input: {
     if (!members.has(mentionedUserId)) continue;
     events.push({
       recipientUserId: mentionedUserId,
-      actorUserId: input.context.userId,
-      workspaceId: input.context.workspaceId,
+      actorUserId: input.actorUserId,
+      workspaceId: input.workspaceId,
       projectId: input.projectId,
       reviewId: input.reviewId,
       issueId: input.issueId,
@@ -294,37 +306,42 @@ async function notifyReviewReadyForApprovalIfClear(input: {
   );
 }
 
-export async function notifyApprovalRecorded(input: {
-  context: WorkspaceContext;
+async function notifyApprovalDecision(input: {
+  workspaceId: string;
+  actorUserId: string | null;
+  actorName: string;
   projectId: string;
   reviewId: string;
   approvalId: string;
   decision: "approved" | "changes_requested";
 }): Promise<void> {
   const [deployment] = await db
-    .select({ identifier: deployments.identifier })
+    .select({
+      identifier: deployments.identifier,
+      displayLabel: deployments.displayLabel,
+    })
     .from(reviews)
     .innerJoin(deployments, eq(deployments.id, reviews.deploymentId))
     .where(
       and(
         eq(reviews.id, input.reviewId),
-        eq(reviews.workspaceId, input.context.workspaceId),
+        eq(reviews.workspaceId, input.workspaceId),
       ),
     )
     .limit(1);
 
   const data = await payloadFor(
-    input.context.workspaceId,
+    input.workspaceId,
     input.projectId,
     input.reviewId,
-    actorLabel(input.context),
-    { versionLabel: deployment?.identifier },
+    input.actorName,
+    { versionLabel: deployment?.displayLabel?.trim() || deployment?.identifier },
   );
   if (!data) return;
 
   const members = await listActiveWorkspaceMemberIds(
-    input.context.workspaceId,
-    input.context.userId,
+    input.workspaceId,
+    input.actorUserId ?? undefined,
   );
   const type =
     input.decision === "approved" ? "review.approved" : "review.changes_requested";
@@ -332,8 +349,8 @@ export async function notifyApprovalRecorded(input: {
   await dispatchNotifications(
     members.map((recipientUserId) => ({
       recipientUserId,
-      actorUserId: input.context.userId,
-      workspaceId: input.context.workspaceId,
+      actorUserId: input.actorUserId,
+      workspaceId: input.workspaceId,
       projectId: input.projectId,
       reviewId: input.reviewId,
       issueId: null,
@@ -343,4 +360,142 @@ export async function notifyApprovalRecorded(input: {
       data,
     })),
   );
+}
+
+export async function notifyApprovalRecorded(input: {
+  context: WorkspaceContext;
+  projectId: string;
+  reviewId: string;
+  approvalId: string;
+  decision: "approved" | "changes_requested";
+}): Promise<void> {
+  await notifyApprovalDecision({
+    workspaceId: input.context.workspaceId,
+    actorUserId: input.context.userId,
+    actorName: actorLabel(input.context),
+    projectId: input.projectId,
+    reviewId: input.reviewId,
+    approvalId: input.approvalId,
+    decision: input.decision,
+  });
+}
+
+/** Guest decisions notify every active teammate; guests have no user id. */
+export async function notifyGuestApprovalRecorded(input: {
+  workspaceId: string;
+  guestName: string;
+  projectId: string;
+  reviewId: string;
+  approvalId: string;
+  decision: "approved" | "changes_requested";
+}): Promise<void> {
+  await notifyApprovalDecision({
+    workspaceId: input.workspaceId,
+    actorUserId: null,
+    actorName: input.guestName.trim() || "A guest reviewer",
+    projectId: input.projectId,
+    reviewId: input.reviewId,
+    approvalId: input.approvalId,
+    decision: input.decision,
+  });
+}
+
+export async function notifyBehavioralFindingAttached(input: {
+  context: WorkspaceContext;
+  projectId: string;
+  reviewId: string;
+  issueId: string;
+  issueNumber: number;
+  assigneeUserId: string | null;
+  authorUserId: string | null;
+}): Promise<void> {
+  const data = await payloadFor(
+    input.context.workspaceId,
+    input.projectId,
+    input.reviewId,
+    actorLabel(input.context),
+    { issueNumber: input.issueNumber },
+  );
+  if (!data) return;
+  const recipients = new Set(
+    [input.assigneeUserId, input.authorUserId].filter(
+      (id): id is string => Boolean(id) && id !== input.context.userId,
+    ),
+  );
+  const href = issueHref(input.projectId, input.reviewId, input.issueNumber);
+  await dispatchNotifications(
+    [...recipients].map((recipientUserId) => ({
+      recipientUserId,
+      actorUserId: input.context.userId,
+      workspaceId: input.context.workspaceId,
+      projectId: input.projectId,
+      reviewId: input.reviewId,
+      issueId: input.issueId,
+      type: "behavioral.finding_attached",
+      dedupeKey: `behavioral.finding_attached:${input.issueId}:${recipientUserId}`,
+      hrefPath: href,
+      data,
+    })),
+  );
+}
+
+export async function notifyBehavioralComparisonReady(input: {
+  workspaceId: string;
+  projectId: string;
+  reviewId: string | null;
+  issueId: string | null;
+  issueNumber: number | null;
+  recipientUserId: string | null;
+}): Promise<void> {
+  if (!input.recipientUserId || !input.reviewId || !input.issueId || input.issueNumber == null) {
+    return;
+  }
+  const data = await payloadFor(
+    input.workspaceId,
+    input.projectId,
+    input.reviewId,
+    "Passoff",
+    { issueNumber: input.issueNumber },
+  );
+  if (!data) return;
+  await dispatchNotifications([
+    {
+      recipientUserId: input.recipientUserId,
+      actorUserId: null,
+      workspaceId: input.workspaceId,
+      projectId: input.projectId,
+      reviewId: input.reviewId,
+      issueId: input.issueId,
+      type: "behavioral.comparison_ready",
+      dedupeKey: `behavioral.comparison_ready:${input.issueId}:${input.recipientUserId}`,
+      hrefPath: issueHref(input.projectId, input.reviewId, input.issueNumber),
+      data,
+    },
+  ]);
+}
+
+export async function notifyBehavioralAnalysisFailed(input: {
+  context: WorkspaceContext;
+  projectId: string;
+  findingId: string;
+}): Promise<void> {
+  await dispatchNotifications([
+    {
+      recipientUserId: input.context.userId,
+      actorUserId: null,
+      workspaceId: input.context.workspaceId,
+      projectId: input.projectId,
+      reviewId: null,
+      issueId: null,
+      type: "behavioral.analysis_failed",
+      dedupeKey: `behavioral.analysis_failed:${input.findingId}:${input.context.userId}`,
+      hrefPath: "/usability?view=findings",
+      data: {
+        workspaceName: input.context.workspaceName,
+        projectName: "",
+        reviewName: "",
+        actorName: "Passoff",
+      },
+    },
+  ]);
 }

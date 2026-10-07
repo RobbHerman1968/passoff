@@ -4,21 +4,14 @@ import { normalizeEmail } from "@/lib/auth/email";
 import { requestPasswordReset } from "@/lib/auth/password-reset";
 import { getTestEmailTransport } from "@/lib/email/test-transport";
 import { setEmailTransportForTests } from "@/lib/email";
-
-function testHelpersEnabled() {
-  return (
-    process.env.EMAIL_TRANSPORT === "test" ||
-    process.env.NODE_ENV === "test" ||
-    process.env.NODE_ENV === "development"
-  );
-}
+import { testRoutesEnabled } from "@/lib/security/production-guards";
 
 /**
  * Test helper: request a reset and return the path from the in-memory transport.
  * Disabled unless EMAIL_TRANSPORT=test (or local development/test).
  */
 export async function POST(request: Request) {
-  if (!testHelpersEnabled() || process.env.EMAIL_TRANSPORT !== "test") {
+  if (!testRoutesEnabled()) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 

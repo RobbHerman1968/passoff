@@ -5,7 +5,6 @@ import {
   asc,
   desc,
   eq,
-  exists,
   ilike,
   isNotNull,
   isNull,
@@ -28,6 +27,7 @@ import {
   users,
   workspaceMemberships,
 } from "@/db/schema";
+import { playableVideoExistsSql } from "@/lib/video/has-video";
 import { deriveIssueDisplayTitle } from "@/lib/issues/display-title";
 import {
   ISSUE_LIST_PAGE_SIZE,
@@ -233,20 +233,7 @@ export function buildFilterConditions(
   }
 
   if (filters.video) {
-    conditions.push(
-      exists(
-        db
-          .select({ id: issueEvidence.id })
-          .from(issueEvidence)
-          .where(
-            and(
-              eq(issueEvidence.issueId, issues.id),
-              eq(issueEvidence.workspaceId, context.workspaceId),
-              eq(issueEvidence.kind, "video"),
-            ),
-          ),
-      ),
-    );
+    conditions.push(playableVideoExistsSql(context.workspaceId));
   }
 
   const q = filters.q.trim();
@@ -325,23 +312,7 @@ async function loadFacets(
   const [videoRow] = await db
     .select({ count: sql<number>`count(*)`.mapWith(Number) })
     .from(issues)
-    .where(
-      and(
-        base,
-        exists(
-          db
-            .select({ id: issueEvidence.id })
-            .from(issueEvidence)
-            .where(
-              and(
-                eq(issueEvidence.issueId, issues.id),
-                eq(issueEvidence.workspaceId, context.workspaceId),
-                eq(issueEvidence.kind, "video"),
-              ),
-            ),
-        ),
-      ),
-    );
+    .where(and(base, playableVideoExistsSql(context.workspaceId)));
 
   return {
     priorities: priorityRows.map((row) => row.priority as IssuePriority),
@@ -473,13 +444,7 @@ export async function listIssuesForReview(
         order by ie.created_at desc
         limit 1
       )`,
-      hasVideoEvidence: sql<boolean>`exists (
-        select 1
-        from issue_evidence ie
-        where ie.issue_id = ${issues.id}
-          and ie.workspace_id = ${context.workspaceId}
-          and ie.kind = 'video'
-      )`,
+      hasVideoEvidence: playableVideoExistsSql(context.workspaceId),
       createdAt: issues.createdAt,
       updatedAt: issues.updatedAt,
     })
@@ -591,13 +556,7 @@ export async function getIssueDetailForReview(
         order by ie.created_at desc
         limit 1
       )`,
-      hasVideoEvidence: sql<boolean>`exists (
-        select 1
-        from issue_evidence ie
-        where ie.issue_id = ${issues.id}
-          and ie.workspace_id = ${context.workspaceId}
-          and ie.kind = 'video'
-      )`,
+      hasVideoEvidence: playableVideoExistsSql(context.workspaceId),
       createdAt: issues.createdAt,
       updatedAt: issues.updatedAt,
       version: issues.version,

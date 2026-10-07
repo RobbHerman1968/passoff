@@ -10,6 +10,7 @@ import {
   loadWebsiteAnalysisAction,
   setWebsiteInstallationEnabledAction,
 } from "@/app/(app)/projects/actions";
+import { saveVerificationHooksAction } from "@/app/(app)/projects/verification-actions";
 import { HelpTopicButton } from "@/components/help/help-topic-button";
 import { Button } from "@/components/ui/button";
 import {
@@ -31,6 +32,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
@@ -91,6 +93,7 @@ export type WebsiteSetupPanelProps = {
   lastSeenAt: string | null;
   installSnippet: string | null;
   embedConfigured: boolean;
+  verificationHookAllowlist?: string[];
   disabled?: boolean;
 };
 
@@ -137,6 +140,7 @@ export function WebsiteSetupPanel({
   lastSeenAt,
   installSnippet,
   embedConfigured,
+  verificationHookAllowlist = [],
   disabled = false,
 }: WebsiteSetupPanelProps) {
   const router = useRouter();
@@ -152,6 +156,7 @@ export function WebsiteSetupPanel({
   const [disableOpen, setDisableOpen] = useState(false);
   const [checking, setChecking] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [hookNames, setHookNames] = useState(verificationHookAllowlist.join("\n"));
   const [analyzing, setAnalyzing] = useState(false);
   const [analysis, setAnalysis] = useState<WebsiteAnalysisPublic | null>(null);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
@@ -819,6 +824,46 @@ export function WebsiteSetupPanel({
                     </ul>
                   </div>
                 ) : null}
+
+                <div className="grid gap-2">
+                  <Label htmlFor="verification-hooks">Named checks this website may run</Label>
+                  <Textarea
+                    id="verification-hooks"
+                    value={hookNames}
+                    onChange={(event) => setHookNames(event.target.value)}
+                    disabled={disabled || busy}
+                    rows={3}
+                    placeholder="checkout-ready"
+                  />
+                  <p className="text-sm text-muted-foreground">
+                    List lowercase names your website registers, one per line. Passoff never runs
+                    code you type here.
+                  </p>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="min-h-11 w-fit"
+                    disabled={disabled || busy}
+                    onClick={async () => {
+                      setBusy(true);
+                      const result = await saveVerificationHooksAction({
+                        projectId,
+                        reviewId,
+                        namesText: hookNames,
+                      });
+                      setBusy(false);
+                      if (!result.ok) {
+                        toast.error(result.message);
+                        return;
+                      }
+                      setHookNames(result.names.join("\n"));
+                      toast.success("Named checks saved.");
+                      router.refresh();
+                    }}
+                  >
+                    Save named checks
+                  </Button>
+                </div>
 
                 <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
                   <Button

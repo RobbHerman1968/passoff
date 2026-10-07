@@ -31,6 +31,7 @@ export type SdkSession = {
   guestIdentityId: string;
   guestName: string;
   canComment: boolean;
+  canApprove: boolean;
   allowedOrigin: string;
   privateSelectors: string[];
   reviewStatus: "draft" | "open" | "closed";
@@ -60,6 +61,7 @@ export type ExchangeResult =
       sessionToken: string;
       expiresAt: string;
       canComment: boolean;
+      canApprove: boolean;
       reviewerName: string;
       privateSelectors: string[];
       corsOrigin: string;
@@ -160,6 +162,7 @@ export async function exchangeSdkSession(options: {
           shareRevokedAt: shareLinks.revokedAt,
           shareExpiresAt: shareLinks.expiresAt,
           canComment: shareLinks.canComment,
+          canApprove: shareLinks.canApprove,
           reviewStatus: reviews.status,
           reviewArchivedAt: reviews.archivedAt,
           projectId: reviews.projectId,
@@ -307,6 +310,7 @@ export async function exchangeSdkSession(options: {
         sessionToken: rawToken,
         expiresAt: expiresAt.toISOString(),
         canComment: row.canComment,
+        canApprove: row.canApprove,
         reviewerName: row.guestName,
         privateSelectors: row.consentSettings?.privateSelectors ?? [],
         corsOrigin,
@@ -346,6 +350,7 @@ export async function resolveSdkSession(
       shareExpiresAt: shareLinks.expiresAt,
       shareRevokedAt: shareLinks.revokedAt,
       canComment: shareLinks.canComment,
+      canApprove: shareLinks.canApprove,
       reviewStatus: reviews.status,
       reviewArchivedAt: reviews.archivedAt,
       projectId: reviews.projectId,
@@ -423,6 +428,7 @@ export async function resolveSdkSession(
       guestIdentityId: row.guestIdentityId,
       guestName: row.guestName,
       canComment: row.canComment,
+      canApprove: row.canApprove,
       allowedOrigin: row.allowedOrigin,
       privateSelectors: row.consentSettings?.privateSelectors ?? [],
       reviewStatus: row.reviewStatus,

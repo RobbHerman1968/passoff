@@ -35,9 +35,10 @@ users ──< accounts
                                                 │
                            ┌────────── issues ──────────┐
                            │                            │
-                    issue_comments              issue_evidence ── video_assets
+                    issue_comments              issue_evidence ── video_assets ── video_annotations
                            │                            │
                     issue_anchors              issue_verifications
+                                                verification_runs ── verification_check_results
                                                 │
                                            approvals (review + deployment)
 
@@ -45,7 +46,10 @@ share_links ──< review_sessions >── guest_identities
 workspaces ──< webhook_endpoints ──< webhook_deliveries
 workspaces ──< subscriptions
 workspaces ──< usage_records
-legacy_review_rounds, legacy_video_reviews, legacy_video_anchors
+environment_telemetry_settings ── telemetry_raw_events ── telemetry_aggregates
+                                                    └── telemetry_aggregate_sessions
+behavioral_findings ── behavioral_evidence_snapshots
+legacy_review_rounds, legacy_video_reviews
 ```
 
 ## Identity and authorization
@@ -68,6 +72,8 @@ Only token hashes are stored for invitations, share links, and review sessions. 
 
 Approvals are tied to a review and a recorded deployment or version. They are not tied to a review round.
 
+Automated browser checks are stored on `verification_runs` and `verification_check_results`. They are bound to the deployment actually checked and never verify, close, or approve an issue. Human verification remains on `issue_verifications` with method `human`.
+
 ## Issues
 
 Issues replace persisted feedback items. Statuses are `open`, `in_progress`, `ready_for_verification`, `verified`, and `closed`. Closure reasons are stored separately: `fixed`, `not_planned`, `duplicate`, `cannot_reproduce`, `no_longer_relevant`.
@@ -79,7 +85,7 @@ Legacy mapping must not fabricate verification:
 
 Issue numbers are allocated from `review_issue_counters` in the same transaction as the insert.
 
-Video assets belong to `issue_evidence`, not to a review type.
+Video assets belong to `issue_evidence`, not to a review type. `video_assets.lifecycle` (`current`, `replacement`, `retired`, `removed`) decides which clip an issue shows; partial unique indexes allow one `current` and one `replacement` per issue, and provider-deletion columns track retries. `video_annotations` is the one table for time-based notes: each row ties one `issue_comments` row (unique) to a `video_assets` row, with `timestamp_ms` and an optional normalized pin (`normalized_x`/`normalized_y`, both or neither, 0..1). Notes stay on the clip they were written for. `video_assets.retention_ends_at` is set when an issue closes (30 days) and cleared on reopen; `retention_warned_for` records the date a warning went out for. Migration 0025 carries any `legacy_video_anchors` rows over as notes when that table exists, and the table is no longer part of the model. See [`VIDEO_EVIDENCE.md`](./VIDEO_EVIDENCE.md).
 
 ## Legacy preservation
 
@@ -95,9 +101,13 @@ Vercel can execute several requests in one Fluid Compute instance and can also s
 
 Use the provider's pooled connection URL. Size the pool using the database's connection limit after reserving capacity for migrations, administration, preview deployments, rolling deployments, and background workers.
 
+Telemetry workers claim raw rows with row locks and `SKIP LOCKED`, so overlapping cron invocations cannot aggregate the same event twice. `telemetry_aggregate_sessions` keeps one keyed, environment-scoped tab-session hash per hour and aggregate dimension. Reports use `COUNT(DISTINCT ...)` across those rows instead of adding partial distinct counts.
+
+Automated tests never fall back to `DATABASE_URL`. Database-backed tests require an isolated `TEST_DATABASE_URL` plus `PASSOFF_TEST_DATABASE_CONFIRMED=true`, and the test database must not be the same host, port, and database as `DATABASE_URL` (`src/db/test-database-guard.ts`). Migrate it with `npm run db:migrate:test`. Setup, CI, and the release suite are in [`docs/RELEASE_AND_OPERATIONS.md`](./RELEASE_AND_OPERATIONS.md). Migration `0028_issue_assignments_and_verifications` creates `issue_assignments`, `issue_verifications`, and the `issues_id_scope_unique` index that earlier migrations never created; `src/db/schema-drift.test.ts` fails when any table or column in `schema.ts` is missing from the migrated database. Expired short-lived rows (reset tokens, launch codes, sessions, rate-limit counters) are purged daily by `/api/cron/workspaces`.
+
 ## Billing configuration
 
-Subscriptions and usage records remain workspace-scoped so future billing can attach later. Plan entitlements live in `src/lib/billing/plans.ts`. Payment collection and limit enforcement are not part of this product-model migration.
+Subscriptions and usage records are workspace-scoped. Plan entitlements live in `src/lib/billing/plans.ts`. Stripe is the payment provider; `subscriptions` (one row per workspace) stores the plan, status, billing interval, Stripe customer/subscription/price IDs, period dates, `cancel_at_period_end`, `trial_started_at`, `trial_ends_at`, `past_due_since`, `cancelled_at`, and `provider_event_at` (migration `0027_stripe_billing`). Stripe webhook receipts reuse `provider_events` with provider `stripe`. See [`docs/BILLING.md`](./BILLING.md).
 
 Published prices:
 
@@ -113,3 +123,11 @@ Published limits:
 - Agency video-evidence pilot only; Free and Studio video evidence remain undecided
 
 Unlimited active review websites does not grant unlimited infrastructure usage. Pooled allowances stay unpublished until each has an approved value and enforcement behavior.
+
+## Workspace members and invitations (migration 0026)
+
+- `workspaces`: `deleted_by_user_id`, `purge_after`; index on `purge_after` for deleted workspaces.
+- `workspace_memberships`: unique partial index guaranteeing one active owner per workspace.
+- `workspace_invitations`: `accepted_by_user_id`, `last_sent_at`, `send_count`; unique partial index for one open invitation per workspace and email; check that emails are lowercase.
+
+See `docs/WORKSPACE_MEMBERS.md`.

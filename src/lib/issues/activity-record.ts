@@ -12,7 +12,8 @@ export async function insertIssueActivityEvent(
     projectId: string;
     reviewId: string;
     issueId: string;
-    actorUserId: string;
+    actorUserId?: string | null;
+    actorGuestId?: string | null;
     type: string;
     data: Record<string, unknown>;
     createdAt: Date;
@@ -25,7 +26,8 @@ export async function insertIssueActivityEvent(
       projectId: values.projectId,
       reviewId: values.reviewId,
       issueId: values.issueId,
-      actorUserId: values.actorUserId,
+      actorUserId: values.actorUserId ?? null,
+      actorGuestId: values.actorGuestId ?? null,
       type: values.type,
       data: values.data,
       createdAt: values.createdAt,

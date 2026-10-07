@@ -49,7 +49,6 @@ test.describe("website installation workflow", () => {
     await page.getByRole("button", { name: "Add review" }).first().click();
     const addReview = page.getByRole("dialog", { name: "Add review" });
     await addReview.getByLabel("Review name").fill("Bare host review");
-    await addReview.getByRole("radio", { name: /Website/i }).check();
     await addReview.getByLabel("Website address").fill(websiteUrl);
     await addReview.getByRole("button", { name: "Add review" }).click();
 
@@ -122,11 +121,8 @@ test.describe("website installation workflow", () => {
     const setupAgain = page.getByRole("dialog", { name: "Website setup" });
     await setupAgain.getByRole("button", { name: "Check installation" }).click();
     await expect(
-      setupAgain.getByText(/Installation status: Installed/i),
-    ).toBeVisible({ timeout: 15_000 });
-    await expect(
       setupAgain.getByRole("definition").filter({ hasText: /^Installed/ }),
-    ).toBeVisible();
+    ).toBeVisible({ timeout: 15_000 });
 
     // Disable Passoff.
     await setupAgain.getByRole("button", { name: "Disable Passoff" }).click();
@@ -201,7 +197,6 @@ test.describe("website installation workflow", () => {
     await page.getByRole("button", { name: "Add review" }).first().click();
     const addReview = page.getByRole("dialog", { name: "Add review" });
     await addReview.getByLabel("Review name").fill("Responsive site");
-    await addReview.getByRole("radio", { name: /Website/i }).check();
     await addReview
       .getByLabel("Website address")
       .fill(`${origin}/dev/website-sdk/bare`);

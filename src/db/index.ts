@@ -5,12 +5,19 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 
 import * as schema from "./schema";
+import { resolveTestDatabaseUrl } from "./test-database-guard";
 
-const databaseUrl = process.env.DATABASE_URL;
+const isTestProcess = process.env.NODE_ENV === "test";
 
-if (!databaseUrl) {
+if (!isTestProcess && !process.env.DATABASE_URL) {
   throw new Error("DATABASE_URL is required to connect to PostgreSQL.");
 }
+
+// Tests only ever open TEST_DATABASE_URL, and only after it is confirmed to be an
+// isolated database that is not the one the app itself uses.
+const databaseUrl = isTestProcess
+  ? resolveTestDatabaseUrl(process.env)
+  : (process.env.DATABASE_URL as string);
 
 const parsedPoolSize = Number.parseInt(process.env.DATABASE_POOL_MAX ?? "10", 10);
 const poolSize = Number.isFinite(parsedPoolSize) && parsedPoolSize > 0 ? parsedPoolSize : 10;

@@ -11,9 +11,16 @@ export type InstallationRateLimitScope =
   | "installation_verify"
   | "sdk_session_exchange"
   | "sdk_issue_write"
+  | "sdk_comment_write"
   | "website_analysis_workspace"
   | "website_analysis_review"
-  | "website_analysis_lock";
+  | "website_analysis_lock"
+  | "telemetry_ingest"
+  | "telemetry_env_minute"
+  | "verification_exchange_create"
+  | "verification_session_exchange"
+  | "verification_result_submit"
+  | "guest_approval_decide";
 
 const LIMITS: Record<
   InstallationRateLimitScope,
@@ -23,11 +30,20 @@ const LIMITS: Record<
   installation_verify: { maxAttempts: 60, windowMs: 15 * 60 * 1000 },
   sdk_session_exchange: { maxAttempts: 30, windowMs: 15 * 60 * 1000 },
   sdk_issue_write: { maxAttempts: 120, windowMs: 15 * 60 * 1000 },
+  // Guest replies on shared reviews — keep abuse bounded without blocking normal discussion.
+  sdk_comment_write: { maxAttempts: 60, windowMs: 15 * 60 * 1000 },
   // User-initiated website analysis — keep OpenAI spend bounded.
   website_analysis_workspace: { maxAttempts: 30, windowMs: 60 * 60 * 1000 },
   website_analysis_review: { maxAttempts: 10, windowMs: 60 * 60 * 1000 },
   // Single-flight lock: first claim succeeds; further claims blocked for the window.
   website_analysis_lock: { maxAttempts: 1, windowMs: 2 * 60 * 1000 },
+  telemetry_ingest: { maxAttempts: 120, windowMs: 60 * 1000 },
+  telemetry_env_minute: { maxAttempts: 600, windowMs: 60 * 1000 },
+  verification_exchange_create: { maxAttempts: 20, windowMs: 15 * 60 * 1000 },
+  verification_session_exchange: { maxAttempts: 30, windowMs: 15 * 60 * 1000 },
+  verification_result_submit: { maxAttempts: 60, windowMs: 15 * 60 * 1000 },
+  // Guests deciding on a version. A handful of attempts is plenty; blocks guessing.
+  guest_approval_decide: { maxAttempts: 20, windowMs: 15 * 60 * 1000 },
 };
 
 export type RateLimitResult =
@@ -43,6 +59,9 @@ export async function enforceInstallationRateLimit(options: {
   const now = new Date();
 
   return db.transaction(async (tx) => {
+    // Two requests arriving together would both see "no row yet" and both insert one.
+    // Serialize them per subject so the second sees the first's row.
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`rate-limit:${subjectHash}`}))`);
     const [existing] = await tx
       .select()
       .from(authRateLimits)

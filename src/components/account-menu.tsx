@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronsUpDown, LogOut, Moon, Settings, Sun } from "lucide-react";
+import { ChevronsUpDown, LogOut, Moon, Settings, Sun, UserRound } from "lucide-react";
 import { useState, useSyncExternalStore, useTransition } from "react";
 
 import { useRouter } from "next/navigation";
@@ -135,6 +135,14 @@ export function AccountMenu({
           <DropdownMenuItem onSelect={() => applyTheme(nextTheme)}>
             {theme === "dark" ? <Sun aria-hidden="true" /> : <Moon aria-hidden="true" />}
             {theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            onSelect={() => {
+              router.push("/settings/account");
+            }}
+          >
+            <UserRound aria-hidden="true" />
+            Account settings
           </DropdownMenuItem>
           <DropdownMenuItem
             onSelect={() => {

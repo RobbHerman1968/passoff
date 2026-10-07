@@ -16,6 +16,20 @@ export class TestEmailTransport implements EmailTransport {
     });
   }
 
+  /**
+   * Extract an invitation path from the newest message for this address. Tests only;
+   * production code never surfaces raw invitation links to the browser.
+   */
+  extractInvitationPath(email: string): string | null {
+    for (let index = this.messages.length - 1; index >= 0; index -= 1) {
+      const message = this.messages[index];
+      if (message.to !== email) continue;
+      const match = message.text.match(/\/invite\/[A-Za-z0-9_-]+/);
+      if (match) return match[0];
+    }
+    return null;
+  }
+
   clear() {
     this.messages.length = 0;
   }

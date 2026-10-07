@@ -30,6 +30,66 @@ async function initSdk(page: Page) {
 }
 
 test.describe("website SDK end-to-end", () => {
+  test("keeps privacy choices available and records SPA page views", async ({ page }) => {
+    const batches: Array<{ events?: Array<{ eventType?: string; route?: string }> }> = [];
+    await page.route("**/api/sdk/v1/installations/verify", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          status: "ready",
+          analytics: {
+            enabled: true,
+            mode: "strict_consent",
+            schemaVersion: 1,
+            samplingPercent: 100,
+            excludedRoutes: [],
+            organizationName: "Harness",
+            hideBuiltInPrivacyLink: false,
+          },
+        }),
+      });
+    });
+    await page.route("**/api/sdk/v1/events", async (route) => {
+      batches.push((await route.request().postDataJSON()) ?? {});
+      await route.fulfill({
+        status: 202,
+        contentType: "application/json",
+        body: JSON.stringify({ ok: true }),
+      });
+    });
+    await page.goto("/dev/website-sdk/app");
+    await ensureSdk(page);
+    await page.evaluate(async () => {
+      await window.Passoff?.configure({
+        installationKey: "pk_0123456789abcdef0123456789abcdef",
+        apiBaseUrl: window.location.origin,
+        assetBaseUrl: `${window.location.origin}/dev/website-sdk/sdk/`,
+      });
+    });
+
+    await page.locator("#passoff-privacy-root").getByRole("button", {
+      name: "Allow usability data",
+    }).click();
+    await expect(page.locator("#passoff-privacy-root")).toHaveCount(0);
+    await expect(page.locator("#passoff-privacy-choice-launcher")).toHaveCount(1);
+
+    await page.getByRole("link", { name: "About this campaign" }).click();
+    await expect(page).toHaveURL(/\/dev\/website-sdk\/app\/about/);
+    await expect.poll(() =>
+      batches
+        .flatMap((batch) => batch.events ?? [])
+        .filter((event) => event.eventType === "page_view")
+        .map((event) => event.route),
+    ).toEqual(["/dev/website-sdk/app", "/dev/website-sdk/app/about"]);
+
+    await page.locator("#passoff-privacy-choice-launcher").getByRole("button", {
+      name: "Open usability privacy choices",
+    }).click();
+    await expect(page.locator("#passoff-privacy-root")).toHaveCount(1);
+  });
+
   test("loads the built SDK asynchronously into a host page", async ({ page }) => {
     await page.goto("/dev/website-sdk/bare");
     await expect(page.locator("#hero")).toBeVisible();

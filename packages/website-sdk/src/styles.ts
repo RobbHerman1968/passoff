@@ -429,6 +429,127 @@ export const REVIEW_STYLES = `
   margin-bottom: 12px;
 }
 
+.discussion {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.discussion h3 {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.3;
+}
+
+.discussion .form-status,
+.discussion .field-error {
+  margin: 0;
+}
+
+.discussion-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.discussion-item {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--background);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.discussion-item header {
+  color: var(--muted-foreground);
+}
+
+.discussion-item header strong {
+  color: var(--foreground);
+}
+
+.discussion-item .discussion-body {
+  margin: 4px 0 0;
+  color: var(--foreground);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.approval-state {
+  display: block;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--subtle);
+  color: var(--foreground);
+  font-size: 13px;
+  line-height: 1.45;
+  font-weight: 600;
+  margin-bottom: 12px;
+}
+
+.panel .approval-message {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--background);
+  color: var(--foreground);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.choices {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+
+.choices legend {
+  padding: 0;
+  margin-bottom: 4px;
+}
+
+.choice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 6px 12px;
+  border: 1px solid var(--control-border);
+  border-radius: 9px;
+  background: var(--background);
+  color: var(--foreground);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.choice input {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  accent-color: var(--primary);
+}
+
+.choice:focus-within {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.choice:has(input:checked) {
+  border-color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 10%, var(--card));
+}
+
 .feedback-form {
   display: grid;
   gap: 10px;

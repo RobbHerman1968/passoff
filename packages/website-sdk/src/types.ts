@@ -78,6 +78,7 @@ export type PassoffConfigureResult = {
   reason?: string;
   verified: boolean;
   status?: "ready" | "disabled" | "unknown";
+  analytics?: import("./analytics/contract").AnalyticsBootstrap;
 };
 
 export type PrototypeAnchor = {
@@ -149,7 +150,14 @@ export type PublicPassoffState = {
   canComment: boolean;
 };
 
-export type PassoffCommand = "configure" | "init" | "destroy" | "setMode";
+export type PassoffCommand =
+  | "configure"
+  | "init"
+  | "destroy"
+  | "setMode"
+  | "openPrivacyChoices"
+  | "excludeSession"
+  | "setRouteTemplate";
 
 export type PassoffApi = {
   configure: (config?: PassoffConfigureConfig) => Promise<PassoffConfigureResult>;
@@ -163,6 +171,15 @@ export type PassoffApi = {
   revalidateMarkers: () => void;
   removeSelectedElement: () => void;
   attemptScreenshot: () => Promise<ScreenshotResult | null>;
+  openPrivacyChoices: () => void;
+  excludeSession: () => void;
+  setRouteTemplate: (template: string) => void;
+  registerVerificationCheck: (
+    name: string,
+    fn: () =>
+      | { outcome: "passed" | "failed" | "uncertain"; summary?: string }
+      | Promise<{ outcome: "passed" | "failed" | "uncertain"; summary?: string }>,
+  ) => void;
   version: string;
 };
 

@@ -9,9 +9,11 @@ import {
   __getRuntime,
   __resetSdkStateForTests,
   __setReviewLoader,
+  __setVerificationLoader,
   installPassoff,
   PROTOTYPE_SESSION_VALUE,
 } from "./index";
+import { writeStoredVerificationSession } from "./session-store";
 import { KILL_SWITCH_STORAGE_KEY } from "./types";
 import { captureAnchor } from "./anchor";
 import { NEARBY_TEXT_LIMIT } from "./types";
@@ -110,6 +112,49 @@ describe("website SDK prototype", () => {
     const init = await api.init({});
     expect(init.active).toBe(false);
     expect(document.getElementById(HOST_ROOT_ID)).toBeNull();
+  });
+
+  it("resumes an in-progress verification after a refresh-style remount", async () => {
+    const api = await boot();
+    const mountVerification = vi.fn(() => ({ destroy: vi.fn() }));
+    __setVerificationLoader(async () => ({ mountVerification }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ ok: true, status: "ready" }),
+      }),
+    );
+    const bootstrap = {
+      issueNumber: 7,
+      issueTitle: "Navigation overlaps",
+      environmentName: "Production",
+      expectedVersion: "release-7",
+      pageRoute: "/",
+      selectedChecks: ["element_visibility"],
+      namedHook: null,
+      hookAllowlist: [],
+      returnPath: "/issues/7",
+      marker: null,
+    };
+    writeStoredVerificationSession({
+      sessionToken: "verification-token",
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      installationKey: "pk_0123456789abcdef0123456789abcdef",
+      bootstrap,
+    });
+
+    await api.configure({
+      installationKey: "pk_0123456789abcdef0123456789abcdef",
+      apiBaseUrl: "https://embed.example.com",
+    });
+
+    expect(mountVerification).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionToken: "verification-token",
+        bootstrap,
+      }),
+    );
   });
 
   it("does not break the host page when configure verification fails", async () => {

@@ -17,6 +17,40 @@ describe("webhook security", () => {
     expect(parseWebhookUrl("https://example.com:8443/hook", true).ok).toBe(false);
   });
 
+  it("rejects every non-public IPv4 and IPv6 form, including mapped and bracketed ones", () => {
+    const blocked = [
+      "https://0.0.0.0/h",
+      "https://100.64.0.1/h",
+      "https://198.18.0.1/h",
+      "https://224.0.0.1/h",
+      "https://255.255.255.255/h",
+      "https://2130706433/h", // decimal 127.0.0.1
+      "https://0x7f.1/h",
+      "https://[::1]/h",
+      "https://[::]/h",
+      "https://[fe80::1]/h",
+      "https://[fd00::1]/h",
+      "https://[fec0::1]/h",
+      "https://[ff02::1]/h",
+      "https://[::ffff:127.0.0.1]/h",
+      "https://[::ffff:7f00:1]/h",
+      "https://[::ffff:a9fe:a9fe]/h", // 169.254.169.254
+      "https://[64:ff9b::7f00:1]/h",
+      "https://[2002:7f00:1::]/h",
+      "https://service.internal/h",
+      "https://printer.local/h",
+    ];
+    for (const url of blocked) {
+      expect(parseWebhookUrl(url, true).ok, url).toBe(false);
+    }
+  });
+
+  it("allows public IP literals and ordinary hosts", () => {
+    expect(parseWebhookUrl("https://93.184.216.34/h", true).ok).toBe(true);
+    expect(parseWebhookUrl("https://[2606:2800:220:1::1]/h", true).ok).toBe(true);
+    expect(parseWebhookUrl("https://hooks.example.com/h", true).ok).toBe(true);
+  });
+
   it("allows https production endpoints on port 443", () => {
     const parsed = parseWebhookUrl("https://hooks.example.com/passoff", true);
     expect(parsed.ok).toBe(true);

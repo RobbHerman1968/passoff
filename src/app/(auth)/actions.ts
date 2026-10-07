@@ -4,7 +4,7 @@ import { AuthError } from "next-auth";
 import { redirect } from "next/navigation";
 
 import { getValidSession, signIn, signOut } from "@/auth";
-import { sanitizeCallbackUrl } from "@/lib/auth/callback-url";
+import { sanitizeCallbackUrl, sanitizePostSignUpUrl } from "@/lib/auth/callback-url";
 import { userHasActiveMembership } from "@/lib/auth/membership";
 import {
   inspectResetToken,
@@ -156,7 +156,7 @@ export async function signUpAction(
     await signIn("credentials", {
       email: parsed.data.email,
       password: parsed.data.password,
-      redirectTo: "/onboarding",
+      redirectTo: sanitizePostSignUpUrl(formString(formData, "callbackUrl")),
     });
     return { status: "success" };
   } catch (error) {

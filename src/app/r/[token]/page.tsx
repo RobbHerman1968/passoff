@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 
 import { ReviewLaunchForm } from "@/app/r/[token]/launch-form";
+import { GuestApprovalCard } from "@/components/approvals/guest-approval-card";
+import { getGuestApprovalOffer } from "@/lib/approvals/requests";
 import { LogoMark } from "@/components/logo";
 import { resolveShareLinkToken } from "@/lib/reviews/share-links";
 import { getReviewForSharePage } from "@/lib/reviews/share-page";
@@ -98,6 +100,16 @@ export default async function ReviewLaunchPage({
     // keep fallback
   }
 
+  const approvalOffer = await getGuestApprovalOffer({
+    workspaceId: resolved.workspaceId,
+    reviewId: resolved.reviewId,
+    shareLinkId: resolved.shareLinkId,
+    canApprove: resolved.canApprove,
+  }).catch(() => null);
+  const showApproval =
+    approvalOffer &&
+    (approvalOffer.canDecide || approvalOffer.status.visibleState !== "not_requested");
+
   return (
     <main className="bg-background text-foreground flex min-h-dvh flex-col items-center justify-center px-4 py-10">
       <div className="mb-8">
@@ -112,6 +124,7 @@ export default async function ReviewLaunchPage({
         reviewName={detail?.name ?? "this review"}
         websiteHost={websiteHost}
       />
+      {showApproval ? <GuestApprovalCard token={token} offer={approvalOffer} /> : null}
     </main>
   );
 }

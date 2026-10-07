@@ -1,5 +1,7 @@
 import type { AdapterAccountType } from "@auth/core/adapters";
 import { sql } from "drizzle-orm";
+
+import type { VideoLifecycle, VideoRemovalReason } from "@/lib/video/states";
 import {
   bigint,
   boolean,
@@ -126,6 +128,13 @@ export const approvalDecision = pgEnum("approval_decision", [
   "approved",
   "changes_requested",
 ]);
+export const approvalRequestState = pgEnum("approval_request_state", [
+  "awaiting_decision",
+  "approved",
+  "changes_requested",
+  "cancelled",
+  "superseded",
+]);
 export const notificationFrequency = pgEnum("notification_frequency", [
   "immediate",
   "digest",
@@ -150,6 +159,62 @@ export const subscriptionStatus = pgEnum("subscription_status", [
   "past_due",
   "cancelled",
 ]);
+export const telemetryCollectionMode = pgEnum("telemetry_collection_mode", [
+  "off",
+  "strict_consent",
+  "privacy_first_aggregate",
+]);
+export const telemetryEventType = pgEnum("telemetry_event_type", [
+  "page_view",
+  "element_click",
+  "scroll_milestone",
+  "repeat_click_signal",
+  "dead_click_candidate",
+  "sanitized_javascript_error",
+]);
+export const telemetryViewportGroup = pgEnum("telemetry_viewport_group", [
+  "mobile",
+  "tablet",
+  "desktop",
+]);
+export const telemetryTrafficKind = pgEnum("telemetry_traffic_kind", [
+  "production",
+  "test",
+]);
+export const telemetryConsentState = pgEnum("telemetry_consent_state", [
+  "granted",
+  "aggregate_notice",
+]);
+export const behavioralFindingType = pgEnum("behavioral_finding_type", [
+  "click_concentration",
+  "repeat_click_concentration",
+  "possible_dead_click",
+  "scroll_drop_off",
+  "sanitized_js_error_concentration",
+  "material_version_change",
+]);
+export const behavioralFindingDisposition = pgEnum(
+  "behavioral_finding_disposition",
+  [
+    "needs_review",
+    "attached_to_issue",
+    "issue_created",
+    "dismissed",
+    "watching",
+    "insufficient_data",
+    "no_longer_occurring",
+  ],
+);
+export const behavioralComparisonOutcome = pgEnum(
+  "behavioral_comparison_outcome",
+  [
+    "appears_improved",
+    "appears_unchanged",
+    "appears_worse",
+    "not_enough_data",
+    "incompatible",
+  ],
+);
 
 export type ConsentSettings = {
   version: number;
@@ -337,10 +402,23 @@ export const workspaces = pgTable(
     id: id(),
     name: text("name").notNull(),
     slug: text("slug").notNull(),
+    /**
+     * Set when an owner deletes the workspace. From that moment nobody can open it. The
+     * data stays until purgeAfter so the cleanup job can finish removing stored files.
+     */
     deletedAt: timestamp("deleted_at", { withTimezone: true }),
+    deletedByUserId: uuid("deleted_by_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    purgeAfter: timestamp("purge_after", { withTimezone: true }),
     ...timestamps,
   },
-  (table) => [uniqueIndex("workspaces_slug_unique").on(table.slug)],
+  (table) => [
+    uniqueIndex("workspaces_slug_unique").on(table.slug),
+    index("workspaces_purge_after_idx")
+      .on(table.purgeAfter)
+      .where(sql`${table.deletedAt} IS NOT NULL`),
+  ],
 );
 
 export const workspaceMemberships = pgTable(
@@ -363,6 +441,10 @@ export const workspaceMemberships = pgTable(
       table.userId,
     ),
     index("workspace_memberships_user_status_idx").on(table.userId, table.status),
+    // A workspace has exactly one active owner. Ownership moves in one transaction.
+    uniqueIndex("workspace_memberships_one_active_owner_unique")
+      .on(table.workspaceId)
+      .where(sql`${table.role} = 'owner' AND ${table.status} = 'active'`),
   ],
 );
 
@@ -381,12 +463,25 @@ export const workspaceInvitations = pgTable(
     }),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     acceptedAt: timestamp("accepted_at", { withTimezone: true }),
+    acceptedByUserId: uuid("accepted_by_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
     revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    lastSentAt: timestamp("last_sent_at", { withTimezone: true }).defaultNow().notNull(),
+    sendCount: integer("send_count").notNull().default(1),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [
     uniqueIndex("workspace_invitations_token_hash_unique").on(table.tokenHash),
     index("workspace_invitations_workspace_email_idx").on(table.workspaceId, table.email),
+    // One open invitation per person per workspace. Email is always stored lowercase.
+    uniqueIndex("workspace_invitations_pending_email_unique")
+      .on(table.workspaceId, table.email)
+      .where(sql`${table.acceptedAt} IS NULL AND ${table.revokedAt} IS NULL`),
+    check(
+      "workspace_invitations_email_normalized",
+      sql`${table.email} = lower(btrim(${table.email}))`,
+    ),
   ],
 );
 
@@ -438,6 +533,10 @@ export const projectEnvironments = pgTable(
       .$type<ConsentSettings>()
       .notNull()
       .default(DEFAULT_CONSENT_SETTINGS),
+    verificationHookAllowlist: jsonb("verification_hook_allowlist")
+      .$type<string[]>()
+      .notNull()
+      .default([]),
     version: integer("version").notNull().default(1),
     ...timestamps,
   },
@@ -729,6 +828,8 @@ export const shareLinks = pgTable(
     tokenHash: text("token_hash").notNull(),
     passwordHash: text("password_hash"),
     canComment: boolean("can_comment").notNull().default(true),
+    /** Explicit guest approval permission — independent of commenting. */
+    canApprove: boolean("can_approve").notNull().default(false),
     createdByUserId: uuid("created_by_user_id").references(() => users.id, {
       onDelete: "set null",
     }),
@@ -943,6 +1044,8 @@ export const issueComments = pgTable(
       .references(() => issues.id, { onDelete: "cascade" }),
     body: text("body").notNull(),
     isPrivate: boolean("is_private").notNull().default(false),
+    /** Snapshot so the thread stays readable if the account or guest later goes away. */
+    authorDisplayName: text("author_display_name").notNull().default("Someone"),
     authorUserId: uuid("author_user_id").references(() => users.id, { onDelete: "set null" }),
     authorGuestId: uuid("author_guest_id").references(() => guestIdentities.id, {
       onDelete: "set null",
@@ -1082,10 +1185,61 @@ export const videoAssets = pgTable(
     providerAssetId: text("provider_asset_id"),
     providerPlaybackId: text("provider_playback_id"),
     retentionEndsAt: timestamp("retention_ends_at", { withTimezone: true }),
+    /** The removal date members were last warned about. Prevents repeat warnings. */
+    retentionWarnedFor: timestamp("retention_warned_for", { withTimezone: true }),
     processingAttempt: integer("processing_attempt").notNull().default(0),
+    /** The issue this clip belongs to. Kept even if the evidence row is removed. */
+    issueId: uuid("issue_id").references(() => issues.id, { onDelete: "set null" }),
+    /**
+     * `current` is the clip people see, `replacement` is an upload waiting to take its
+     * place, `retired` was replaced or abandoned, `removed` was deleted on purpose.
+     */
+    lifecycle: text("lifecycle").$type<VideoLifecycle>().notNull().default("current"),
+    /** Size and length the browser reported. Mux's measured values replace them when ready. */
+    declaredDurationMs: integer("declared_duration_ms"),
+    declaredBytes: bigint("declared_bytes", { mode: "number" }),
+    /** Tallest video track Mux reported, in pixels. */
+    maxHeight: integer("max_height"),
+    metadataVerifiedAt: timestamp("metadata_verified_at", { withTimezone: true }),
+    removedAt: timestamp("removed_at", { withTimezone: true }),
+    removedByUserId: uuid("removed_by_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    removalReason: text("removal_reason").$type<VideoRemovalReason>(),
+    providerDeleteRequestedAt: timestamp("provider_delete_requested_at", {
+      withTimezone: true,
+    }),
+    providerDeletedAt: timestamp("provider_deleted_at", { withTimezone: true }),
+    providerDeleteAttempts: integer("provider_delete_attempts").notNull().default(0),
+    providerDeleteNextAttemptAt: timestamp("provider_delete_next_attempt_at", {
+      withTimezone: true,
+    }),
+    /** A short code such as `provider_error`. Never a raw provider message. */
+    providerDeleteLastError: text("provider_delete_last_error"),
     ...timestamps,
   },
   (table) => [
+    uniqueIndex("video_assets_one_current_per_issue")
+      .on(table.issueId)
+      .where(sql`${table.lifecycle} = 'current' and ${table.issueId} is not null`),
+    uniqueIndex("video_assets_one_replacement_per_issue")
+      .on(table.issueId)
+      .where(sql`${table.lifecycle} = 'replacement' and ${table.issueId} is not null`),
+    index("video_assets_issue_idx").on(table.issueId),
+    index("video_assets_retention_idx")
+      .on(table.retentionEndsAt)
+      .where(
+        sql`${table.retentionEndsAt} is not null and ${table.lifecycle} in ('current', 'replacement')`,
+      ),
+    index("video_assets_provider_delete_pending_idx")
+      .on(table.providerDeleteNextAttemptAt)
+      .where(
+        sql`${table.providerDeleteRequestedAt} is not null and ${table.providerDeletedAt} is null`,
+      ),
+    check(
+      "video_assets_lifecycle_valid",
+      sql`${table.lifecycle} in ('current', 'replacement', 'retired', 'removed')`,
+    ),
     uniqueIndex("video_assets_original_asset_unique").on(table.originalAssetId),
     uniqueIndex("video_assets_evidence_unique")
       .on(table.evidenceId)
@@ -1138,17 +1292,49 @@ export const providerEvents = pgTable(
   ],
 );
 
-export const legacyVideoAnchors = pgTable(
-  "legacy_video_anchors",
+/**
+ * A note left at one moment of one clip. The words live in the linked comment so the
+ * discussion stays the single place for replies; this row adds the time and the optional
+ * pin. Notes stay on the clip they were written for, even after it is replaced or removed.
+ */
+export const videoAnnotations = pgTable(
+  "video_annotations",
   {
-    issueId: uuid("issue_id").primaryKey(),
-    videoAssetId: uuid("video_asset_id"),
+    id: id(),
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    issueId: uuid("issue_id")
+      .notNull()
+      .references(() => issues.id, { onDelete: "cascade" }),
+    commentId: uuid("comment_id")
+      .notNull()
+      .references(() => issueComments.id, { onDelete: "cascade" }),
+    videoAssetId: uuid("video_asset_id")
+      .notNull()
+      .references(() => videoAssets.id, { onDelete: "cascade" }),
     timestampMs: integer("timestamp_ms").notNull(),
+    /** Position inside the picture itself (0 to 1), never the player or its black bars. */
     normalizedX: numeric("normalized_x", { precision: 8, scale: 7 }),
     normalizedY: numeric("normalized_y", { precision: 8, scale: 7 }),
-    thumbnailAssetId: uuid("thumbnail_asset_id"),
+    /** Length of the clip when the note was written. Set by the server, never the browser. */
+    durationAtCreationMs: integer("duration_at_creation_ms"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
+  (table) => [
+    uniqueIndex("video_annotations_comment_unique").on(table.commentId),
+    index("video_annotations_asset_time_idx").on(table.videoAssetId, table.timestampMs),
+    index("video_annotations_issue_idx").on(table.issueId),
+    check("video_annotations_timestamp_nonnegative", sql`${table.timestampMs} >= 0`),
+    check(
+      "video_annotations_pin_complete",
+      sql`(${table.normalizedX} is null) = (${table.normalizedY} is null)`,
+    ),
+    check(
+      "video_annotations_pin_range",
+      sql`${table.normalizedX} is null or (${table.normalizedX} between 0 and 1 and ${table.normalizedY} between 0 and 1)`,
+    ),
+  ],
 );
 
 export const issueAttachments = pgTable(
@@ -1159,11 +1345,19 @@ export const issueAttachments = pgTable(
       .references(() => assets.id, { onDelete: "cascade" }),
     issueId: uuid("issue_id").references(() => issues.id, { onDelete: "cascade" }),
     commentId: uuid("comment_id").references(() => issueComments.id, { onDelete: "cascade" }),
+    /** Private attachments are for workspace members only. Fail closed by default. */
+    isPrivate: boolean("is_private").notNull().default(true),
+    attachedByUserId: uuid("attached_by_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [
     primaryKey({ columns: [table.assetId] }),
     index("issue_attachments_issue_idx").on(table.issueId),
+    index("issue_attachments_issue_public_idx")
+      .on(table.issueId)
+      .where(sql`${table.isPrivate} = false`),
     index("issue_attachments_comment_idx").on(table.commentId),
     check(
       "issue_attachments_one_parent",
@@ -1306,10 +1500,18 @@ export const approvals = pgTable(
     workspaceId: uuid("workspace_id")
       .notNull()
       .references(() => workspaces.id, { onDelete: "cascade" }),
-    projectId: uuid("project_id").notNull(),
-    environmentId: uuid("environment_id").notNull(),
-    deploymentId: uuid("deployment_id").notNull(),
-    reviewId: uuid("review_id").notNull(),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    environmentId: uuid("environment_id")
+      .notNull()
+      .references(() => projectEnvironments.id, { onDelete: "cascade" }),
+    deploymentId: uuid("deployment_id")
+      .notNull()
+      .references(() => deployments.id, { onDelete: "restrict" }),
+    reviewId: uuid("review_id")
+      .notNull()
+      .references(() => reviews.id, { onDelete: "cascade" }),
     reviewerUserId: uuid("reviewer_user_id").references(() => users.id, {
       onDelete: "set null",
     }),
@@ -1333,27 +1535,67 @@ export const approvals = pgTable(
     uniqueIndex("approvals_review_deployment_guest_decision_unique")
       .on(table.reviewId, table.deploymentId, table.reviewerGuestId, table.decision)
       .where(sql`${table.reviewerGuestId} is not null and ${table.invalidatedAt} is null`),
-    foreignKey({
-      name: "approvals_review_scope_fk",
-      columns: [
-        table.reviewId,
-        table.workspaceId,
-        table.projectId,
-        table.environmentId,
-        table.deploymentId,
-      ],
-      foreignColumns: [
-        reviews.id,
-        reviews.workspaceId,
-        reviews.projectId,
-        reviews.environmentId,
-        reviews.deploymentId,
-      ],
-    }).onDelete("cascade"),
     check(
       "approvals_has_one_reviewer",
       sql`num_nonnulls(${table.reviewerUserId}, ${table.reviewerGuestId}) = 1`,
     ),
+  ],
+);
+
+export const approvalRequests = pgTable(
+  "approval_requests",
+  {
+    id: id(),
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    environmentId: uuid("environment_id")
+      .notNull()
+      .references(() => projectEnvironments.id, { onDelete: "cascade" }),
+    reviewId: uuid("review_id")
+      .notNull()
+      .references(() => reviews.id, { onDelete: "cascade" }),
+    deploymentId: uuid("deployment_id")
+      .notNull()
+      .references(() => deployments.id, { onDelete: "restrict" }),
+    requestedByUserId: uuid("requested_by_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    reviewerUserId: uuid("reviewer_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    shareLinkId: uuid("share_link_id").references(() => shareLinks.id, {
+      onDelete: "set null",
+    }),
+    message: text("message"),
+    state: approvalRequestState("state").notNull().default("awaiting_decision"),
+    dueAt: timestamp("due_at", { withTimezone: true }),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    cancelledAt: timestamp("cancelled_at", { withTimezone: true }),
+    supersededByRequestId: uuid("superseded_by_request_id"),
+    decisionApprovalId: uuid("decision_approval_id").references(() => approvals.id, {
+      onDelete: "set null",
+    }),
+    openIssueCount: integer("open_issue_count").notNull().default(0),
+    awaitingVerificationCount: integer("awaiting_verification_count").notNull().default(0),
+    verifiedIssueCount: integer("verified_issue_count").notNull().default(0),
+    unresolvedAcknowledged: boolean("unresolved_acknowledged").notNull().default(false),
+    ...timestamps,
+  },
+  (table) => [
+    index("approval_requests_review_created_idx").on(table.reviewId, table.createdAt),
+    index("approval_requests_deployment_idx").on(table.deploymentId),
+    uniqueIndex("approval_requests_active_review_deployment_unique")
+      .on(table.reviewId, table.deploymentId)
+      .where(sql`${table.state} = 'awaiting_decision'`),
+    foreignKey({
+      name: "approval_requests_superseded_by_request_id_approval_requests_id_fk",
+      columns: [table.supersededByRequestId],
+      foreignColumns: [table.id],
+    }).onDelete("set null"),
   ],
 );
 
@@ -1544,9 +1786,28 @@ export const subscriptions = pgTable(
     currentPeriodStart: timestamp("current_period_start", { withTimezone: true }),
     currentPeriodEnd: timestamp("current_period_end", { withTimezone: true }),
     cancelAtPeriodEnd: boolean("cancel_at_period_end").notNull().default(false),
+    /** "month" or "year". Null for the free placeholder row. */
+    billingInterval: text("billing_interval"),
+    /** The price the provider is charging. Only used to tell plans apart, never shown. */
+    providerPriceId: text("provider_price_id"),
+    /**
+     * Set the first time this workspace starts a trial and never cleared, so a
+     * workspace gets one trial no matter how many times it subscribes.
+     */
+    trialStartedAt: timestamp("trial_started_at", { withTimezone: true }),
+    trialEndsAt: timestamp("trial_ends_at", { withTimezone: true }),
+    /** When the first unpaid invoice in the current run of failures appeared. */
+    pastDueSince: timestamp("past_due_since", { withTimezone: true }),
+    cancelledAt: timestamp("cancelled_at", { withTimezone: true }),
+    /** Provider time of the newest event applied, so an older event never undoes a newer one. */
+    providerEventAt: timestamp("provider_event_at", { withTimezone: true }),
     ...timestamps,
   },
   (table) => [
+    check(
+      "subscriptions_billing_interval_valid",
+      sql`${table.billingInterval} is null or ${table.billingInterval} in ('month', 'year')`,
+    ),
     uniqueIndex("subscriptions_workspace_unique").on(table.workspaceId),
     uniqueIndex("subscriptions_provider_customer_unique").on(
       table.provider,
@@ -1637,5 +1898,788 @@ export const websiteAnalyses = pgTable(
         projectEnvironments.projectId,
       ],
     }).onDelete("cascade"),
+  ],
+);
+
+export type TelemetryCollectionMode =
+  (typeof telemetryCollectionMode.enumValues)[number];
+export type TelemetryEventType = (typeof telemetryEventType.enumValues)[number];
+export type TelemetryViewportGroup =
+  (typeof telemetryViewportGroup.enumValues)[number];
+export type TelemetryTrafficKind =
+  (typeof telemetryTrafficKind.enumValues)[number];
+
+export const DEFAULT_TELEMETRY_RAW_RETENTION_HOURS = 72;
+export const MAX_TELEMETRY_RAW_RETENTION_HOURS = 168;
+export const DEFAULT_TELEMETRY_AGGREGATE_RETENTION_DAYS = 90;
+export const DEFAULT_TELEMETRY_SAMPLING_PERCENT = 100;
+export const DEFAULT_TELEMETRY_MIN_SAMPLE_SESSIONS = 10;
+
+/**
+ * Owner-configured visitor analytics for one environment.
+ * Disabled by default. Distinct from review screenshot consentSettings.
+ */
+export const environmentTelemetrySettings = pgTable(
+  "environment_telemetry_settings",
+  {
+    id: id(),
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    projectId: uuid("project_id").notNull(),
+    environmentId: uuid("environment_id").notNull(),
+    collectionMode: telemetryCollectionMode("collection_mode")
+      .notNull()
+      .default("off"),
+    enabledOrigins: jsonb("enabled_origins").$type<string[]>().notNull().default([]),
+    excludedRoutes: jsonb("excluded_routes").$type<string[]>().notNull().default([]),
+    samplingPercent: integer("sampling_percent").notNull().default(100),
+    rawRetentionHours: integer("raw_retention_hours").notNull().default(72),
+    aggregateRetentionDays: integer("aggregate_retention_days")
+      .notNull()
+      .default(90),
+    minSampleSessions: integer("min_sample_sessions").notNull().default(10),
+    organizationName: text("organization_name"),
+    privacyPolicyUrl: text("privacy_policy_url"),
+    hideBuiltInPrivacyLink: boolean("hide_built_in_privacy_link")
+      .notNull()
+      .default(false),
+    testModeEnabled: boolean("test_mode_enabled").notNull().default(false),
+    environmentKillSwitch: boolean("environment_kill_switch")
+      .notNull()
+      .default(false),
+    lastAcceptedEventAt: timestamp("last_accepted_event_at", {
+      withTimezone: true,
+    }),
+    lastAggregatedAt: timestamp("last_aggregated_at", { withTimezone: true }),
+    lastLimitNotifiedAt: timestamp("last_limit_notified_at", {
+      withTimezone: true,
+    }),
+    version: integer("version").notNull().default(1),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("environment_telemetry_settings_environment_unique").on(
+      table.environmentId,
+    ),
+    index("environment_telemetry_settings_workspace_idx").on(table.workspaceId),
+    foreignKey({
+      name: "environment_telemetry_settings_scope_fk",
+      columns: [table.environmentId, table.workspaceId, table.projectId],
+      foreignColumns: [
+        projectEnvironments.id,
+        projectEnvironments.workspaceId,
+        projectEnvironments.projectId,
+      ],
+    }).onDelete("cascade"),
+    check(
+      "environment_telemetry_sampling_range",
+      sql`${table.samplingPercent} >= 1 AND ${table.samplingPercent} <= 100`,
+    ),
+    check(
+      "environment_telemetry_raw_retention_range",
+      sql`${table.rawRetentionHours} >= 1 AND ${table.rawRetentionHours} <= 168`,
+    ),
+    check(
+      "environment_telemetry_aggregate_retention_range",
+      sql`${table.aggregateRetentionDays} >= 1 AND ${table.aggregateRetentionDays} <= 365`,
+    ),
+    check("environment_telemetry_version_positive", sql`${table.version} > 0`),
+  ],
+);
+
+/**
+ * Short-retention raw events. Inaccessible from ordinary product UI.
+ * tab_session_hash is a keyed HMAC, never the client value, never shown.
+ */
+export const telemetryRawEvents = pgTable(
+  "telemetry_raw_events",
+  {
+    id: id(),
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    projectId: uuid("project_id").notNull(),
+    environmentId: uuid("environment_id").notNull(),
+    schemaVersion: integer("schema_version").notNull(),
+    eventId: text("event_id").notNull(),
+    batchId: text("batch_id").notNull(),
+    eventType: telemetryEventType("event_type").notNull(),
+    occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
+    receivedAt: timestamp("received_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    trafficKind: telemetryTrafficKind("traffic_kind").notNull().default("production"),
+    consentState: telemetryConsentState("consent_state").notNull(),
+    normalizedRoute: text("normalized_route").notNull(),
+    deploymentVersion: text("deployment_version").notNull().default(""),
+    viewportGroup: telemetryViewportGroup("viewport_group").notNull(),
+    samplingPercent: integer("sampling_percent").notNull(),
+    coordinateBucketX: integer("coordinate_bucket_x"),
+    coordinateBucketY: integer("coordinate_bucket_y"),
+    elementCategory: text("element_category"),
+    analyticsLabel: text("analytics_label"),
+    scrollMilestone: integer("scroll_milestone"),
+    errorCategory: text("error_category"),
+    errorFingerprint: text("error_fingerprint"),
+    sourceCategory: text("source_category"),
+    tabSessionHash: text("tab_session_hash").notNull(),
+    hourBucket: timestamp("hour_bucket", { withTimezone: true }).notNull(),
+    aggregatedAt: timestamp("aggregated_at", { withTimezone: true }),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  },
+  (table) => [
+    uniqueIndex("telemetry_raw_events_event_id_unique").on(table.eventId),
+    index("telemetry_raw_events_env_received_idx").on(
+      table.environmentId,
+      table.receivedAt,
+    ),
+    index("telemetry_raw_events_unaggregated_idx")
+      .on(table.environmentId, table.receivedAt)
+      .where(sql`${table.aggregatedAt} IS NULL`),
+    index("telemetry_raw_events_expires_idx").on(table.expiresAt),
+    foreignKey({
+      name: "telemetry_raw_events_scope_fk",
+      columns: [table.environmentId, table.workspaceId, table.projectId],
+      foreignColumns: [
+        projectEnvironments.id,
+        projectEnvironments.workspaceId,
+        projectEnvironments.projectId,
+      ],
+    }).onDelete("cascade"),
+  ],
+);
+
+export const telemetryIngestDedup = pgTable(
+  "telemetry_ingest_dedup",
+  {
+    id: id(),
+    environmentId: uuid("environment_id").notNull(),
+    kind: text("kind").notNull(),
+    dedupKey: text("dedup_key").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("telemetry_ingest_dedup_key_unique").on(
+      table.environmentId,
+      table.kind,
+      table.dedupKey,
+    ),
+    index("telemetry_ingest_dedup_expires_idx").on(table.expiresAt),
+  ],
+);
+
+export const telemetryAggregates = pgTable(
+  "telemetry_aggregates",
+  {
+    id: id(),
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    projectId: uuid("project_id").notNull(),
+    environmentId: uuid("environment_id").notNull(),
+    trafficKind: telemetryTrafficKind("traffic_kind").notNull().default("production"),
+    hourBucket: timestamp("hour_bucket", { withTimezone: true }).notNull(),
+    deploymentVersion: text("deployment_version").notNull().default(""),
+    normalizedRoute: text("normalized_route").notNull(),
+    viewportGroup: telemetryViewportGroup("viewport_group").notNull(),
+    eventType: telemetryEventType("event_type").notNull(),
+    elementCategory: text("element_category").notNull().default(""),
+    analyticsLabel: text("analytics_label").notNull().default(""),
+    coordinateBucketX: integer("coordinate_bucket_x").notNull().default(-1),
+    coordinateBucketY: integer("coordinate_bucket_y").notNull().default(-1),
+    scrollMilestone: integer("scroll_milestone").notNull().default(-1),
+    errorCategory: text("error_category").notNull().default(""),
+    errorFingerprint: text("error_fingerprint").notNull().default(""),
+    eventCount: bigint("event_count", { mode: "number" }).notNull().default(0),
+    tabSessionCount: bigint("tab_session_count", { mode: "number" })
+      .notNull()
+      .default(0),
+    firstOccurredAt: timestamp("first_occurred_at", { withTimezone: true }),
+    lastOccurredAt: timestamp("last_occurred_at", { withTimezone: true }),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("telemetry_aggregates_dimension_unique").on(
+      table.environmentId,
+      table.trafficKind,
+      table.hourBucket,
+      table.deploymentVersion,
+      table.normalizedRoute,
+      table.viewportGroup,
+      table.eventType,
+      table.elementCategory,
+      table.analyticsLabel,
+      table.coordinateBucketX,
+      table.coordinateBucketY,
+      table.scrollMilestone,
+      table.errorCategory,
+      table.errorFingerprint,
+    ),
+    index("telemetry_aggregates_query_idx").on(
+      table.environmentId,
+      table.trafficKind,
+      table.hourBucket,
+      table.normalizedRoute,
+      table.eventType,
+    ),
+    index("telemetry_aggregates_expires_idx").on(table.expiresAt),
+    foreignKey({
+      name: "telemetry_aggregates_scope_fk",
+      columns: [table.environmentId, table.workspaceId, table.projectId],
+      foreignColumns: [
+        projectEnvironments.id,
+        projectEnvironments.workspaceId,
+        projectEnvironments.projectId,
+      ],
+    }).onDelete("cascade"),
+  ],
+);
+
+/**
+ * One scoped row per tab session and aggregate dimension. This preserves exact
+ * distinct-session counts across cron batches and hour buckets without storing
+ * a stable visitor identity or exposing the keyed session hash to product UI.
+ */
+export const telemetryAggregateSessions = pgTable(
+  "telemetry_aggregate_sessions",
+  {
+    id: id(),
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    projectId: uuid("project_id").notNull(),
+    environmentId: uuid("environment_id").notNull(),
+    trafficKind: telemetryTrafficKind("traffic_kind").notNull().default("production"),
+    hourBucket: timestamp("hour_bucket", { withTimezone: true }).notNull(),
+    deploymentVersion: text("deployment_version").notNull().default(""),
+    normalizedRoute: text("normalized_route").notNull(),
+    viewportGroup: telemetryViewportGroup("viewport_group").notNull(),
+    eventType: telemetryEventType("event_type").notNull(),
+    elementCategory: text("element_category").notNull().default(""),
+    analyticsLabel: text("analytics_label").notNull().default(""),
+    coordinateBucketX: integer("coordinate_bucket_x").notNull().default(-1),
+    coordinateBucketY: integer("coordinate_bucket_y").notNull().default(-1),
+    scrollMilestone: integer("scroll_milestone").notNull().default(-1),
+    errorCategory: text("error_category").notNull().default(""),
+    errorFingerprint: text("error_fingerprint").notNull().default(""),
+    tabSessionHash: text("tab_session_hash").notNull(),
+    firstOccurredAt: timestamp("first_occurred_at", { withTimezone: true }).notNull(),
+    lastOccurredAt: timestamp("last_occurred_at", { withTimezone: true }).notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("telemetry_aggregate_sessions_dimension_unique").on(
+      table.environmentId,
+      table.trafficKind,
+      table.hourBucket,
+      table.deploymentVersion,
+      table.normalizedRoute,
+      table.viewportGroup,
+      table.eventType,
+      table.elementCategory,
+      table.analyticsLabel,
+      table.coordinateBucketX,
+      table.coordinateBucketY,
+      table.scrollMilestone,
+      table.errorCategory,
+      table.errorFingerprint,
+      table.tabSessionHash,
+    ),
+    index("telemetry_aggregate_sessions_query_idx").on(
+      table.environmentId,
+      table.trafficKind,
+      table.normalizedRoute,
+      table.deploymentVersion,
+      table.viewportGroup,
+      table.eventType,
+      table.hourBucket,
+    ),
+    index("telemetry_aggregate_sessions_expires_idx").on(table.expiresAt),
+    foreignKey({
+      name: "telemetry_aggregate_sessions_scope_fk",
+      columns: [table.environmentId, table.workspaceId, table.projectId],
+      foreignColumns: [
+        projectEnvironments.id,
+        projectEnvironments.workspaceId,
+        projectEnvironments.projectId,
+      ],
+    }).onDelete("cascade"),
+  ],
+);
+
+export const telemetryAggregationCheckpoints = pgTable(
+  "telemetry_aggregation_checkpoints",
+  {
+    id: id(),
+    environmentId: uuid("environment_id").notNull(),
+    lastAggregatedAt: timestamp("last_aggregated_at", { withTimezone: true }),
+    lastRawEventId: uuid("last_raw_event_id"),
+    acceptedEventCount: bigint("accepted_event_count", {
+      mode: "number",
+    })
+      .notNull()
+      .default(0),
+    aggregatedEventCount: bigint("aggregated_event_count", {
+      mode: "number",
+    })
+      .notNull()
+      .default(0),
+    lastError: text("last_error"),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("telemetry_aggregation_checkpoints_env_unique").on(
+      table.environmentId,
+    ),
+  ],
+);
+
+export const telemetryUsageCounters = pgTable(
+  "telemetry_usage_counters",
+  {
+    id: id(),
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    environmentId: uuid("environment_id").notNull(),
+    periodStart: timestamp("period_start", { withTimezone: true }).notNull(),
+    periodEnd: timestamp("period_end", { withTimezone: true }).notNull(),
+    acceptedEvents: bigint("accepted_events", { mode: "number" })
+      .notNull()
+      .default(0),
+    droppedEvents: bigint("dropped_events", { mode: "number" })
+      .notNull()
+      .default(0),
+    sampledOutEvents: bigint("sampled_out_events", { mode: "number" })
+      .notNull()
+      .default(0),
+    errorEvents: bigint("error_events", { mode: "number" }).notNull().default(0),
+    testEvents: bigint("test_events", { mode: "number" }).notNull().default(0),
+    limitedAt: timestamp("limited_at", { withTimezone: true }),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("telemetry_usage_counters_env_period_unique").on(
+      table.environmentId,
+      table.periodStart,
+    ),
+    index("telemetry_usage_counters_workspace_period_idx").on(
+      table.workspaceId,
+      table.periodStart,
+    ),
+  ],
+);
+
+/**
+ * One-time codes for authorized live heatmap viewing.
+ * Distinct from review share-link exchanges.
+ */
+export const telemetryViewExchanges = pgTable(
+  "telemetry_view_exchanges",
+  {
+    id: id(),
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    projectId: uuid("project_id").notNull(),
+    environmentId: uuid("environment_id").notNull(),
+    actorUserId: uuid("actor_user_id").notNull(),
+    codeHash: text("code_hash").notNull(),
+    allowedOrigin: text("allowed_origin").notNull(),
+    viewScope: jsonb("view_scope").$type<Record<string, unknown>>().notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    consumedAt: timestamp("consumed_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("telemetry_view_exchanges_code_hash_unique").on(table.codeHash),
+    index("telemetry_view_exchanges_expiry_idx").on(table.expiresAt),
+  ],
+);
+
+export const telemetryViewSessions = pgTable(
+  "telemetry_view_sessions",
+  {
+    id: id(),
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    projectId: uuid("project_id").notNull(),
+    environmentId: uuid("environment_id").notNull(),
+    actorUserId: uuid("actor_user_id").notNull(),
+    tokenHash: text("token_hash").notNull(),
+    allowedOrigin: text("allowed_origin").notNull(),
+    viewScope: jsonb("view_scope").$type<Record<string, unknown>>().notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("telemetry_view_sessions_token_hash_unique").on(table.tokenHash),
+    index("telemetry_view_sessions_expiry_idx").on(table.expiresAt),
+  ],
+);
+
+/** Singleton-style platform emergency switch. Id is always `platform`. */
+export const platformTelemetryControls = pgTable("platform_telemetry_controls", {
+  id: text("id").primaryKey(),
+  killSwitch: boolean("kill_switch").notNull().default(false),
+  updatedByUserId: uuid("updated_by_user_id").references(() => users.id, {
+    onDelete: "set null",
+  }),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export type BehavioralFindingType =
+  (typeof behavioralFindingType.enumValues)[number];
+export type BehavioralFindingDisposition =
+  (typeof behavioralFindingDisposition.enumValues)[number];
+
+export const behavioralFindings = pgTable(
+  "behavioral_findings",
+  {
+    id: id(),
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    projectId: uuid("project_id").notNull(),
+    environmentId: uuid("environment_id").notNull(),
+    findingType: behavioralFindingType("finding_type").notNull(),
+    ruleVersion: text("rule_version").notNull(),
+    scopeKey: text("scope_key").notNull(),
+    title: text("title").notNull(),
+    explanation: text("explanation").notNull(),
+    uncertainty: text("uncertainty").notNull(),
+    normalizedRoute: text("normalized_route").notNull(),
+    deploymentVersion: text("deployment_version").notNull().default(""),
+    viewportGroup: telemetryViewportGroup("viewport_group").notNull(),
+    windowStart: timestamp("window_start", { withTimezone: true }).notNull(),
+    windowEnd: timestamp("window_end", { withTimezone: true }).notNull(),
+    elementCategory: text("element_category").notNull().default(""),
+    analyticsLabel: text("analytics_label").notNull().default(""),
+    metricName: text("metric_name").notNull(),
+    metricValue: numeric("metric_value", { precision: 12, scale: 6 }).notNull(),
+    denominatorName: text("denominator_name").notNull(),
+    denominatorValue: bigint("denominator_value", { mode: "number" }).notNull(),
+    eventCount: bigint("event_count", { mode: "number" }).notNull(),
+    eligibleSessionCount: bigint("eligible_session_count", {
+      mode: "number",
+    }).notNull(),
+    samplingPercent: integer("sampling_percent").notNull(),
+    coverageStatus: text("coverage_status").notNull(),
+    dataQuality: text("data_quality").notNull(),
+    disposition: behavioralFindingDisposition("disposition")
+      .notNull()
+      .default("needs_review"),
+    relatedIssueId: uuid("related_issue_id"),
+    relatedReviewId: uuid("related_review_id"),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("behavioral_findings_active_scope_unique")
+      .on(table.environmentId, table.scopeKey)
+      .where(
+        sql`${table.disposition} IN ('needs_review', 'watching', 'attached_to_issue', 'issue_created')`,
+      ),
+    index("behavioral_findings_workspace_idx").on(
+      table.workspaceId,
+      table.updatedAt,
+    ),
+    foreignKey({
+      name: "behavioral_findings_scope_fk",
+      columns: [table.environmentId, table.workspaceId, table.projectId],
+      foreignColumns: [
+        projectEnvironments.id,
+        projectEnvironments.workspaceId,
+        projectEnvironments.projectId,
+      ],
+    }).onDelete("cascade"),
+  ],
+);
+
+export const behavioralEvidenceSnapshots = pgTable(
+  "behavioral_evidence_snapshots",
+  {
+    id: id(),
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    projectId: uuid("project_id").notNull(),
+    environmentId: uuid("environment_id").notNull(),
+    findingId: uuid("finding_id").notNull(),
+    issueId: uuid("issue_id"),
+    reviewId: uuid("review_id"),
+    payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
+    createdByUserId: uuid("created_by_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("behavioral_evidence_snapshots_issue_idx").on(table.issueId),
+    index("behavioral_evidence_snapshots_finding_idx").on(table.findingId),
+    uniqueIndex("behavioral_evidence_snapshots_finding_issue_unique").on(
+      table.findingId,
+      table.issueId,
+    ),
+  ],
+);
+
+export const behavioralComparisons = pgTable(
+  "behavioral_comparisons",
+  {
+    id: id(),
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    projectId: uuid("project_id").notNull(),
+    environmentId: uuid("environment_id").notNull(),
+    issueId: uuid("issue_id"),
+    findingId: uuid("finding_id"),
+    baselineSnapshotId: uuid("baseline_snapshot_id").notNull(),
+    baselineVersion: text("baseline_version").notNull(),
+    comparisonVersion: text("comparison_version").notNull(),
+    metricName: text("metric_name").notNull(),
+    viewportGroup: telemetryViewportGroup("viewport_group").notNull(),
+    baselineValue: numeric("baseline_value", { precision: 12, scale: 6 }),
+    comparisonValue: numeric("comparison_value", { precision: 12, scale: 6 }),
+    baselineSample: bigint("baseline_sample", { mode: "number" }).notNull().default(0),
+    comparisonSample: bigint("comparison_sample", { mode: "number" })
+      .notNull()
+      .default(0),
+    outcome: behavioralComparisonOutcome("outcome").notNull(),
+    summary: text("summary").notNull(),
+    requestedByUserId: uuid("requested_by_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    readyAt: timestamp("ready_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [index("behavioral_comparisons_issue_idx").on(table.issueId)],
+);
+
+export const behavioralAiAnalyses = pgTable(
+  "behavioral_ai_analyses",
+  {
+    id: id(),
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    findingId: uuid("finding_id").notNull(),
+    requestedByUserId: uuid("requested_by_user_id").notNull(),
+    modelId: text("model_id"),
+    status: text("status").notNull(),
+    inputFingerprint: text("input_fingerprint").notNull(),
+    result: jsonb("result").$type<Record<string, unknown>>(),
+    tokenUsage: jsonb("token_usage").$type<Record<string, unknown>>(),
+    errorCode: text("error_code"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+  },
+  (table) => [
+    index("behavioral_ai_analyses_finding_idx").on(table.findingId, table.createdAt),
+    uniqueIndex("behavioral_ai_analyses_inflight_unique")
+      .on(table.findingId, table.inputFingerprint)
+      .where(sql`${table.status} = 'running'`),
+  ],
+);
+
+export const verificationRunState = pgEnum("verification_run_state", [
+  "preparing",
+  "locating",
+  "running",
+  "capturing",
+  "complete",
+  "needs_attention",
+  "cancelled",
+]);
+
+export const verificationRunOverall = pgEnum("verification_run_overall", [
+  "passed",
+  "failed",
+  "uncertain",
+  "cancelled",
+]);
+
+export const verificationCheckKind = pgEnum("verification_check_kind", [
+  "element_visibility",
+  "bounding_box_overlap",
+  "named_test_hook",
+]);
+
+export const verificationVersionSource = pgEnum("verification_version_source", [
+  "installation_deployment",
+  "application_release",
+  "environment_metadata",
+  "manual_confirmation",
+  "missing",
+]);
+
+export const verificationEvidenceCaptureState = pgEnum(
+  "verification_evidence_capture_state",
+  ["not_requested", "pending", "ready", "failed", "skipped"],
+);
+
+/**
+ * One-time codes that hand an authorized workspace member over to a
+ * cross-origin verification session. Raw codes are never stored.
+ */
+export const verificationExchanges = pgTable(
+  "verification_exchanges",
+  {
+    id: id(),
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    projectId: uuid("project_id").notNull(),
+    reviewId: uuid("review_id").notNull(),
+    issueId: uuid("issue_id").notNull(),
+    environmentId: uuid("environment_id").notNull(),
+    deploymentId: uuid("deployment_id").notNull(),
+    actorUserId: uuid("actor_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    runId: uuid("run_id"),
+    codeHash: text("code_hash").notNull(),
+    allowedOrigin: text("allowed_origin").notNull(),
+    pageRoute: text("page_route"),
+    targetUrl: text("target_url").notNull(),
+    selectedChecks: jsonb("selected_checks").$type<string[]>().notNull(),
+    namedHook: text("named_hook"),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    consumedAt: timestamp("consumed_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("verification_exchanges_code_hash_unique").on(table.codeHash),
+    index("verification_exchanges_expiry_idx").on(table.expiresAt),
+    index("verification_exchanges_run_idx").on(table.runId),
+  ],
+);
+
+export const verificationSessions = pgTable(
+  "verification_sessions",
+  {
+    id: id(),
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    projectId: uuid("project_id").notNull(),
+    reviewId: uuid("review_id").notNull(),
+    issueId: uuid("issue_id").notNull(),
+    environmentId: uuid("environment_id").notNull(),
+    deploymentId: uuid("deployment_id").notNull(),
+    actorUserId: uuid("actor_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    runId: uuid("run_id").notNull(),
+    tokenHash: text("token_hash").notNull(),
+    allowedOrigin: text("allowed_origin").notNull(),
+    pageRoute: text("page_route"),
+    selectedChecks: jsonb("selected_checks").$type<string[]>().notNull(),
+    namedHook: text("named_hook"),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("verification_sessions_token_hash_unique").on(table.tokenHash),
+    index("verification_sessions_expiry_idx").on(table.expiresAt),
+    index("verification_sessions_run_idx").on(table.runId),
+  ],
+);
+
+export const verificationRuns = pgTable(
+  "verification_runs",
+  {
+    id: id(),
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    projectId: uuid("project_id").notNull(),
+    reviewId: uuid("review_id").notNull(),
+    issueId: uuid("issue_id").notNull(),
+    environmentId: uuid("environment_id").notNull(),
+    deploymentId: uuid("deployment_id").notNull(),
+    initiatingUserId: uuid("initiating_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    state: verificationRunState("state").notNull().default("preparing"),
+    overallResult: verificationRunOverall("overall_result"),
+    selectedChecks: jsonb("selected_checks").$type<string[]>().notNull(),
+    namedHook: text("named_hook"),
+    startedAt: timestamp("started_at", { withTimezone: true }).defaultNow().notNull(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    actualUrl: text("actual_url"),
+    actualRoute: text("actual_route"),
+    viewportWidth: integer("viewport_width"),
+    viewportHeight: integer("viewport_height"),
+    devicePixelRatio: numeric("device_pixel_ratio", { precision: 6, scale: 3 }),
+    orientation: text("orientation"),
+    viewportGroup: text("viewport_group"),
+    versionDetectionMethod: verificationVersionSource("version_detection_method"),
+    expectedVersion: text("expected_version"),
+    detectedVersion: text("detected_version"),
+    anchorMatchConfidence: matchConfidence("anchor_match_confidence"),
+    evidenceId: uuid("evidence_id").references(() => issueEvidence.id, {
+      onDelete: "set null",
+    }),
+    evidenceCaptureState: verificationEvidenceCaptureState("evidence_capture_state")
+      .notNull()
+      .default("not_requested"),
+    limitations: jsonb("limitations").$type<string[]>().notNull().default([]),
+    failureCode: text("failure_code"),
+    runnerVersion: text("runner_version"),
+    contractVersion: integer("contract_version").notNull().default(1),
+    resultIdempotencyKey: text("result_idempotency_key"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("verification_runs_issue_created_idx").on(table.issueId, table.createdAt),
+    index("verification_runs_workspace_idx").on(table.workspaceId),
+    foreignKey({
+      name: "verification_runs_issue_fk",
+      columns: [table.issueId],
+      foreignColumns: [issues.id],
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "verification_runs_deployment_fk",
+      columns: [table.deploymentId],
+      foreignColumns: [deployments.id],
+    }).onDelete("restrict"),
+  ],
+);
+
+export const verificationCheckResults = pgTable(
+  "verification_check_results",
+  {
+    id: id(),
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    runId: uuid("run_id")
+      .notNull()
+      .references(() => verificationRuns.id, { onDelete: "cascade" }),
+    kind: verificationCheckKind("kind").notNull(),
+    outcome: verificationOutcome("outcome").notNull(),
+    summary: text("summary").notNull(),
+    measurements: jsonb("measurements").$type<Record<string, unknown>>().notNull().default({}),
+    limitations: jsonb("limitations").$type<string[]>().notNull().default([]),
+    hookName: text("hook_name").notNull().default(""),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("verification_check_results_run_idx").on(table.runId),
+    uniqueIndex("verification_check_results_run_kind_hook_unique").on(
+      table.runId,
+      table.kind,
+      table.hookName,
+    ),
   ],
 );

@@ -24,6 +24,8 @@ async function buildBootstrap({
   reviewChunk,
   screenshotChunk,
   heatmapChunk,
+  analyticsChunk,
+  verificationChunk,
 }) {
   await esbuild.build({
     ...shared,
@@ -35,11 +37,13 @@ async function buildBootstrap({
       __PASSOFF_REVIEW_CHUNK__: JSON.stringify(reviewChunk),
       __PASSOFF_SCREENSHOT_CHUNK__: JSON.stringify(screenshotChunk),
       __PASSOFF_HEATMAP_CHUNK__: JSON.stringify(heatmapChunk),
+      __PASSOFF_ANALYTICS_CHUNK__: JSON.stringify(analyticsChunk),
+      __PASSOFF_VERIFICATION_CHUNK__: JSON.stringify(verificationChunk),
     },
   });
 }
 
-async function buildChunk({ entry, outfile, screenshotChunk, heatmapChunk }) {
+async function buildChunk({ entry, outfile, screenshotChunk, heatmapChunk, analyticsChunk, verificationChunk }) {
   await esbuild.build({
     ...shared,
     entryPoints: [path.join(src, entry)],
@@ -50,6 +54,8 @@ async function buildChunk({ entry, outfile, screenshotChunk, heatmapChunk }) {
       __PASSOFF_REVIEW_CHUNK__: JSON.stringify("unused"),
       __PASSOFF_SCREENSHOT_CHUNK__: JSON.stringify(screenshotChunk),
       __PASSOFF_HEATMAP_CHUNK__: JSON.stringify(heatmapChunk),
+      __PASSOFF_ANALYTICS_CHUNK__: JSON.stringify(analyticsChunk),
+      __PASSOFF_VERIFICATION_CHUNK__: JSON.stringify(verificationChunk ?? "unused"),
     },
   });
 }
@@ -58,73 +64,97 @@ async function build() {
   await mkdir(dist, { recursive: true });
   await mkdir(publicSdk, { recursive: true });
 
-  // Development / harness artifacts (prototype session allowed).
+  const devChunks = {
+    screenshotChunk: "passoff-sdk-screenshot.js",
+    heatmapChunk: "passoff-sdk-heatmap.js",
+    analyticsChunk: "passoff-sdk-analytics.js",
+    verificationChunk: "passoff-sdk-verification.js",
+  };
+  const prodChunks = {
+    screenshotChunk: "passoff-screenshot.js",
+    heatmapChunk: "passoff-heatmap.js",
+    analyticsChunk: "passoff-analytics.js",
+    verificationChunk: "passoff-verification.js",
+  };
+
   await buildBootstrap({
     outfile: path.join(dist, "passoff-sdk.js"),
     allowPrototype: true,
     reviewChunk: "passoff-sdk-review.js",
-    screenshotChunk: "passoff-sdk-screenshot.js",
-    heatmapChunk: "passoff-sdk-heatmap.js",
+    ...devChunks,
   });
   await buildChunk({
     entry: "review.ts",
     outfile: path.join(dist, "passoff-sdk-review.js"),
-    screenshotChunk: "passoff-sdk-screenshot.js",
-    heatmapChunk: "passoff-sdk-heatmap.js",
+    ...devChunks,
   });
   await buildChunk({
     entry: "screenshot.ts",
     outfile: path.join(dist, "passoff-sdk-screenshot.js"),
-    screenshotChunk: "passoff-sdk-screenshot.js",
-    heatmapChunk: "passoff-sdk-heatmap.js",
+    ...devChunks,
   });
   await buildChunk({
     entry: "heatmap.ts",
     outfile: path.join(dist, "passoff-sdk-heatmap.js"),
-    screenshotChunk: "passoff-sdk-screenshot.js",
-    heatmapChunk: "passoff-sdk-heatmap.js",
+    ...devChunks,
+  });
+  await buildChunk({
+    entry: "analytics/index.ts",
+    outfile: path.join(dist, "passoff-sdk-analytics.js"),
+    ...devChunks,
+  });
+  await buildChunk({
+    entry: "verification/index.ts",
+    outfile: path.join(dist, "passoff-sdk-verification.js"),
+    ...devChunks,
   });
 
-  // Production artifacts (prototype session rejected).
   await buildBootstrap({
     outfile: path.join(publicSdk, "passoff.js"),
     allowPrototype: false,
     reviewChunk: "passoff-review.js",
-    screenshotChunk: "passoff-screenshot.js",
-    heatmapChunk: "passoff-heatmap.js",
+    ...prodChunks,
   });
   await buildChunk({
     entry: "review.ts",
     outfile: path.join(publicSdk, "passoff-review.js"),
-    screenshotChunk: "passoff-screenshot.js",
-    heatmapChunk: "passoff-heatmap.js",
+    ...prodChunks,
   });
   await buildChunk({
     entry: "screenshot.ts",
     outfile: path.join(publicSdk, "passoff-screenshot.js"),
-    screenshotChunk: "passoff-screenshot.js",
-    heatmapChunk: "passoff-heatmap.js",
+    ...prodChunks,
   });
   await buildChunk({
     entry: "heatmap.ts",
     outfile: path.join(publicSdk, "passoff-heatmap.js"),
-    screenshotChunk: "passoff-screenshot.js",
-    heatmapChunk: "passoff-heatmap.js",
+    ...prodChunks,
+  });
+  await buildChunk({
+    entry: "analytics/index.ts",
+    outfile: path.join(publicSdk, "passoff-analytics.js"),
+    ...prodChunks,
+  });
+  await buildChunk({
+    entry: "verification/index.ts",
+    outfile: path.join(publicSdk, "passoff-verification.js"),
+    ...prodChunks,
   });
 
-  // Keep dist copies of production filenames for local measurement parity.
   await cp(path.join(publicSdk, "passoff.js"), path.join(dist, "passoff.js"));
-  await cp(
-    path.join(publicSdk, "passoff-review.js"),
-    path.join(dist, "passoff-review.js"),
-  );
+  await cp(path.join(publicSdk, "passoff-review.js"), path.join(dist, "passoff-review.js"));
   await cp(
     path.join(publicSdk, "passoff-screenshot.js"),
     path.join(dist, "passoff-screenshot.js"),
   );
+  await cp(path.join(publicSdk, "passoff-heatmap.js"), path.join(dist, "passoff-heatmap.js"));
   await cp(
-    path.join(publicSdk, "passoff-heatmap.js"),
-    path.join(dist, "passoff-heatmap.js"),
+    path.join(publicSdk, "passoff-analytics.js"),
+    path.join(dist, "passoff-analytics.js"),
+  );
+  await cp(
+    path.join(publicSdk, "passoff-verification.js"),
+    path.join(dist, "passoff-verification.js"),
   );
 
   await writeFile(
@@ -132,7 +162,7 @@ async function build() {
     [
       "Passoff website SDK artifacts.",
       "- passoff-sdk*.js: development harness build (prototype session allowed)",
-      "- passoff.js / passoff-review.js / passoff-screenshot.js / passoff-heatmap.js: production build",
+      "- passoff.js plus lazy chunks: production build including optional analytics",
       "Production copies are also written to public/sdk/v1/.",
       "",
     ].join("\n"),

@@ -9,6 +9,7 @@ import {
   guestIdentities,
   issueEvidence,
   reviewSessions,
+  reviews,
   shareLinks,
   videoAssets,
   workspaceMemberships,
@@ -21,6 +22,7 @@ import { createIssue } from "@/lib/issues/service";
 import type { WorkspaceContext } from "@/lib/projects/context";
 import { createProject, createWebsiteReview } from "@/lib/projects/service";
 import { REVIEW_SESSION_COOKIE } from "@/lib/reviews/guest-session";
+import { seedWorkspacePlan } from "@/test/workspace-fixtures";
 
 const REVIEW_SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 
@@ -94,6 +96,7 @@ async function createWorkspaceContext(label: string): Promise<WorkspaceContext> 
 }
 
 async function seedReadyVideo(context: WorkspaceContext) {
+  await seedWorkspacePlan(context.workspaceId, "agency");
   const project = await createProject(context, "Playback Project");
   if (!project.ok) throw new Error("project create failed");
   const review = await createWebsiteReview(context, {
@@ -194,7 +197,7 @@ async function createGuestSession(input: {
   return rawToken;
 }
 
-describe("video playback authorization", () => {
+describe("video playback authorization", { timeout: 90_000 }, () => {
   afterEach(() => {
     mocks.requireWorkspaceContext.mockReset();
     mocks.signMuxPlaybackTokens.mockReset();
@@ -315,6 +318,75 @@ describe("video playback authorization", () => {
       seeded.videoAssetId,
     );
     expect(result).toMatchObject({ ok: false, status: 409, code: "processing" });
+  });
+
+  it("never plays removed, replaced, or not-yet-promoted clips", async () => {
+    const context = await createWorkspaceContext("lifecycle");
+    mocks.requireWorkspaceContext.mockResolvedValue({ ok: true, context });
+    mocks.signMuxPlaybackTokens.mockResolvedValue({
+      playback: "playback-jwt",
+      thumbnail: "thumbnail-jwt",
+      storyboard: "storyboard-jwt",
+    });
+    const { authorizeVideoPlayback } = await import("@/lib/video/playback-service");
+
+    for (const lifecycle of ["removed", "retired", "replacement"] as const) {
+      const seeded = await seedReadyVideo(context);
+      await db
+        .update(videoAssets)
+        .set({ lifecycle })
+        .where(eq(videoAssets.id, seeded.videoAssetId));
+      const result = await authorizeVideoPlayback(
+        new Request("http://localhost/api/video/x/playback"),
+        seeded.videoAssetId,
+      );
+      expect(result, lifecycle).toMatchObject({ ok: false, status: 404, code: "not_found" });
+    }
+    expect(mocks.signMuxPlaybackTokens).not.toHaveBeenCalled();
+  });
+
+  it("stops guest playback when the review is archived or the clip is removed", async () => {
+    const context = await createWorkspaceContext("guest-archived");
+    const seeded = await seedReadyVideo(context);
+    mocks.requireWorkspaceContext.mockResolvedValue({ ok: false, reason: "unauthenticated" });
+    mocks.signMuxPlaybackTokens.mockResolvedValue({
+      playback: "p",
+      thumbnail: "t",
+      storyboard: "s",
+    });
+    const { authorizeVideoPlayback } = await import("@/lib/video/playback-service");
+
+    const token = await createGuestSession({
+      workspaceId: context.workspaceId,
+      reviewId: seeded.reviewId,
+      createdByUserId: context.userId,
+    });
+    const request = () =>
+      new Request("http://localhost/api/video/x/playback", {
+        headers: { cookie: `${REVIEW_SESSION_COOKIE}=${token}` },
+      });
+    expect((await authorizeVideoPlayback(request(), seeded.videoAssetId)).ok).toBe(true);
+
+    await db
+      .update(reviews)
+      .set({ archivedAt: new Date() })
+      .where(eq(reviews.id, seeded.reviewId));
+    expect(await authorizeVideoPlayback(request(), seeded.videoAssetId)).toMatchObject({
+      ok: false,
+      status: 404,
+    });
+
+    await db.update(reviews).set({ archivedAt: null }).where(eq(reviews.id, seeded.reviewId));
+    expect((await authorizeVideoPlayback(request(), seeded.videoAssetId)).ok).toBe(true);
+
+    await db
+      .update(videoAssets)
+      .set({ lifecycle: "removed" })
+      .where(eq(videoAssets.id, seeded.videoAssetId));
+    expect(await authorizeVideoPlayback(request(), seeded.videoAssetId)).toMatchObject({
+      ok: false,
+      status: 404,
+    });
   });
 
   it("playback route returns only playback id and tokens", async () => {

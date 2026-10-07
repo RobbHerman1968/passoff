@@ -180,12 +180,12 @@ export const seoPages: SeoPage[] = [
       {
         question: "What video files can I attach?",
         answer:
-          "On the Agency video-evidence pilot, clips are limited to 3 minutes, 250 MB, and 1080p. Free and Studio video-evidence limits are not published yet.",
+          "Short clips: up to 3 minutes, 250 MB, and 1080p on every plan. Each plan also has a monthly allowance for new video, listed on the pricing page.",
       },
       {
-        question: "Can reviewers leave feedback at a specific time?",
+        question: "Can we leave feedback at a specific time?",
         answer:
-          "Yes. A reviewer can pause the video and leave a comment tied to that moment, so the editor knows exactly where to look.",
+          "Yes. Your team can pause a clip and leave a note tied to that moment, so the editor knows exactly where to look. Clients discuss the issue the clip belongs to.",
       },
       {
         question: "Will an older cut disappear when I upload a new one?",

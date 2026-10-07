@@ -6,11 +6,9 @@ import {
 } from "@/lib/billing/plans";
 
 /**
- * Future billing configuration. This file records product decisions for later
- * checkout and enforcement work. It does not collect payment or apply limits.
+ * Static billing facts that are not limits. Limits are enforced server-side from plans.ts
+ * through the entitlement service (see docs/BILLING.md); there is no on/off switch for them.
  */
-export const BILLING_ENFORCEMENT_ENABLED = false;
-
 export const SUBSCRIPTION_PLAN_VALUES = PLAN_IDS satisfies readonly PlanId[];
 
 export const BILLING_PROVIDER = "stripe" as const;

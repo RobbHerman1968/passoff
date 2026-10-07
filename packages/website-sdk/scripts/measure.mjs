@@ -9,12 +9,21 @@ const dist = path.join(root, "dist");
 const proposed = {
   dormantParsedKb: 20,
   dormantGzipKb: 8,
-  reviewParsedKb: 45,
-  reviewGzipKb: 15,
+  // Loaded only while a reviewer has an active review session, never for ordinary visitors.
+  // Raised from the original 45 / 15 KB proposal after comments, approvals, video notes,
+  // and verification hooks joined the review session (Story 8 decision, docs/LAUNCH_CHECKLIST.md).
+  reviewParsedKb: 65,
+  reviewGzipKb: 18,
+  // Loaded only for signed-in team verification runs and for heatmap overlays.
+  heatmapParsedKb: 12,
+  heatmapGzipKb: 5,
+  verificationParsedKb: 40,
+  verificationGzipKb: 12,
   // Loaded only after a reviewer selects an area. Includes reliable DOM capture.
   screenshotParsedKb: 18,
   screenshotGzipKb: 7,
-  initMs: 50,
+  analyticsParsedKb: 90,
+  analyticsGzipKb: 30,
   addFeedbackReadyMs: 100,
   selectionDelayMs: 50,
   cls: 0,
@@ -40,6 +49,9 @@ const artifacts = await Promise.all([
   measureFile("passoff-review.js"),
   measureFile("passoff-screenshot.js"),
   measureFile("passoff-sdk.js"),
+  measureFile("passoff-analytics.js"),
+  measureFile("passoff-heatmap.js"),
+  measureFile("passoff-verification.js"),
 ]);
 
 const payload = {
@@ -64,7 +76,12 @@ const budgetMap = {
   "passoff-review.js": [proposed.reviewParsedKb, proposed.reviewGzipKb],
   "passoff-screenshot.js": [proposed.screenshotParsedKb, proposed.screenshotGzipKb],
   "passoff-sdk.js": [proposed.dormantParsedKb, proposed.dormantGzipKb],
+  "passoff-analytics.js": [proposed.analyticsParsedKb, proposed.analyticsGzipKb],
+  "passoff-heatmap.js": [proposed.heatmapParsedKb, proposed.heatmapGzipKb],
+  "passoff-verification.js": [proposed.verificationParsedKb, proposed.verificationGzipKb],
 };
+
+let overBudget = false;
 
 for (const artifact of artifacts) {
   const budgets = budgetMap[artifact.file];
@@ -72,9 +89,15 @@ for (const artifact of artifacts) {
   const [parsedBudget, gzipBudget] = budgets;
   const parsedPass = artifact.parsedKb <= parsedBudget ? "within" : "over";
   const gzipPass = artifact.gzipKb <= gzipBudget ? "within" : "over";
+  if (parsedPass === "over" || gzipPass === "over") overBudget = true;
   console.log(
     `${artifact.file}: parsed ${artifact.parsedKb} KB (${parsedPass} ${parsedBudget}), gzip ${artifact.gzipKb} KB (${gzipPass} ${gzipBudget})`,
   );
 }
 
 console.log(JSON.stringify(payload, null, 2));
+
+if (overBudget) {
+  console.error("SDK size budget exceeded. Shrink the bundle or record a reviewed budget change.");
+  process.exitCode = 1;
+}

@@ -4,21 +4,26 @@ import { and, desc, eq, inArray, sql } from "drizzle-orm";
 
 import { db } from "@/db";
 import {
+  behavioralEvidenceSnapshots,
   activityEvents,
   guestIdentities,
   issueAnchors,
   issueComments,
+  issueEvidence,
   issueVerifications,
   issues,
   pages,
   reviews,
   users,
+  verificationRuns,
+  videoAssets,
 } from "@/db/schema";
 import {
   ISSUE_EXPORT_MAX,
   exportFilename,
   toCsv,
   toMarkdown,
+  videoEvidenceExportSummary,
   type IssueExportMeta,
   type IssueExportRow,
 } from "@/lib/issues/export-format";
@@ -26,10 +31,13 @@ import {
   assertReviewInWorkspace,
   buildFilterConditions,
 } from "@/lib/issues/list";
+import { listReviewApprovalSummaries } from "@/lib/approvals/requests";
+import { approvalStateLabel } from "@/lib/approvals/status";
 import { deriveIssueDisplayTitle } from "@/lib/issues/display-title";
 import type { IssueListFilters } from "@/lib/issues/schemas";
 import type { IssueClosureReason, IssuePriority, IssueStatus } from "@/lib/issues/statuses";
 import { issueDetailPath } from "@/lib/issues/url";
+import { listLabelsForIssues } from "@/lib/labels/service";
 import { absoluteUrl } from "@/lib/site";
 import { personDisplayName } from "@/lib/users/display-name";
 import type { WorkspaceContext } from "@/lib/workspaces/context";
@@ -186,12 +194,14 @@ export async function loadIssuesForExport(
       .select({
         issueId: issueVerifications.issueId,
         outcome: issueVerifications.outcome,
+        method: issueVerifications.method,
         createdAt: issueVerifications.createdAt,
       })
       .from(issueVerifications)
       .where(inArray(issueVerifications.issueId, ids))
       .orderBy(desc(issueVerifications.createdAt));
     for (const row of verificationRows) {
+      if (row.method !== "human") continue;
       if (!verifications.has(row.issueId)) {
         verifications.set(row.issueId, {
           outcome: row.outcome,
@@ -200,6 +210,111 @@ export async function loadIssuesForExport(
       }
     }
   }
+
+  const issueLabelMap = await listLabelsForIssues(context, ids);
+
+  const browserCheckSummaries = new Map<string, string>();
+  if (ids.length > 0) {
+    const runRows = await db
+      .select({
+        issueId: verificationRuns.issueId,
+        overall: verificationRuns.overallResult,
+        actualRoute: verificationRuns.actualRoute,
+        viewportWidth: verificationRuns.viewportWidth,
+        viewportHeight: verificationRuns.viewportHeight,
+      })
+      .from(verificationRuns)
+      .where(
+        and(
+          inArray(verificationRuns.issueId, ids),
+          eq(verificationRuns.workspaceId, context.workspaceId),
+        ),
+      )
+      .orderBy(desc(verificationRuns.createdAt));
+    for (const row of runRows) {
+      if (browserCheckSummaries.has(row.issueId) || !row.overall) continue;
+      const viewport =
+        row.viewportWidth && row.viewportHeight
+          ? ` at ${row.viewportWidth} × ${row.viewportHeight}`
+          : "";
+      browserCheckSummaries.set(
+        row.issueId,
+        `Browser check ${row.overall}${row.actualRoute ? ` on ${row.actualRoute}` : ""}${viewport}.`,
+      );
+    }
+  }
+
+  const evidenceSummaries = new Map<string, string>();
+  if (ids.length > 0) {
+    const evidenceRows = await db
+      .select({
+        issueId: behavioralEvidenceSnapshots.issueId,
+        payload: behavioralEvidenceSnapshots.payload,
+      })
+      .from(behavioralEvidenceSnapshots)
+      .where(
+        and(
+          inArray(behavioralEvidenceSnapshots.issueId, ids),
+          eq(behavioralEvidenceSnapshots.workspaceId, context.workspaceId),
+        ),
+      );
+    for (const row of evidenceRows) {
+      if (!row.issueId) continue;
+      const payload = row.payload;
+      const summary = `${String(payload.findingType ?? "")} on ${String(payload.route ?? "")} (${String(payload.viewportGroup ?? "")}, ${String(payload.deploymentVersion ?? "unspecified")}): ${Number(payload.metricValue ?? 0).toFixed(3)} of ${Number(payload.eligibleSessionCount ?? 0)} eligible sessions.`;
+      const previous = evidenceSummaries.get(row.issueId);
+      evidenceSummaries.set(
+        row.issueId,
+        previous ? `${previous} ${summary}` : summary,
+      );
+    }
+  }
+
+  // Video evidence is mentioned, never linked: playback needs a signed-in person or live review link.
+  const videoSummaries = new Map<string, string>();
+  if (ids.length > 0) {
+    const videoRows = await db
+      .select({
+        issueId: issueEvidence.issueId,
+        durationMs: videoAssets.durationMs,
+      })
+      .from(videoAssets)
+      .innerJoin(
+        issueEvidence,
+        and(
+          eq(issueEvidence.id, videoAssets.evidenceId),
+          eq(issueEvidence.workspaceId, videoAssets.workspaceId),
+        ),
+      )
+      .where(
+        and(
+          inArray(issueEvidence.issueId, ids),
+          eq(videoAssets.workspaceId, context.workspaceId),
+          eq(videoAssets.lifecycle, "current"),
+          eq(videoAssets.processingStatus, "ready"),
+        ),
+      );
+    for (const row of videoRows) {
+      videoSummaries.set(
+        row.issueId,
+        videoEvidenceExportSummary(row.durationMs == null ? null : row.durationMs / 1_000),
+      );
+    }
+  }
+
+  // Approval is review-level. A failure here must not block the handoff export.
+  const approvalSummary = (
+    await listReviewApprovalSummaries(context.workspaceId, [reviewId]).catch(
+      () => new Map(),
+    )
+  ).get(reviewId);
+  const approvalStatus = approvalSummary
+    ? approvalStateLabel({
+        state: approvalSummary.visibleState,
+        currentVersionLabel: approvalSummary.currentVersionLabel,
+        approvedVersionLabel: approvalSummary.approvedVersionLabel,
+      })
+    : "";
 
   const rows: IssueExportRow[] = issueRows.map((row) => {
     const reporter = row.authorGuestName
@@ -213,6 +328,7 @@ export async function loadIssuesForExport(
       status: row.status as IssueStatus,
       closureReason: (row.closureReason as IssueClosureReason | null) ?? null,
       priority: row.priority as IssuePriority,
+      labels: (issueLabelMap.get(row.id) ?? []).map((label) => label.name),
       assigneeDisplayName: row.assigneeUserId
         ? personDisplayName(row.assigneeName, row.assigneeEmail)
         : "Unassigned",
@@ -228,7 +344,11 @@ export async function loadIssuesForExport(
       publicReplies: replies.get(row.id) ?? [],
       latestVerificationOutcome: verification?.outcome ?? null,
       latestVerificationAt: verification?.createdAt ?? null,
+      latestBrowserCheckSummary: browserCheckSummaries.get(row.id) ?? "",
+      behavioralEvidenceSummary: evidenceSummaries.get(row.id) ?? "",
+      videoEvidenceSummary: videoSummaries.get(row.id) ?? "",
       issueHref: absoluteUrl(issueDetailPath(projectId, reviewId, row.number)),
+      approvalStatus,
     };
   });
 
@@ -239,6 +359,15 @@ export async function loadIssuesForExport(
     exportedAt: new Date(),
     filters,
     includeReplies,
+    approval: approvalSummary
+      ? {
+          statusLabel: approvalStatus,
+          decidedBy: approvalSummary.approvedByDisplayName,
+          decidedAt: approvalSummary.approvedAt ? new Date(approvalSummary.approvedAt) : null,
+          note: approvalSummary.decisionNote,
+          historical: approvalSummary.visibleState === "historical_approval",
+        }
+      : null,
   };
 
   return { ok: true, rows, meta, reviewName: named.name };

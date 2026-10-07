@@ -61,7 +61,7 @@ describe("VideoEvidencePlayer", () => {
     const player = screen.getByTestId("mux-player");
     expect(player).toHaveAttribute("data-playback-id", "pb_123");
     expect(player).toHaveAttribute("data-autoplay", "false");
-    expect(player).toHaveAttribute("data-preload", "metadata");
+    expect(player).toHaveAttribute("data-preload", "none");
     expect(player).toHaveAttribute("data-max-resolution", "1080p");
     expect(player).toHaveTextContent("tokens:play-token/thumb-token/story-token");
     expect(await axe(container)).toHaveNoViolations();

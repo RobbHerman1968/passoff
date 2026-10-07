@@ -7,6 +7,8 @@ import {
 } from "@/components/issues/issue-detail";
 import { PageHeader } from "@/components/page-header";
 import { PermissionDeniedState } from "@/components/permission-denied-state";
+import { listIssueComments } from "@/lib/comments/service";
+import type { IssueCommentView } from "@/lib/comments/types";
 import type { IssueHistoryEvent } from "@/lib/issues/history";
 import { getIssueDetailForReview } from "@/lib/issues/list";
 import {
@@ -19,6 +21,20 @@ import {
   listIssueHistory,
 } from "@/lib/issues/triage";
 import { getReviewForWorkspace } from "@/lib/projects/service";
+import {
+  listIssueBehavioralEvidence,
+  listIssueComparisons,
+} from "@/lib/findings/service";
+import {
+  listAttachableAssets,
+  listIssueAttachments,
+} from "@/lib/attachments/service";
+import { listIssueLabels, listWorkspaceLabels } from "@/lib/labels/service";
+import { canMutateProjects } from "@/lib/projects/permissions";
+import { listVideoNotesForMember } from "@/lib/video/annotations/service";
+import { getIssueVideoView } from "@/lib/video/issue-video";
+import { getVerificationLaunchContext } from "@/lib/verification/launch";
+import { listVerificationRunsForIssue } from "@/lib/verification/query";
 import { requireWorkspaceContext } from "@/lib/workspaces/context";
 
 type RouteParams = Promise<{
@@ -164,9 +180,48 @@ export default async function IssueDetailPage({
     historyError = "We couldn’t load history. Try again.";
   }
 
+  let comments: IssueCommentView[] = [];
+  let commentsError: string | null = null;
+  try {
+    const loaded = await listIssueComments(auth.context, {
+      projectId: review.projectId,
+      reviewId: review.id,
+      issueNumber,
+      includePrivate: true,
+    });
+    if (loaded.ok) {
+      comments = loaded.comments;
+    } else {
+      commentsError = "We couldn’t load the discussion. Reload to try again.";
+    }
+  } catch {
+    commentsError = "We couldn’t load the discussion. Reload to try again.";
+  }
+
+  const issueScope = {
+    projectId: review.projectId,
+    reviewId: review.id,
+    issueNumber,
+  };
+  const [labels, workspaceLabels, attachments, attachableFiles, videoView, videoNotes] = await Promise.all([
+    listIssueLabels(auth.context, issueScope).catch(() => null),
+    listWorkspaceLabels(auth.context).catch(() => []),
+    listIssueAttachments(auth.context, issueScope).catch(() => null),
+    listAttachableAssets(auth.context, issueScope).catch(() => null),
+    getIssueVideoView(auth.context, issueScope).catch(() => null),
+    listVideoNotesForMember(auth.context, issueScope).catch(() => null),
+  ]);
+
   return (
     <IssueDetailView
       issue={issue}
+      labels={labels ?? []}
+      workspaceLabels={workspaceLabels}
+      attachments={attachments ?? []}
+      attachableFiles={attachableFiles ?? []}
+      videoView={videoView}
+      videoNotes={videoNotes?.ok ? videoNotes.notes : []}
+      canEditOrganization={canMutateProjects(auth.context)}
       projectId={review.projectId}
       reviewId={review.id}
       projectName={review.projectName}
@@ -175,6 +230,29 @@ export default async function IssueDetailPage({
       members={members}
       history={history}
       historyError={historyError}
+      comments={comments}
+      commentsError={commentsError}
+      behavioralSnapshots={(
+        await listIssueBehavioralEvidence(auth.context, issue.id)
+      ).map((row) => ({ id: row.id, payload: row.payload }))}
+      behavioralComparisons={(
+        await listIssueComparisons(auth.context, issue.id)
+      ).map((row) => ({
+        id: row.id,
+        summary: row.summary,
+        baselineVersion: row.baselineVersion,
+        comparisonVersion: row.comparisonVersion,
+        baselineSample: row.baselineSample,
+        comparisonSample: row.comparisonSample,
+        outcome: row.outcome,
+      }))}
+      verificationLaunch={await getVerificationLaunchContext(
+        auth.context,
+        review.projectId,
+        review.id,
+        issue.number,
+      )}
+      verificationRuns={await listVerificationRunsForIssue(auth.context, issue.id)}
     />
   );
 }

@@ -14,6 +14,7 @@ const PATH_FOR_CONTEXT: Record<HelpPageContext, string> = {
   "projects-dashboard": "/dashboard",
   "project-detail": "/projects/p1",
   "website-review-detail": "/projects/p1/reviews/r1",
+  usability: "/usability",
 };
 
 const navigation = vi.hoisted(() => ({ pathname: "/dashboard" }));
@@ -25,6 +26,10 @@ vi.mock("next/navigation", () => ({
 
 vi.mock("@/app/(auth)/actions", () => ({
   signOutAction: vi.fn(async () => ({ status: "success" })),
+}));
+
+vi.mock("@/app/(app)/workspaces/actions", () => ({
+  switchWorkspaceAction: vi.fn(async () => ({ status: "ok" })),
 }));
 
 vi.mock("@/app/(app)/notifications/actions", () => ({

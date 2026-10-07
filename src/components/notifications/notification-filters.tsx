@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 
 export function NotificationFilters({ unreadOnly }: { unreadOnly: boolean }) {
   return (
-    <fieldset className="mb-4 grid gap-1.5">
+    <fieldset className="mb-4 grid min-w-0 gap-1.5">
       <legend className="mb-1.5 text-sm font-medium">Show</legend>
       <div className="flex max-w-full overflow-x-auto rounded-lg ring-1 ring-input ring-inset">
         <Button

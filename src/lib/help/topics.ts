@@ -7,6 +7,7 @@ export const HELP_TOPIC_IDS = [
   "website-review-detail",
   "website-setup",
   "workspace-plans",
+  "usability",
 ] as const;
 
 export type HelpTopicId = (typeof HELP_TOPIC_IDS)[number];
@@ -94,10 +95,19 @@ export const HELP_TOPICS: Record<HelpTopicId, HelpTopic> = {
     paragraphs: [
       "You pay for workspace members who create projects, manage issues, and prepare work for verification. Guest reviewers are always free and unlimited.",
       "Studio includes 3 workspace members and 5 active review websites. Agency includes 6 workspace members and unlimited active review websites.",
-      "Unlimited active review websites does not mean unlimited infrastructure usage. Video processing, storage, and playback, tracked pageviews, telemetry events, AI analyses, browser verification jobs, and proxy sessions and bandwidth share pooled workspace allowances.",
+      "Unlimited active review websites does not mean unlimited infrastructure usage. Video processing and storage, tracked pageviews, telemetry events, AI analyses, browser verification jobs, and proxy sessions and bandwidth share pooled workspace allowances.",
       "Passoff only shows an allowance after it has an approved value and enforcement behavior.",
-      "Video is short evidence attached to an issue, not a separate review type. Agency currently has a video-evidence pilot. Free and Studio video-evidence limits are not published yet.",
+      "Video is short evidence attached to an issue, not a separate review type. Every plan has a monthly allowance for new video and a limit on how much is kept; your plan’s numbers are on the Billing page. Watching video never uses allowance.",
       "Approvals belong to a recorded deployment or version. Issues and comments are unlimited on every plan.",
+    ],
+  },
+  usability: {
+    id: "usability",
+    title: "Usability signals",
+    paragraphs: [
+      "Usability reports show aggregated clicks, scroll depth, repeated clicks, possible dead clicks, and sanitized errors from production traffic.",
+      "Collection stays off until a workspace owner turns it on for an environment. Strict consent sends nothing until a visitor allows usability data.",
+      "These signals can suggest possible problems. They do not prove a defect, create issues, or identify individual visitors.",
     ],
   },
 };
@@ -105,7 +115,8 @@ export const HELP_TOPICS: Record<HelpTopicId, HelpTopic> = {
 export type HelpPageContext =
   | "projects-dashboard"
   | "project-detail"
-  | "website-review-detail";
+  | "website-review-detail"
+  | "usability";
 
 export function getHelpTopic(id: HelpTopicId): HelpTopic {
   return HELP_TOPICS[id];

@@ -5,6 +5,7 @@ import { and, eq, inArray, isNull, lt, lte, or, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { webhookDeliveries, webhookEndpoints } from "@/db/schema";
 import { decryptSecret } from "@/lib/webhooks/secrets";
+import { postToPinnedAddress } from "@/lib/webhooks/post";
 import { signWebhookBody } from "@/lib/webhooks/sign";
 import {
   WEBHOOK_MAX_ATTEMPTS,
@@ -166,10 +167,16 @@ export async function attemptDelivery(deliveryId: string): Promise<void> {
   const attemptCount = delivery.attemptCount + 1;
 
   try {
-    const response = await fetch(destination.href, {
-      method: "POST",
-      redirect: "manual",
-      signal: AbortSignal.timeout(WEBHOOK_REQUEST_TIMEOUT_MS),
+    // A destination that resolved was always given a vetted address to connect to.
+    if (!destination.address || !destination.family) {
+      await failTerminal(deliveryId, attemptCount, "That address isn’t allowed.", null);
+      return;
+    }
+    const response = await postToPinnedAddress({
+      href: destination.href,
+      address: destination.address,
+      family: destination.family,
+      timeoutMs: WEBHOOK_REQUEST_TIMEOUT_MS,
       headers: {
         "Content-Type": "application/json",
         "User-Agent": "Passoff-Webhooks/1.0",
@@ -180,13 +187,14 @@ export async function attemptDelivery(deliveryId: string): Promise<void> {
       },
       body: rawBody,
     });
+    const responseOk = response.status >= 200 && response.status < 300;
 
     if (response.status >= 300 && response.status < 400) {
       await retryOrFail(deliveryId, attemptCount, friendlyDeliveryError({ kind: "redirect" }), response.status);
       return;
     }
 
-    if (response.ok) {
+    if (responseOk) {
       await db
         .update(webhookDeliveries)
         .set({

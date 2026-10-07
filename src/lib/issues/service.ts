@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 
 import { db } from "@/db";
 import {
@@ -9,10 +9,8 @@ import {
   issues,
   reviewIssueCounters,
   reviews,
-  videoAssets,
 } from "@/db/schema";
-import { VIDEO_EVIDENCE_COMMON_LIMITS } from "@/lib/billing/plans";
-import { getVideoEvidenceRetentionEnd } from "@/lib/billing/video-evidence";
+import { applyIssueVideoRetention } from "@/lib/video/retention";
 import type {
   IssueClosureReason,
   IssuePriority,
@@ -251,41 +249,15 @@ export async function transitionIssue(
       return { ok: false as const, error: "conflict" as const };
     }
 
+    // Clips are kept while an issue is open, removed 30 days after it closes, and kept again
+    // if it is reopened first. This runs in the same transaction as the status change.
     if (input.status === "closed" || reopening) {
-      const evidence = await tx
-        .select({ id: issueEvidence.id })
-        .from(issueEvidence)
-        .where(
-          and(
-            eq(issueEvidence.issueId, input.issueId),
-            eq(issueEvidence.workspaceId, context.workspaceId),
-            eq(issueEvidence.kind, "video"),
-          ),
-        );
-
-      if (evidence.length > 0) {
-        await tx
-          .update(videoAssets)
-          .set({
-            retentionEndsAt:
-              input.status === "closed"
-                ? getVideoEvidenceRetentionEnd(
-                    now,
-                    VIDEO_EVIDENCE_COMMON_LIMITS.retentionDaysAfterIssueCloses,
-                  )
-                : null,
-            updatedAt: now,
-          })
-          .where(
-            and(
-              eq(videoAssets.workspaceId, context.workspaceId),
-              inArray(
-                videoAssets.evidenceId,
-                evidence.map((item) => item.id),
-              ),
-            ),
-          );
-      }
+      await applyIssueVideoRetention(tx, {
+        workspaceId: context.workspaceId,
+        issueId: input.issueId,
+        closedAt: input.status === "closed" ? now : null,
+        now,
+      });
     }
 
     return { ok: true as const };
@@ -301,6 +273,8 @@ export async function recordVerification(
     checkedUrl?: string;
     note?: string;
     evidenceId?: string;
+    viewportWidth?: number;
+    viewportHeight?: number;
   },
 ): Promise<
   | { ok: true; verificationId: string }
@@ -308,10 +282,6 @@ export async function recordVerification(
 > {
   if (!canMutateProjects(context)) {
     return { ok: false, error: "forbidden" };
-  }
-
-  if (input.method !== "human" && input.outcome === "passed") {
-    // Automated methods may record history but cannot close an issue.
   }
 
   try {
@@ -358,10 +328,20 @@ export async function recordVerification(
           method: input.method,
           outcome: input.outcome,
           checkedUrl: input.checkedUrl,
+          viewportWidth: input.viewportWidth,
+          viewportHeight: input.viewportHeight,
           evidenceId: input.evidenceId,
           note: input.note,
         })
         .returning({ id: issueVerifications.id });
+
+      if (input.method !== "human") {
+        return {
+          ok: true as const,
+          verificationId: verification.id,
+          issue,
+        };
+      }
 
       const now = new Date();
       if (input.outcome === "passed" && issue.status === "ready_for_verification") {

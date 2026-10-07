@@ -24,6 +24,10 @@ export default async function SignInPage({
   const callbackUrl = sanitizeCallbackUrl(
     typeof params.callbackUrl === "string" ? params.callbackUrl : undefined,
   );
+  const notice =
+    params.notice === "account-deleted"
+      ? "Your account was deleted. We’re sorry to see you go."
+      : undefined;
   const oauthError =
     typeof params.error === "string" && params.error.length > 0;
 
@@ -35,6 +39,12 @@ export default async function SignInPage({
       <SignInForm
         callbackUrl={callbackUrl}
         oauthError={oauthError}
+        notice={notice}
+        signUpHref={
+          callbackUrl.startsWith("/invite/")
+            ? `/sign-up?callbackUrl=${encodeURIComponent(callbackUrl)}`
+            : "/sign-up"
+        }
         oauthButtons={<OAuthButtons callbackUrl={callbackUrl} />}
       />
     </AuthCard>

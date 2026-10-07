@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { BILLING_ENFORCEMENT_ENABLED, UNPUBLISHED_POOLED_METRICS } from "@/lib/billing/future-config";
+import { UNPUBLISHED_POOLED_METRICS } from "@/lib/billing/future-config";
 import {
   AGENCY_TRIAL_DAYS,
   ANNUAL_SAVINGS_USD,
@@ -63,7 +63,6 @@ describe("plan entitlements", () => {
   });
 
   it("publishes unlimited playback while leaving other infrastructure metrics undecided", () => {
-    expect(BILLING_ENFORCEMENT_ENABLED).toBe(false);
     expect(UNPUBLISHED_POOLED_METRICS).not.toContain("video_playback");
     expect(POOLED_USAGE_METRICS.video_playback.allowance).toEqual({ status: "unlimited" });
     expect(isPublishedAllowance(POOLED_USAGE_METRICS.video_playback.allowance)).toBe(true);

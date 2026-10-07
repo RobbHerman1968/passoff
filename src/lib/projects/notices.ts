@@ -8,6 +8,10 @@ export const PROJECT_NOTICES = {
   "review-renamed": "Review name updated.",
   "review-archived": "Review archived.",
   "review-restored": "Review restored.",
+  "workspace-joined": "You joined the workspace.",
+  "workspace-switched": "Workspace switched.",
+  "workspace-left": "You left the workspace.",
+  "workspace-deleted": "The workspace was deleted.",
 } as const;
 
 export type ProjectNoticeKey = keyof typeof PROJECT_NOTICES;

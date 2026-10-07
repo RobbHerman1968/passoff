@@ -27,6 +27,7 @@ import {
   restoreReview,
   softDeleteProject,
 } from "@/lib/projects/service";
+import { seedWorkspacePlan } from "@/test/workspace-fixtures";
 import { createUniqueProjectSlug as createSlug } from "@/lib/projects/slug";
 
 const uniqueEmail = (label: string) =>
@@ -439,6 +440,7 @@ describe("project and review service", () => {
 
   it("filters projects and reviews by search terms", async () => {
     const { context } = await createWorkspaceContext("search");
+    await seedWorkspacePlan(context.workspaceId, "studio");
     await createProject(context, "Northwind Website");
     await createProject(context, "Southwind Film");
     const matches = await listProjects(context, { q: "North" });

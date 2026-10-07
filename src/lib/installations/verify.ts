@@ -8,6 +8,8 @@ import { projectEnvironments } from "@/db/schema";
 import { isOriginAllowed, normalizeOrigin } from "@/lib/installations/origin";
 import { enforceInstallationRateLimit } from "@/lib/installations/rate-limit";
 import { isPublicInstallationKey } from "@/lib/installations/snippet";
+import { resolveAnalyticsBootstrap } from "@/lib/telemetry/settings";
+import type { AnalyticsBootstrap } from "@/lib/telemetry/contract";
 
 export const VERIFY_BODY_MAX_BYTES = 4_096;
 
@@ -28,6 +30,7 @@ export type VerifyInstallationResult =
       status: "ready" | "disabled";
       matchedOrigin: string;
       corsOrigin: string;
+      analytics?: AnalyticsBootstrap;
     }
   | {
       ok: false;
@@ -83,6 +86,8 @@ export async function verifyWebsiteInstallation(options: {
   const [installation] = await db
     .select({
       id: projectEnvironments.id,
+      workspaceId: projectEnvironments.workspaceId,
+      kind: projectEnvironments.kind,
       isEnabled: projectEnvironments.isEnabled,
       allowedOrigins: projectEnvironments.allowedOrigins,
       verifiedAt: projectEnvironments.verifiedAt,
@@ -125,10 +130,37 @@ export async function verifyWebsiteInstallation(options: {
       ),
     );
 
+  const analytics = await resolveAnalyticsBootstrap({
+    environmentId: installation.id,
+    workspaceId: installation.workspaceId,
+    environmentKind: installation.kind,
+    isEnabled: installation.isEnabled,
+    allowedOrigins: installation.allowedOrigins,
+    requestOrigin: corsOrigin,
+  });
+  const bootstrap: AnalyticsBootstrap = {
+    enabled: Boolean(analytics.enabled && analytics.mode !== "off"),
+    schemaVersion: 1,
+    ...(analytics.mode === "strict_consent" ||
+    analytics.mode === "privacy_first_aggregate"
+      ? {
+          mode: analytics.mode,
+          samplingPercent: analytics.samplingPercent,
+          excludedRoutes: analytics.excludedRoutes,
+          privacyPolicyUrl: analytics.privacyPolicyUrl,
+          organizationName: analytics.organizationName,
+          testMode: analytics.testMode,
+          killSwitch: analytics.killSwitch,
+          hideBuiltInPrivacyLink: analytics.hideBuiltInPrivacyLink,
+        }
+      : { killSwitch: analytics.killSwitch }),
+  };
+
   return {
     ok: true,
     status: "ready",
     matchedOrigin: corsOrigin,
     corsOrigin,
+    analytics: bootstrap,
   };
 }

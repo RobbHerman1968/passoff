@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { FolderKanban, Menu, Shield } from "lucide-react";
+import { FolderKanban, Menu, Settings, Shield, Activity } from "lucide-react";
 import * as React from "react";
 
 import { AccountMenu } from "@/components/account-menu";
@@ -12,6 +12,7 @@ import { HelpTrigger } from "@/components/help/help-trigger";
 import { Logo } from "@/components/logo";
 import { NotificationBell } from "@/components/notifications/notification-bell";
 import { Button } from "@/components/ui/button";
+import { WorkspaceSwitcher, type WorkspaceOption } from "@/components/workspaces/workspace-switcher";
 import {
   Sheet,
   SheetContent,
@@ -28,6 +29,10 @@ export type AppShellProject = { id: string; name: string };
 export type AppShellProps = {
   workspaceName: string;
   workspaceRole: "owner" | "member";
+  /** The current workspace. Needed together with `workspaces` to offer switching. */
+  workspaceId?: string;
+  /** Every workspace this person belongs to. The switcher appears when there is more than one. */
+  workspaces?: WorkspaceOption[];
   accountName: string;
   accountEmail?: string | null;
   /** Shown only when the signed-in user is a platform administrator. */
@@ -37,17 +42,12 @@ export type AppShellProps = {
   children: React.ReactNode;
 };
 
-const ROLE_LABELS: Record<AppShellProps["workspaceRole"], string> = {
-  owner: "Owner",
-  member: "Member",
-};
-
 export function helpContextForPath(pathname: string): HelpPageContext {
   if (/^\/projects\/[^/]+\/reviews\/[^/]+/.test(pathname)) {
     return "website-review-detail";
   }
   if (/^\/projects\/[^/]+/.test(pathname)) return "project-detail";
-  if (pathname.startsWith("/settings")) return "projects-dashboard";
+  if (pathname.startsWith("/usability")) return "usability";
   if (pathname.startsWith("/notifications")) return "projects-dashboard";
   return "projects-dashboard";
 }
@@ -55,6 +55,8 @@ export function helpContextForPath(pathname: string): HelpPageContext {
 export function AppShell({
   workspaceName,
   workspaceRole,
+  workspaceId,
+  workspaces = [],
   accountName,
   accountEmail,
   showAdministration = false,
@@ -71,6 +73,8 @@ export function AppShell({
       pathname={pathname}
       workspaceName={workspaceName}
       workspaceRole={workspaceRole}
+      workspaceId={workspaceId}
+      workspaces={workspaces}
       showAdministration={showAdministration}
       recentProjects={recentProjects}
       onNavigate={() => setNavOpen(false)}
@@ -163,6 +167,8 @@ function SidebarContent({
   pathname,
   workspaceName,
   workspaceRole,
+  workspaceId,
+  workspaces,
   showAdministration,
   recentProjects,
   onNavigate,
@@ -170,6 +176,8 @@ function SidebarContent({
   pathname: string;
   workspaceName: string;
   workspaceRole: AppShellProps["workspaceRole"];
+  workspaceId?: string;
+  workspaces: WorkspaceOption[];
   showAdministration: boolean;
   recentProjects: AppShellProject[];
   onNavigate: () => void;
@@ -182,6 +190,8 @@ function SidebarContent({
       !recentProjects.some((project) => isProjectPath(project.id)));
   const adminCurrent =
     pathname === "/admin" || pathname.startsWith("/admin/");
+  const settingsCurrent = pathname === "/settings" || pathname.startsWith("/settings/");
+  const usabilityCurrent = pathname === "/usability" || pathname.startsWith("/usability/");
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto p-3">
@@ -194,20 +204,10 @@ function SidebarContent({
         >
           <Logo className="flex items-center gap-2.5" />
         </Link>
-        <div className="flex items-center gap-3 rounded-lg bg-background/60 p-2 ring-1 ring-sidebar-border">
-          <span
-            aria-hidden="true"
-            className="flex size-8 shrink-0 items-center justify-center rounded-md bg-primary text-sm font-semibold text-primary-foreground"
-          >
-            {workspaceName.trim().charAt(0).toUpperCase() || "W"}
-          </span>
-          <div className="grid min-w-0">
-            <p className="truncate text-sm font-medium">{workspaceName}</p>
-            <p className="text-xs text-muted-foreground">
-              {ROLE_LABELS[workspaceRole]}
-            </p>
-          </div>
-        </div>
+        <WorkspaceSwitcher
+          current={{ id: workspaceId ?? "current", name: workspaceName, role: workspaceRole }}
+          workspaces={workspaceId ? workspaces : []}
+        />
       </div>
 
       <nav aria-label="Primary" className="grid gap-6">
@@ -220,6 +220,26 @@ function SidebarContent({
               icon={<FolderKanban aria-hidden="true" />}
             >
               Projects
+            </SidebarLink>
+          </li>
+          <li>
+            <SidebarLink
+              href="/usability"
+              current={usabilityCurrent}
+              onNavigate={onNavigate}
+              icon={<Activity aria-hidden="true" />}
+            >
+              Usability
+            </SidebarLink>
+          </li>
+          <li>
+            <SidebarLink
+              href="/settings/workspace"
+              current={settingsCurrent}
+              onNavigate={onNavigate}
+              icon={<Settings aria-hidden="true" />}
+            >
+              Settings
             </SidebarLink>
           </li>
           {showAdministration ? (

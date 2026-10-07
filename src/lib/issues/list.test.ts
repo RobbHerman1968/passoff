@@ -28,6 +28,7 @@ import {
 import { createSdkIssue } from "@/lib/sdk/issues";
 import { exchangeSdkSession, resolveSdkSession } from "@/lib/sdk/session";
 import type { WorkspaceContext } from "@/lib/workspaces/context";
+import { seedVideoEvidence } from "@/test/workspace-fixtures";
 
 const uniqueEmail = (label: string) =>
   `${label}.${Date.now()}.${Math.random().toString(16).slice(2)}@example.com`;
@@ -343,14 +344,20 @@ describe("listIssuesForReview", () => {
         .set({ assigneeUserId: memberUser.user.id })
         .where(eq(issues.id, guestPending.issue.id));
 
-      // Attach a video evidence row for the has-video filter.
-      await db.insert(issueEvidence).values({
+      // Attach a ready video for the has-video filter. A failed upload on another issue
+      // must not count as video.
+      const readyVideo = await seedVideoEvidence({
         workspaceId: seeded.context.workspaceId,
+        reviewId: seeded.reviewId,
         issueId: guestReady.issue.id,
-        kind: "video",
-        captureMethod: "host_upload",
-        captureStatus: "ready",
-        sanitizedContext: {},
+        status: "ready",
+      });
+      expect(readyVideo.videoAssetId).toBeTruthy();
+      await seedVideoEvidence({
+        workspaceId: seeded.context.workspaceId,
+        reviewId: seeded.reviewId,
+        issueId: guestPending.issue.id,
+        status: "failed",
       });
 
       // Mark unavailable screenshot evidence as pending for one issue path.

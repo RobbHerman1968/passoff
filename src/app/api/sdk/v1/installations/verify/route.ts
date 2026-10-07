@@ -95,6 +95,7 @@ export async function POST(request: Request) {
     {
       ok: true,
       status: result.status,
+      analytics: result.analytics ?? { enabled: false, schemaVersion: 1 },
     },
     200,
     result.corsOrigin,

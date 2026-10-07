@@ -5,6 +5,7 @@ import {
   getActiveMembership,
   type ActiveMembership,
 } from "@/lib/auth/membership";
+import { readPreferredWorkspaceId } from "@/lib/workspaces/active-workspace";
 
 export type WorkspaceContext = ActiveMembership & {
   userId: string;
@@ -19,6 +20,10 @@ export type WorkspaceContextResult =
 /**
  * Resolve an authenticated user with an active workspace membership.
  * Product queries must use this before workspace-scoped work.
+ *
+ * The workspace is the one the person chose in this browser, re-checked against their
+ * memberships on every call. A forged, stale, or removed choice falls back to their
+ * oldest membership, so it can never open a workspace they do not belong to.
  */
 export async function requireWorkspaceContext(): Promise<WorkspaceContextResult> {
   const session = await getValidSession();
@@ -26,7 +31,11 @@ export async function requireWorkspaceContext(): Promise<WorkspaceContextResult>
     return { ok: false, reason: "unauthenticated" };
   }
 
-  const membership = await getActiveMembership(session.user.id);
+  const preferredWorkspaceId = await readPreferredWorkspaceId(session.user.id);
+  const membership = await getActiveMembership(
+    session.user.id,
+    preferredWorkspaceId,
+  );
   if (!membership) {
     return { ok: false, reason: "no_membership" };
   }

@@ -226,7 +226,7 @@ export async function restoreProjectAction(
       message:
         result.error === "conflict"
           ? CONFLICT_MESSAGE
-          : "We couldn’t restore this project. Try again.",
+          : (result.message ?? "We couldn’t restore this project. Try again."),
       version: result.project?.version,
     };
   }
@@ -332,7 +332,7 @@ export async function createReviewAction(
       status:
         created.error === "forbidden"
           ? "forbidden"
-          : created.error === "archived_readonly"
+          : created.error === "archived_readonly" || created.error === "plan_limit"
             ? "error"
             : "unavailable",
       message:
@@ -472,7 +472,7 @@ export async function restoreReviewAction(
       message:
         result.error === "conflict"
           ? CONFLICT_MESSAGE
-          : "We couldn’t restore this review. Try again.",
+          : (result.message ?? "We couldn’t restore this review. Try again."),
       version: result.review?.version,
     };
   }
@@ -663,9 +663,14 @@ export async function setWebsiteInstallationEnabledAction(input: {
 export async function createShareLinkAction(input: {
   projectId: string;
   reviewId: string;
+  /** Defaults to true so existing callers keep their behavior. */
+  canComment?: boolean;
+  /** Defaults to false. Approving is always a separate choice from commenting. */
+  canApprove?: boolean;
 }): Promise<
   ProjectActionResult & {
     url?: string;
+    shareLinkId?: string;
   }
 > {
   const auth = await requireMutableContext();
@@ -674,7 +679,8 @@ export async function createShareLinkAction(input: {
   const created = await createShareLink(auth.context, {
     projectId: input.projectId,
     reviewId: input.reviewId,
-    canComment: true,
+    canComment: input.canComment ?? true,
+    canApprove: input.canApprove ?? false,
   });
 
   if (!created.ok) {
@@ -697,6 +703,7 @@ export async function createShareLinkAction(input: {
   return {
     status: "success",
     url: created.url,
+    shareLinkId: created.shareLink.id,
     message: "Guest link ready.",
   };
 }

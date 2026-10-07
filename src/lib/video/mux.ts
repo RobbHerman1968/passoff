@@ -62,6 +62,62 @@ export async function createMuxDirectUpload(input: {
   });
 }
 
+export type MuxDeleteOutcome =
+  /** The provider no longer holds the video (deleted now, or already gone). */
+  | { done: true }
+  /** Try again later. `code` is a short label, never a raw provider message. */
+  | { done: false; code: "not_configured" | "provider_error" | "upload_in_progress" };
+
+function providerStatus(error: unknown): number | null {
+  if (error && typeof error === "object" && "status" in error) {
+    const status = (error as { status?: unknown }).status;
+    return typeof status === "number" ? status : null;
+  }
+  return null;
+}
+
+/** Deletes the stored video at Mux. A video Mux no longer has counts as deleted. */
+export async function deleteMuxAsset(providerAssetId: string): Promise<MuxDeleteOutcome> {
+  let client: Mux;
+  try {
+    client = getMuxClient();
+  } catch {
+    return { done: false, code: "not_configured" };
+  }
+  try {
+    await client.video.assets.delete(providerAssetId);
+    return { done: true };
+  } catch (error) {
+    if (providerStatus(error) === 404) return { done: true };
+    return { done: false, code: "provider_error" };
+  }
+}
+
+/**
+ * Cancels an upload that has not produced a video yet. If Mux already started the
+ * video, this reports "upload_in_progress" so the caller waits for the asset id and
+ * deletes the video instead.
+ */
+export async function cancelMuxUpload(providerUploadId: string): Promise<MuxDeleteOutcome> {
+  let client: Mux;
+  try {
+    client = getMuxClient();
+  } catch {
+    return { done: false, code: "not_configured" };
+  }
+  try {
+    await client.video.uploads.cancel(providerUploadId);
+    return { done: true };
+  } catch (error) {
+    const status = providerStatus(error);
+    if (status === 404) return { done: true };
+    if (status === 400 || status === 409 || status === 422) {
+      return { done: false, code: "upload_in_progress" };
+    }
+    return { done: false, code: "provider_error" };
+  }
+}
+
 export type SignedPlaybackTokens = {
   playback: string;
   thumbnail: string;

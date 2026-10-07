@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Lint, types, tests, build, browser tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    # A throwaway database that exists only for this run. Nothing here can reach a real
+    # customer database: CI has no DATABASE_URL secret for tests, and the test setup refuses
+    # to start if TEST_DATABASE_URL points at the same database as DATABASE_URL.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: passoff
+          POSTGRES_PASSWORD: passoff_ci_only
+          POSTGRES_DB: passoff_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U passoff -d passoff_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      CI: "true"
+      TEST_DATABASE_URL: postgresql://passoff:passoff_ci_only@127.0.0.1:5432/passoff_test
+      PASSOFF_TEST_DATABASE_CONFIRMED: "true"
+      # Only used to build the app and to start the browser-test server. Playwright replaces
+      # it with TEST_DATABASE_URL for the server it launches.
+      DATABASE_URL: postgresql://passoff:passoff_ci_only@127.0.0.1:5432/passoff_test_unused
+      # Fixed, public, CI-only values. They protect nothing.
+      AUTH_SECRET: ci-only-auth-secret-0123456789abcdef0123456789abcdef
+      CRON_SECRET: ci-only-cron-secret
+      NEXT_PUBLIC_SITE_URL: http://127.0.0.1:3000
+      EMAIL_TRANSPORT: test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - name: Apply migrations to the test database
+        run: PASSOFF_DB_TARGET=test npm run db:migrate
+
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - name: SDK size and speed budget
+        run: npm run sdk:measure
+
+      - name: Install browser
+        run: npx playwright install --with-deps chromium
+
+      - name: Browser tests
+        run: npm run test:e2e
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: |
+            test-results/
+            playwright-report/
+          retention-days: 7

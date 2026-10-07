@@ -15,6 +15,10 @@ vi.mock("@/app/(auth)/actions", () => ({
   signOutAction: vi.fn(async () => ({ status: "success" })),
 }));
 
+vi.mock("@/app/(app)/workspaces/actions", () => ({
+  switchWorkspaceAction: vi.fn(async () => ({ status: "ok" })),
+}));
+
 vi.mock("@/app/(app)/notifications/actions", () => ({
   listRecentNotificationsAction: vi.fn(async () => ({
     ok: true,
@@ -26,12 +30,17 @@ vi.mock("@/app/(app)/notifications/actions", () => ({
   markAllNotificationsReadAction: vi.fn(async () => ({ ok: true })),
 }));
 
-function renderShell(options?: { showAdministration?: boolean }) {
+function renderShell(options?: {
+  showAdministration?: boolean;
+  workspaces?: { id: string; name: string; role: "owner" | "member" }[];
+}) {
   return render(
     <AppProviders>
       <AppShell
         workspaceName="Acme Studio"
         workspaceRole="owner"
+        workspaceId="w1"
+        workspaces={options?.workspaces}
         accountName="Alex Rivera"
         accountEmail="alex@example.com"
         showAdministration={options?.showAdministration}
@@ -123,6 +132,26 @@ describe("AppShell", () => {
     expect(menuButton).toHaveFocus();
   });
 
+  it("links to settings and offers a switcher only for people in several workspaces", () => {
+    const { unmount } = renderShell();
+    expect(screen.getAllByRole("link", { name: "Settings" })[0]).toHaveAttribute(
+      "href",
+      "/settings/workspace",
+    );
+    expect(screen.queryByRole("button", { name: /Switch workspace/ })).not.toBeInTheDocument();
+    unmount();
+
+    renderShell({
+      workspaces: [
+        { id: "w1", name: "Acme Studio", role: "owner" },
+        { id: "w2", name: "Client Co", role: "member" },
+      ],
+    });
+    expect(
+      screen.getAllByRole("button", { name: /Workspace: Acme Studio\. Switch workspace/ }).length,
+    ).toBeGreaterThan(0);
+  });
+
   it("has no detectable accessibility violations", async () => {
     const { container } = renderShell();
     expect(await axe(container)).toHaveNoViolations();
@@ -136,5 +165,6 @@ describe("helpContextForPath", () => {
     expect(helpContextForPath("/projects/p1/reviews/r1")).toBe(
       "website-review-detail",
     );
+    expect(helpContextForPath("/usability")).toBe("usability");
   });
 });

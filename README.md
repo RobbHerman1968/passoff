@@ -1,36 +1,39 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Passoff
 
-## Getting Started
+Passoff turns website feedback into clear work: reviewers point at the page, the team gets a ready-to-fix issue with evidence, and clients can approve the result.
 
-First, run the development server:
+## Run it
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm install
+cp .env.example .env          # fill in DATABASE_URL, AUTH_SECRET, and what you need
+npm run db:migrate
+npm run dev                   # http://localhost:3000
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Check it
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+npm run lint
+npm run typecheck
+npm test                      # needs TEST_DATABASE_URL (never DATABASE_URL)
+npm run build
+npm run sdk:measure           # website script size budgets
+npm run test:e2e              # Playwright
+npm run test:release          # all of the above, in order, with a summary
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Automated tests only ever use `TEST_DATABASE_URL` and refuse to run against the app database. See
+[`docs/RELEASE_AND_OPERATIONS.md`](docs/RELEASE_AND_OPERATIONS.md).
 
-## Learn More
+## Where things are documented
 
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+| Topic | File |
+| --- | --- |
+| Product plan | `docs/MVP_PLAN.md` |
+| Data model and test database | `docs/DATABASE_MODEL.md` |
+| Release, deploy, jobs, monitoring, retention | `docs/RELEASE_AND_OPERATIONS.md` |
+| Threat model and security findings | `docs/SECURITY.md` |
+| Launch checklist and recommendation | `docs/LAUNCH_CHECKLIST.md` |
+| Billing, workspace members, video, usability | `docs/BILLING.md`, `docs/WORKSPACE_MEMBERS.md`, `docs/VIDEO_EVIDENCE.md`, `docs/BEHAVIORAL_INSIGHTS.md` |
+| UI rules | `docs/UI_APP_GUIDELINES.md`, `docs/UI_PUBLIC_GUIDELINES.md` |

@@ -19,6 +19,7 @@ import {
   DEFAULT_NOTIFICATION_SETTINGS,
   emailCategoryForType,
   emailEnabledForCategory,
+  isEssentialEmailType,
   shouldEmailNotification,
   type NotificationListItem,
   type NotificationPayload,
@@ -35,7 +36,7 @@ export type { NotificationListItem };
 
 export type CreateNotificationInput = {
   recipientUserId: string;
-  actorUserId: string;
+  actorUserId: string | null;
   workspaceId: string;
   projectId: string | null;
   reviewId: string | null;
@@ -167,7 +168,8 @@ async function deliverNotificationEmail(row: {
   data: NotificationPayload;
 }) {
   const category = emailCategoryForType(row.type);
-  if (!category || !shouldEmailNotification(row.type)) {
+  const essential = isEssentialEmailType(row.type);
+  if (!shouldEmailNotification(row.type)) {
     await db
       .update(notifications)
       .set({ emailStatus: "skipped", emailedAt: new Date() })
@@ -175,8 +177,8 @@ async function deliverNotificationEmail(row: {
     return;
   }
 
-  const settings = await getUserNotificationSettings(row.recipientUserId);
-  if (!emailEnabledForCategory(settings, category)) {
+  const settings = essential ? null : await getUserNotificationSettings(row.recipientUserId);
+  if (!essential && category && settings && !emailEnabledForCategory(settings, category)) {
     await db
       .update(notifications)
       .set({ emailStatus: "skipped", emailedAt: new Date() })

@@ -3,7 +3,6 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 
-import { createIssueComment } from "@/lib/comments/service";
 import {
   getNotificationForUser,
   listNotificationsForUser,
@@ -90,27 +89,4 @@ export async function updateNotificationSettingsAction(input: {
   const settings = await updateUserNotificationSettings(auth.context.userId, input);
   revalidatePath("/settings/notifications");
   return { ok: true as const, settings };
-}
-
-export async function createIssueCommentAction(input: {
-  projectId: string;
-  reviewId: string;
-  issueNumber: number;
-  body: string;
-}) {
-  const auth = await requireWorkspaceContext();
-  if (!auth.ok) {
-    return { ok: false as const, message: "Sign in to continue." };
-  }
-  const result = await createIssueComment(auth.context, input);
-  if (!result.ok) {
-    return {
-      ok: false as const,
-      message: result.message ?? "We couldn’t save that reply. Try again.",
-    };
-  }
-  revalidatePath(
-    `/projects/${input.projectId}/reviews/${input.reviewId}/issues/${input.issueNumber}`,
-  );
-  return { ok: true as const };
 }

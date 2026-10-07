@@ -127,6 +127,15 @@ export const ANNUAL_SAVINGS_USD =
   PLAN_ENTITLEMENTS.agency.monthlyPriceUsd * 12 -
   PLAN_ENTITLEMENTS.agency.annualTotalUsd;
 
+/** The biggest yearly saving across paid plans, as a whole percent. Derived, never typed by hand. */
+export const ANNUAL_SAVINGS_PERCENT = Math.max(
+  ...(["studio", "agency"] as const).map((id) => {
+    const plan = PLAN_ENTITLEMENTS[id];
+    const yearlyAtMonthlyPrice = plan.monthlyPriceUsd * 12;
+    return Math.round(((yearlyAtMonthlyPrice - plan.annualTotalUsd) / yearlyAtMonthlyPrice) * 100);
+  }),
+);
+
 export const POOLED_USAGE_METRICS: Record<
   PooledUsageMetric,
   { label: string; allowance: AllowanceState }

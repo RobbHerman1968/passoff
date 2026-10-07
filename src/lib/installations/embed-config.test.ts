@@ -4,6 +4,7 @@ import {
   getPassoffEmbedBaseUrl,
   getSdkBootstrapUrl,
 } from "@/lib/installations/embed-config";
+import { PASSOFF_SDK_VERSION } from "../../../packages/website-sdk/version";
 
 describe("embed config", () => {
   it("requires a validated absolute http(s) base URL", () => {
@@ -22,7 +23,7 @@ describe("embed config", () => {
 
   it("builds the production bootstrap URL", () => {
     expect(getSdkBootstrapUrl("https://app.example.com")).toBe(
-      "https://app.example.com/sdk/v1/passoff.js?v=1.0.13",
+      `https://app.example.com/sdk/v1/passoff.js?v=${PASSOFF_SDK_VERSION}`,
     );
   });
 });

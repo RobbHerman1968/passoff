@@ -15,6 +15,10 @@ import { hashRateLimitSubject } from "@/lib/auth/tokens";
  * | sign_up               | 5            | 1 hour   | remaining window      |
  * | forgot_password       | 5            | 1 hour   | remaining window      |
  * | reset_password        | 10           | 1 hour   | remaining window      |
+ * | workspace_invite      | 20           | 1 hour   | remaining window      |
+ * | invitation_lookup     | 30           | 15 min   | remaining window      |
+ * | account_reauth        | 5            | 15 min   | remaining window      |
+ * | billing_session       | 20           | 1 hour   | remaining window      |
  *
  * Subjects are hashed (email + coarse request fingerprint) so counters are
  * privacy-conscious and do not permanently lock an account.
@@ -23,7 +27,11 @@ export type RateLimitScope =
   | "credentials_sign_in"
   | "sign_up"
   | "forgot_password"
-  | "reset_password";
+  | "reset_password"
+  | "workspace_invite"
+  | "invitation_lookup"
+  | "account_reauth"
+  | "billing_session";
 
 const LIMITS: Record<
   RateLimitScope,
@@ -33,6 +41,14 @@ const LIMITS: Record<
   sign_up: { maxAttempts: 5, windowMs: 60 * 60 * 1000 },
   forgot_password: { maxAttempts: 5, windowMs: 60 * 60 * 1000 },
   reset_password: { maxAttempts: 10, windowMs: 60 * 60 * 1000 },
+  // Sending and re-sending invitations, counted per workspace.
+  workspace_invite: { maxAttempts: 20, windowMs: 60 * 60 * 1000 },
+  // Opening or accepting invitation links, counted per browser.
+  invitation_lookup: { maxAttempts: 30, windowMs: 15 * 60 * 1000 },
+  // Re-entering a password before a sensitive account change, counted per person.
+  account_reauth: { maxAttempts: 5, windowMs: 15 * 60 * 1000 },
+  // Starting Checkout or opening the Billing Portal, counted per workspace.
+  billing_session: { maxAttempts: 20, windowMs: 60 * 60 * 1000 },
 };
 
 export type RateLimitResult =

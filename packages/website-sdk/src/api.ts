@@ -273,3 +273,216 @@ export async function createIssue(options: {
     return friendlyFromNetwork();
   }
 }
+
+export type SdkIssueComment = {
+  id: string;
+  body: string;
+  visibility: "public";
+  authorDisplayName: string;
+  authorKind: "member" | "guest";
+  createdAt: string;
+  mentions: Array<{ userId: string; displayName: string }>;
+};
+
+/** Load the public discussion for one issue. Private notes are never returned. */
+export async function fetchIssueComments(options: {
+  apiBaseUrl: string;
+  sessionToken: string;
+  issueNumber: number;
+}): Promise<
+  | { ok: true; comments: SdkIssueComment[]; canComment: boolean }
+  | ApiFailure
+> {
+  try {
+    const response = await fetch(
+      `${options.apiBaseUrl}/api/sdk/v1/issues/${encodeURIComponent(
+        String(options.issueNumber),
+      )}/comments`,
+      {
+        method: "GET",
+        mode: "cors",
+        credentials: "omit",
+        headers: {
+          Accept: "application/json",
+          Authorization: `Bearer ${options.sessionToken}`,
+        },
+      },
+    );
+    const payload = (await response.json().catch(() => null)) as {
+      ok?: boolean;
+      comments?: SdkIssueComment[];
+      canComment?: boolean;
+      message?: string;
+      error?: string;
+    } | null;
+    if (!response.ok || !payload?.ok || !Array.isArray(payload.comments)) {
+      return {
+        ok: false,
+        error: payload?.error,
+        message:
+          payload?.message ?? "Passoff couldn’t load the discussion. Try again.",
+      };
+    }
+    return {
+      ok: true,
+      comments: payload.comments.filter((comment) => comment.visibility === "public"),
+      canComment: Boolean(payload.canComment),
+    };
+  } catch {
+    return friendlyFromNetwork();
+  }
+}
+
+export async function createIssueComment(options: {
+  apiBaseUrl: string;
+  sessionToken: string;
+  issueNumber: number;
+  body: string;
+}): Promise<{ ok: true; comment: SdkIssueComment } | ApiFailure> {
+  try {
+    const response = await fetch(
+      `${options.apiBaseUrl}/api/sdk/v1/issues/${encodeURIComponent(
+        String(options.issueNumber),
+      )}/comments`,
+      {
+        method: "POST",
+        mode: "cors",
+        credentials: "omit",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+          Authorization: `Bearer ${options.sessionToken}`,
+        },
+        body: JSON.stringify({ body: options.body }),
+      },
+    );
+    const payload = (await response.json().catch(() => null)) as {
+      ok?: boolean;
+      comment?: SdkIssueComment;
+      message?: string;
+      error?: string;
+    } | null;
+    if (!response.ok || !payload?.ok || !payload.comment) {
+      return {
+        ok: false,
+        error: payload?.error,
+        message:
+          payload?.message ??
+          "Passoff couldn’t save that reply. Your text is still here. Try again.",
+      };
+    }
+    return { ok: true, comment: payload.comment };
+  } catch {
+    return friendlyFromNetwork();
+  }
+}
+
+export type SdkApprovalBlockedReason =
+  | "view_only"
+  | "no_request"
+  | "someone_else"
+  | "already_decided";
+
+export type SdkApproval = {
+  visibleState: string;
+  statusLabel: string;
+  versionLabel: string;
+  canDecide: boolean;
+  blockedReason: SdkApprovalBlockedReason | null;
+  /** Present only when this link can decide on the current version right now. */
+  request: {
+    id: string;
+    deploymentId: string;
+    versionLabel: string;
+    requesterDisplayName: string;
+    message: string | null;
+  } | null;
+};
+
+export type SdkApprovalDecision = "approved" | "changes_requested";
+
+/** Load approval status for this review link. `approval` is null when none applies. */
+export async function fetchApprovalStatus(options: {
+  apiBaseUrl: string;
+  sessionToken: string;
+}): Promise<{ ok: true; approval: SdkApproval | null } | ApiFailure> {
+  try {
+    const response = await fetch(`${options.apiBaseUrl}/api/sdk/v1/approvals/status`, {
+      method: "GET",
+      mode: "cors",
+      credentials: "omit",
+      headers: {
+        Accept: "application/json",
+        Authorization: `Bearer ${options.sessionToken}`,
+      },
+    });
+    const payload = (await response.json().catch(() => null)) as {
+      ok?: boolean;
+      approval?: SdkApproval | null;
+      message?: string;
+      error?: string;
+    } | null;
+    if (!response.ok || !payload?.ok) {
+      return {
+        ok: false,
+        error: payload?.error,
+        message:
+          payload?.message ?? "Passoff couldn’t load the approval status. Try again.",
+      };
+    }
+    const approval = payload.approval;
+    // Ignore anything that doesn’t look like an approval so older servers stay harmless.
+    if (!approval || typeof approval.statusLabel !== "string") {
+      return { ok: true, approval: null };
+    }
+    return { ok: true, approval };
+  } catch {
+    return friendlyFromNetwork();
+  }
+}
+
+/** Send the guest’s decision. A note is required when asking for changes. */
+export async function decideApproval(options: {
+  apiBaseUrl: string;
+  sessionToken: string;
+  decision: SdkApprovalDecision;
+  note?: string;
+  deploymentId?: string;
+  requestId?: string;
+}): Promise<{ ok: true; message: string } | ApiFailure> {
+  try {
+    const response = await fetch(`${options.apiBaseUrl}/api/sdk/v1/approvals/decide`, {
+      method: "POST",
+      mode: "cors",
+      credentials: "omit",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        Authorization: `Bearer ${options.sessionToken}`,
+      },
+      body: JSON.stringify({
+        decision: options.decision,
+        note: options.note || undefined,
+        deploymentId: options.deploymentId,
+        requestId: options.requestId,
+      }),
+    });
+    const payload = (await response.json().catch(() => null)) as {
+      ok?: boolean;
+      message?: string;
+      error?: string;
+    } | null;
+    if (!response.ok || !payload?.ok) {
+      return {
+        ok: false,
+        error: payload?.error,
+        message:
+          payload?.message ??
+          "Passoff couldn’t save your decision. Your note is still here. Try again.",
+      };
+    }
+    return { ok: true, message: payload.message ?? "Thanks. Your decision is recorded." };
+  } catch {
+    return friendlyFromNetwork();
+  }
+}

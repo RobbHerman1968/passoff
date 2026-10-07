@@ -86,7 +86,7 @@ test.describe("review issue list", () => {
     await expect(page.getByRole("heading", { name: "Feedback" })).toBeVisible();
     await expect(
       page.getByRole("img", {
-        name: /screenshot|reconstruction/i,
+        name: /captured page context/i,
       }),
     ).toBeVisible();
 

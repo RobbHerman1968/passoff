@@ -1,9 +1,9 @@
 import "server-only";
 
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 
 import { db } from "@/db";
-import { issueEvidence, issues, videoAssets } from "@/db/schema";
+import { issueEvidence, issues, reviews, videoAssets } from "@/db/schema";
 import {
   resolveGuestReviewSession,
   type GuestReviewSession,
@@ -58,13 +58,18 @@ async function loadVideoForWorkspace(
   workspaceId: string,
   reviewId?: string,
 ): Promise<VideoPlaybackRow | null> {
+  // Only the clip currently attached to a live issue can ever be played. A replaced,
+  // removed, or abandoned clip has no playback id and no route to one.
   const conditions = [
     eq(videoAssets.id, videoAssetId),
     eq(videoAssets.workspaceId, workspaceId),
+    eq(videoAssets.lifecycle, "current"),
     eq(issues.workspaceId, workspaceId),
+    isNull(issues.deletedAt),
   ];
   if (reviewId) {
-    conditions.push(eq(issues.reviewId, reviewId));
+    // Guests also lose access when the review is archived.
+    conditions.push(eq(issues.reviewId, reviewId), isNull(reviews.archivedAt));
   }
 
   const [row] = await db
@@ -89,6 +94,7 @@ async function loadVideoForWorkspace(
       issues,
       and(eq(issues.id, issueEvidence.issueId), eq(issues.workspaceId, videoAssets.workspaceId)),
     )
+    .innerJoin(reviews, eq(reviews.id, issues.reviewId))
     .where(and(...conditions))
     .limit(1);
 

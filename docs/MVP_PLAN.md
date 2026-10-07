@@ -17,12 +17,13 @@ Current published plan limits:
 
 - Studio: 3 workspace members, 5 active review websites
 - Agency: 6 workspace members, unlimited active review websites
-- Agency video-evidence pilot: 3-minute / 250 MB / 1080p clips, 1 hour of new video per calendar month, 2 hours retained, 10 playback hours per calendar month, 30-day retention, no automatic overage billing, higher allowances only with explicit owner approval
-- Free and Studio video-evidence allowances are undecided and must not be published until a separate product decision
+- Video evidence on every plan: clips up to 3 minutes, 250 MB, and 1080p; 30-day retention after the issue closes; reviewer playback is not metered; no automatic overage billing. New video per calendar month and minutes kept at once: Free 10 / 15, Studio 30 / 60, Agency 60 / 120. `src/lib/billing/plans.ts` is the only source of these numbers.
 
-Unlimited active review websites does not mean unlimited infrastructure usage. Pooled workspace allowances (video processing/storage/playback, tracked pageviews, telemetry, AI analyses, browser verification jobs, proxy sessions and bandwidth) stay unpublished until each has an approved value and enforcement behavior.
+Unlimited active review websites does not mean unlimited infrastructure usage. Pooled workspace allowances (video processing/storage, tracked pageviews, telemetry, AI analyses, browser verification jobs, proxy sessions and bandwidth) stay unpublished until each has an approved value and enforcement behavior.
 
 Do not treat later sections of this document as the current source of truth for pricing, team naming, video reviews, or review rounds.
+
+The current recommendation for a direct Precision Foundry delivery add-on, including its proposed $19 standard price and $10 founding-customer price, is recorded in [`docs/FOUNDRY_DELIVERY_PACKAGE.md`](./FOUNDRY_DELIVERY_PACKAGE.md). It is a planning decision and must not be presented publicly as an available offer until its entitlement, billing, and synchronization work is complete.
 
 ## 1. Product summary
 
@@ -428,7 +429,7 @@ Required:
 - Include the visible request, status, assignee, page or timestamp, environment context, screenshot link, and direct Passoff link.
 - Provide a signed generic webhook for teams that want automated handoff.
 
-Direct GitHub, Linear, Jira, ClickUp, and Asana integrations are immediate post-MVP unless implementation capacity permits GitHub or Linear without delaying launch quality.
+Direct GitHub, Linear, Jira, ClickUp, and Asana integrations are post-MVP candidates. The first-party Precision Foundry delivery package is now the preferred path to evaluate first because Passoff and Foundry can preserve review evidence and delivery status without depending on a third-party task platform. See [`docs/FOUNDRY_DELIVERY_PACKAGE.md`](./FOUNDRY_DELIVERY_PACKAGE.md).
 
 ### 7.15 Billing and limits
 
@@ -443,6 +444,8 @@ Required:
 - Show current usage without making the user calculate it.
 
 Avoid making essential export or security capabilities available only on an expensive team tier.
+
+Implemented (Story 7): Stripe Checkout and Billing Portal, a 14-day once-per-workspace Agency trial, a Settings → Billing page with plan and usage, server-enforced limits for members, active review websites, and video evidence, a 7-day payment grace period, and owner notices at 80% and 100%. Work is never deleted for non-payment or downgrades. Setup, behavior, and launch notes are in [`docs/BILLING.md`](./BILLING.md).
 
 ## 8. Accessibility and inclusive interaction
 
@@ -785,14 +788,15 @@ Passoff may launch publicly only when:
 
 Prioritize using actual launch evidence, with this expected order:
 
-1. GitHub and Linear integration
-2. Website console and network diagnostics expanded safely
-3. Review version comparison
-4. Video drawing and time ranges
-5. Video transcript and transcript-linked feedback
-6. Image and PDF review
-7. AI-assisted feedback summaries and duplicate grouping
-8. MCP server for coding agents
+1. Precision Foundry delivery package and direct handoff
+2. Decide whether GitHub or Linear still provides enough customer value to justify a separate native integration
+3. Website console and network diagnostics expanded safely
+4. Review version comparison
+5. Video drawing and time ranges
+6. Video transcript and transcript-linked feedback
+7. Image and PDF review
+8. AI-assisted feedback summaries and duplicate grouping
+9. MCP server for coding agents
 
 ## 19. Main risks
 

@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Globe, MessageSquarePlus, SearchX } from "lucide-react";
 
+import { ApprovalStatusPill } from "@/components/approvals/approval-status-pill";
 import { EmptyState } from "@/components/empty-state";
 import {
   ResourceList,
@@ -17,6 +18,7 @@ import {
   formatRelativeActivity,
   formatVersionLabel,
 } from "@/lib/projects/format";
+import type { ReviewApprovalSummary } from "@/lib/approvals/types";
 import type { ReviewListItem } from "@/lib/projects/service";
 import { cn } from "@/lib/utils";
 
@@ -28,9 +30,12 @@ export function ReviewList({
   hasFilters,
   canAddReview,
   projectArchived,
+  approvalSummaries,
 }: {
   projectId: string;
   reviews: ReviewListItem[];
+  /** Approval state per review id. Omit when it couldn’t be loaded. */
+  approvalSummaries?: ReadonlyMap<string, ReviewApprovalSummary>;
   hasFilters: boolean;
   canAddReview: boolean;
   projectArchived: boolean;
@@ -86,6 +91,7 @@ export function ReviewList({
     >
       {reviews.map((review) => {
         const archived = Boolean(review.archivedAt);
+        const approval = approvalSummaries?.get(review.id);
         return (
           <ResourceRow key={review.id} className={COLUMNS}>
             <div className="flex min-w-0 items-center gap-3">
@@ -107,6 +113,16 @@ export function ReviewList({
                 <p className="truncate text-xs text-muted-foreground">
                   {review.environmentName} · Owner: {review.ownerName}
                 </p>
+                {approval && approval.visibleState !== "not_requested" ? (
+                  <div>
+                    <ApprovalStatusPill
+                      state={approval.visibleState}
+                      currentVersionLabel={approval.currentVersionLabel}
+                      approvedVersionLabel={approval.approvedVersionLabel}
+                      className="h-auto min-h-6 max-w-full whitespace-normal py-0.5"
+                    />
+                  </div>
+                ) : null}
               </div>
             </div>
 

@@ -1,5 +1,14 @@
 import { captureAnchor, reviewerDescription } from "./anchor";
-import { createIssue, fetchHeatmapIssues, fetchIssues, type SdkRemoteIssue } from "./api";
+import { createApprovalPanel, type ApprovalPanel } from "./approval";
+import {
+  createIssue,
+  createIssueComment,
+  fetchHeatmapIssues,
+  fetchIssueComments,
+  fetchIssues,
+  type SdkIssueComment,
+  type SdkRemoteIssue,
+} from "./api";
 import { SCREENSHOT_CHUNK_FILE, HEATMAP_CHUNK_FILE } from "./build-flags";
 import { createMarkerLayer, type MarkerRecord } from "./markers";
 import { createIdempotencyKey } from "./session-store";
@@ -360,8 +369,109 @@ export function mountReview(options: {
   summaryClose.textContent = "Close";
   summaryClose.hidden = true;
 
-  panel.append(panelTitle, panelBody, form, panelStatus, summaryClose);
+
+  const discussion = document.createElement("section");
+  discussion.className = "discussion";
+  discussion.hidden = true;
+  discussion.setAttribute("aria-labelledby", "passoff-discussion-title");
+
+  const discussionTitle = document.createElement("h3");
+  discussionTitle.id = "passoff-discussion-title";
+  discussionTitle.textContent = "Discussion";
+
+  const discussionStatus = document.createElement("p");
+  discussionStatus.className = "form-status";
+  discussionStatus.setAttribute("role", "status");
+  discussionStatus.hidden = true;
+
+  const discussionRetry = document.createElement("button");
+  discussionRetry.className = "button";
+  discussionRetry.type = "button";
+  discussionRetry.textContent = "Try again";
+  discussionRetry.hidden = true;
+
+  const discussionList = document.createElement("ol");
+  discussionList.className = "discussion-list";
+  discussionList.setAttribute("aria-label", "Replies, oldest first");
+
+  const replyForm = document.createElement("form");
+  replyForm.className = "feedback-form";
+  replyForm.hidden = true;
+
+  const replyLabel = document.createElement("label");
+  replyLabel.className = "field-label";
+  replyLabel.htmlFor = "passoff-reply";
+  replyLabel.textContent = "Reply";
+
+  const replyTextarea = document.createElement("textarea");
+  replyTextarea.id = "passoff-reply";
+  replyTextarea.name = "reply";
+  replyTextarea.rows = 3;
+  replyTextarea.maxLength = 4000;
+  replyTextarea.setAttribute("aria-required", "true");
+
+  const replyError = document.createElement("p");
+  replyError.className = "field-error";
+  replyError.id = "passoff-reply-error";
+  replyError.hidden = true;
+
+  const replyStatus = document.createElement("p");
+  replyStatus.className = "form-status";
+  replyStatus.setAttribute("role", "status");
+  replyStatus.hidden = true;
+
+  const replyActions = document.createElement("div");
+  replyActions.className = "form-actions";
+
+  const replySubmit = document.createElement("button");
+  replySubmit.className = "button";
+  replySubmit.dataset.variant = "primary";
+  replySubmit.type = "submit";
+  replySubmit.textContent = "Add reply";
+
+  replyActions.append(replySubmit);
+  replyForm.append(replyLabel, replyTextarea, replyError, replyStatus, replyActions);
+
+  const discussionNote = document.createElement("p");
+  discussionNote.className = "form-status";
+  discussionNote.hidden = true;
+
+  discussion.append(
+    discussionTitle,
+    discussionStatus,
+    discussionRetry,
+    discussionList,
+    discussionNote,
+    replyForm,
+  );
+
+  panel.append(panelTitle, panelBody, form, panelStatus, discussion, summaryClose);
   root.append(live, toolbar, launcher, highlight, banner, panel);
+
+  // Guest approval lives in its own panel. Decide controls appear only when the server
+  // says this review link can decide; other links see status only.
+  let approval: ApprovalPanel | null = null;
+  if (options.sessionToken && options.apiBaseUrl) {
+    approval = createApprovalPanel({
+      apiBaseUrl: options.apiBaseUrl,
+      sessionToken: options.sessionToken,
+      live,
+      canOpen() {
+        if (composing) {
+          live.textContent =
+            "Finish or cancel your feedback first, then open approval.";
+          return false;
+        }
+        return true;
+      },
+      onOpen() {
+        confirmation = null;
+        panel.hidden = true;
+      },
+    });
+    toolbar.insertBefore(approval.button, closeButton);
+    root.append(approval.panel);
+  }
 
   let mode: ReviewMode = "browse";
   let collapsed = readToolbarCollapsed();
@@ -548,6 +658,7 @@ export function mountReview(options: {
   const positionChrome = () => {
     const mobile = window.innerWidth < 768;
     panel.dataset.placement = mobile ? "mobile" : "desktop";
+    if (approval) approval.panel.dataset.placement = mobile ? "mobile" : "desktop";
     if (toolbarPosition) {
       applyToolbarPosition(toolbarPosition);
     } else {
@@ -672,12 +783,229 @@ export function mountReview(options: {
     );
   };
 
+
+  // --- Public discussion for an existing issue (guests never see private notes) ---
+  let discussionConfirmation: ReviewerConfirmation | null = null;
+  let discussionIssueNumber: number | null = null;
+  let discussionComments: SdkIssueComment[] = [];
+  let discussionCanComment = false;
+  let discussionLoadToken = 0;
+  let replying = false;
+
+  function renderMentionText(target: HTMLElement, text: string, comment: SdkIssueComment) {
+    const names = comment.mentions
+      .map((mention) => mention.displayName.trim())
+      .filter(Boolean)
+      .sort((a, b) => b.length - a.length);
+    if (names.length === 0) {
+      target.append(document.createTextNode(text));
+      return;
+    }
+    const escaped = names.map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+    const pattern = new RegExp(`@(${escaped.join("|")})(?=$|\\s|[.,!?;:])`, "g");
+    let last = 0;
+    for (const match of text.matchAll(pattern)) {
+      const index = match.index ?? 0;
+      if (index > last) target.append(document.createTextNode(text.slice(last, index)));
+      const mention = document.createElement("strong");
+      mention.textContent = match[0];
+      target.append(mention);
+      last = index + match[0].length;
+    }
+    if (last < text.length) target.append(document.createTextNode(text.slice(last)));
+  }
+
+  function renderDiscussionList() {
+    discussionList.replaceChildren();
+    for (const comment of discussionComments) {
+      const item = document.createElement("li");
+      const article = document.createElement("article");
+      article.className = "discussion-item";
+      const nameId = `passoff-reply-author-${comment.id}`;
+      article.setAttribute("aria-labelledby", nameId);
+
+      const header = document.createElement("header");
+      const name = document.createElement("strong");
+      name.id = nameId;
+      name.textContent = comment.authorDisplayName;
+      const designation = document.createElement("span");
+      designation.textContent =
+        comment.authorKind === "guest" ? " · Reviewer" : " · Team member";
+      const time = document.createElement("time");
+      time.dateTime = comment.createdAt;
+      const created = new Date(comment.createdAt);
+      time.textContent = Number.isNaN(created.getTime())
+        ? ""
+        : ` · ${created.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}`;
+      header.append(name, designation, time);
+
+      const text = document.createElement("p");
+      text.className = "discussion-body";
+      renderMentionText(text, comment.body, comment);
+
+      article.append(header, text);
+      item.append(article);
+      discussionList.append(item);
+    }
+  }
+
+  function renderDiscussion() {
+    if (discussionIssueNumber === null) {
+      discussion.hidden = true;
+      return;
+    }
+    discussion.hidden = false;
+    discussionTitle.textContent =
+      discussionComments.length > 0
+        ? `Discussion (${discussionComments.length})`
+        : "Discussion";
+    renderDiscussionList();
+    replyForm.hidden = !discussionCanComment;
+    discussionNote.hidden = discussionCanComment;
+    discussionNote.textContent = discussionCanComment
+      ? ""
+      : "This review link is view-only, so replies can’t be added.";
+    if (
+      discussionComments.length === 0 &&
+      discussionStatus.hidden &&
+      discussionRetry.hidden
+    ) {
+      discussionStatus.hidden = false;
+      discussionStatus.textContent = "No replies yet.";
+    }
+  }
+
+  async function loadDiscussion(issueNumber: number) {
+    if (!options.sessionToken || !options.apiBaseUrl) return;
+    const token = ++discussionLoadToken;
+    discussionComments = [];
+    discussionCanComment = false;
+    discussionRetry.hidden = true;
+    discussionStatus.hidden = false;
+    discussionStatus.textContent = "Loading replies…";
+    replyForm.hidden = true;
+    renderDiscussionList();
+
+    const result = await fetchIssueComments({
+      apiBaseUrl: options.apiBaseUrl,
+      sessionToken: options.sessionToken,
+      issueNumber,
+    });
+    if (token !== discussionLoadToken || destroyed) return;
+
+    if (!result.ok) {
+      discussionStatus.hidden = false;
+      discussionStatus.textContent =
+        result.message ?? "Passoff couldn’t load the discussion. Try again.";
+      discussionRetry.hidden = false;
+      return;
+    }
+    discussionComments = result.comments;
+    discussionCanComment = result.canComment && canComment;
+    discussionStatus.hidden = true;
+    discussionStatus.textContent = "";
+    renderDiscussion();
+  }
+
+  function syncDiscussion() {
+    const target =
+      confirmation && confirmation.issueId && options.sessionToken && options.apiBaseUrl
+        ? confirmation
+        : null;
+    if (!target) {
+      discussionConfirmation = null;
+      discussionIssueNumber = null;
+      discussionLoadToken++;
+      discussion.hidden = true;
+      return;
+    }
+    if (discussionConfirmation === target) return;
+    discussionConfirmation = target;
+    discussionIssueNumber = target.markerNumber;
+    replyTextarea.value = "";
+    replyError.hidden = true;
+    replyStatus.hidden = true;
+    replyTextarea.removeAttribute("aria-invalid");
+    replyTextarea.setAttribute("aria-describedby", "passoff-reply-error");
+    discussion.hidden = false;
+    void loadDiscussion(target.markerNumber);
+  }
+
+  async function submitReply() {
+    if (replying || discussionIssueNumber === null) return;
+    if (!options.sessionToken || !options.apiBaseUrl) return;
+    const text = replyTextarea.value.trim();
+    if (!text) {
+      replyError.hidden = false;
+      replyError.textContent = "Enter a reply before adding it.";
+      replyTextarea.setAttribute("aria-invalid", "true");
+      replyTextarea.focus();
+      return;
+    }
+    replyError.hidden = true;
+    replyTextarea.removeAttribute("aria-invalid");
+
+    if (typeof navigator !== "undefined" && navigator.onLine === false) {
+      replyStatus.hidden = false;
+      replyStatus.textContent =
+        "You’re offline. Your reply is still here. Reconnect, then try again.";
+      replySubmit.textContent = "Try again";
+      live.textContent = "You’re offline.";
+      return;
+    }
+
+    replying = true;
+    replySubmit.disabled = true;
+    replySubmit.textContent = "Adding reply…";
+    replyStatus.hidden = false;
+    replyStatus.textContent = "Sending your reply…";
+    const issueNumber = discussionIssueNumber;
+
+    const result = await createIssueComment({
+      apiBaseUrl: options.apiBaseUrl,
+      sessionToken: options.sessionToken,
+      issueNumber,
+      body: text,
+    });
+
+    replying = false;
+    replySubmit.disabled = false;
+    if (destroyed) return;
+
+    if (!result.ok) {
+      replyStatus.hidden = false;
+      replyStatus.textContent =
+        result.message ??
+        "Passoff couldn’t save that reply. Your text is still here. Try again.";
+      replySubmit.textContent = "Try again";
+      live.textContent = "Your reply wasn’t saved. You can try again.";
+      replyTextarea.focus();
+      return;
+    }
+
+    replySubmit.textContent = "Add reply";
+    if (issueNumber === discussionIssueNumber) {
+      discussionComments = [...discussionComments, result.comment];
+      discussionStatus.hidden = true;
+      replyTextarea.value = "";
+      renderDiscussion();
+    }
+    replyStatus.hidden = false;
+    replyStatus.textContent = "Reply sent.";
+    live.textContent = "Reply sent.";
+    replyTextarea.focus();
+  }
+
   const renderPanel = () => {
     if ((!confirmation && !composing) || collapsed) {
       panel.hidden = true;
       return;
     }
+    if (composing) {
+      discussion.hidden = true;
+    }
     panel.hidden = false;
+    approval?.close({ restoreFocus: false });
 
     if (composing && pendingAnchor) {
       form.hidden = false;
@@ -713,6 +1041,7 @@ export function mountReview(options: {
       panelStatus.textContent =
         bits.join(" · ") || "Feedback details were captured.";
     }
+    syncDiscussion();
   };
 
   const selection = createSelectionController({
@@ -915,6 +1244,7 @@ export function mountReview(options: {
       markers.refresh();
       return;
     }
+    void approval?.refresh();
     const pageUrl = normalizePageUrlClient(window.location.href);
     if (!pageUrl) return;
     const listed = await fetchIssues({
@@ -966,6 +1296,7 @@ export function mountReview(options: {
     launcher.hidden = !collapsed;
     banner.hidden = collapsed || mode !== "add-feedback";
     if (collapsed) {
+      approval?.close({ restoreFocus: false });
       selection.stop();
       highlight.hidden = true;
       stopHeatmap();
@@ -989,6 +1320,20 @@ export function mountReview(options: {
   });
   retryButton.addEventListener("click", () => {
     void submitFeedback();
+  });
+  replyForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    void submitReply();
+  });
+  replyTextarea.addEventListener("input", () => {
+    if (!replyError.hidden) {
+      replyError.hidden = true;
+      replyTextarea.removeAttribute("aria-invalid");
+    }
+    replySubmit.textContent = "Add reply";
+  });
+  discussionRetry.addEventListener("click", () => {
+    if (discussionIssueNumber !== null) void loadDiscussion(discussionIssueNumber);
   });
   summaryClose.addEventListener("click", () => {
     confirmation = null;
@@ -1078,6 +1423,7 @@ export function mountReview(options: {
     refreshIssues,
     destroy() {
       destroyed = true;
+      approval?.destroy();
       selection.stop();
       markers.stop();
       stopHeatmap();

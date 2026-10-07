@@ -33,3 +33,15 @@ export function sanitizeCallbackUrl(
     return fallback;
   }
 }
+
+const INVITE_PATH = /^\/invite\/[A-Za-z0-9_-]{16,200}$/;
+
+/**
+ * After creating an account, people normally set up a workspace. Someone who came from an
+ * invitation link goes back to that invitation instead. Nothing else is accepted.
+ */
+export function sanitizePostSignUpUrl(candidate: string | null | undefined): string {
+  const safe = sanitizeCallbackUrl(candidate, "/onboarding");
+  const path = safe.split(/[?#]/)[0] ?? "";
+  return INVITE_PATH.test(path) ? path : "/onboarding";
+}

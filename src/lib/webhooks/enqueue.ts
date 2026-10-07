@@ -90,6 +90,11 @@ export async function enqueueWebhookEventSafely(
 
 function sanitizeWebhookData(data: Record<string, unknown>): Record<string, unknown> {
   const blocked = new Set([
+    "ip",
+    "rawEvents",
+    "tabSession",
+    "cookie",
+    "visitorId",
     "email",
     "cssSelector",
     "domFingerprint",
@@ -99,6 +104,11 @@ function sanitizeWebhookData(data: Record<string, unknown>): Record<string, unkn
     "token",
     "privateComment",
     "internalNote",
+    "pngBase64",
+    "storageKey",
+    "selector",
+    "rawError",
+    "stack",
   ]);
   const cleaned: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(data)) {

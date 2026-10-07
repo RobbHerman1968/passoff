@@ -34,7 +34,18 @@ function resolveTransport(): EmailTransport {
 
   const mode = process.env.EMAIL_TRANSPORT?.trim().toLowerCase();
 
-  if (process.env.NODE_ENV === "test" || mode === "test") {
+  if (process.env.NODE_ENV === "test") {
+    return getTestEmailTransport();
+  }
+
+  if (mode === "test") {
+    // The in-memory mailbox would silently swallow real invitations and password
+    // resets. Refuse it on a production build rather than lose customer email.
+    if (process.env.NODE_ENV === "production") {
+      throw new Error(
+        "EMAIL_TRANSPORT=test is not allowed in production. Use 'resend'.",
+      );
+    }
     return getTestEmailTransport();
   }
 
@@ -71,6 +82,30 @@ export async function sendPasswordResetEmail(options: {
       options.resetUrl,
       "",
       "If you did not request this, you can ignore this email.",
+    ].join("\n"),
+  });
+}
+
+export async function sendWorkspaceInvitationEmail(options: {
+  to: string;
+  workspaceName: string;
+  inviterName: string;
+  acceptUrl: string;
+  expiresInDays: number;
+}): Promise<void> {
+  // Never log options.acceptUrl. It is a private link for one person.
+  await sendEmail({
+    to: options.to,
+    subject: `${options.inviterName} invited you to ${options.workspaceName} on Passoff`,
+    text: [
+      `${options.inviterName} invited you to join ${options.workspaceName} on Passoff.`,
+      "",
+      "Passoff is where your team collects website feedback and signs off on fixes.",
+      "",
+      `Join the workspace: ${options.acceptUrl}`,
+      "",
+      `This invitation is for ${options.to} and expires in ${options.expiresInDays} days.`,
+      "If you weren’t expecting it, you can ignore this email.",
     ].join("\n"),
   });
 }

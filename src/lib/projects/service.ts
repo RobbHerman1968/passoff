@@ -22,7 +22,14 @@ import {
   reviewIssueCounters,
   reviews,
   users,
+  workspaces,
 } from "@/db/schema";
+import {
+  checkCanAddReviewWebsites,
+  countActiveReviewWebsitesForEnvironment,
+  countProjectReviewWebsitesIgnoringProjectState,
+} from "@/lib/billing/review-websites";
+import { notifyUsageThresholds } from "@/lib/billing/usage-notices";
 import { createEnvironment } from "@/lib/environments/service";
 import {
   PROJECT_ACTIVITY,
@@ -32,6 +39,7 @@ import {
   canDeleteProjects,
   canMutateProjects,
 } from "@/lib/projects/permissions";
+import { requestVideoDeletionForProject } from "@/lib/video/removal-service";
 import { createUniqueProjectSlug } from "@/lib/projects/slug";
 import type { ProjectStatus, ReviewStatus } from "@/lib/projects/statuses";
 import type { WorkspaceContext } from "@/lib/workspaces/context";
@@ -44,7 +52,9 @@ export type ServiceError =
   | "conflict"
   | "validation"
   | "unavailable"
-  | "archived_readonly";
+  | "archived_readonly"
+  /** The workspace plan has no room for another active review website. */
+  | "plan_limit";
 
 export type ProjectListItem = {
   id: string;
@@ -101,6 +111,7 @@ export type ReviewDetail = ReviewListItem & {
   websiteIsEnabled: boolean | null;
   websitePublicKey: string | null;
   websiteAllowedOrigins: string[] | null;
+  verificationHookAllowlist: string[];
 };
 
 export type ProjectListFilters = {
@@ -136,6 +147,49 @@ async function insertActivity(
     type: values.type,
     data: values.data ?? {},
   });
+}
+
+type PlanTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+class PlanLimitError extends Error {}
+
+/**
+ * Locks the workspace row, then proves the plan has room. Holding the lock until the
+ * transaction ends means two people adding at the same moment cannot both pass the check.
+ */
+async function assertRoomForReviewWebsites(
+  tx: PlanTransaction,
+  context: WorkspaceContext,
+  adding: number,
+) {
+  await tx
+    .select({ id: workspaces.id })
+    .from(workspaces)
+    .where(eq(workspaces.id, context.workspaceId))
+    .for("update");
+  const check = await checkCanAddReviewWebsites(tx, context.workspaceId, {
+    adding,
+    isOwner: context.role === "owner",
+  });
+  if (!check.allowed) throw new PlanLimitError(check.message);
+}
+
+/**
+ * How many more review websites a review would use if it became active. A website that
+ * already has another active review is not counted twice.
+ */
+async function websitesAddedByActivating(
+  tx: PlanTransaction,
+  workspaceId: string,
+  review: { id: string; environmentId: string },
+): Promise<number> {
+  const others = await countActiveReviewWebsitesForEnvironment(
+    tx,
+    workspaceId,
+    review.environmentId,
+    review.id,
+  );
+  return others > 0 ? 0 : 1;
 }
 
 export async function listProjects(
@@ -308,6 +362,10 @@ export async function createProject(
 
   try {
     return await db.transaction(async (tx) => {
+      // Two people creating the same name at once would otherwise pick the same slug.
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(hashtext(${`project-slug:${context.workspaceId}`}))`,
+      );
       const slug = await createUniqueProjectSlug(context.workspaceId, name, tx);
       const now = new Date();
 
@@ -355,9 +413,10 @@ async function mutateProject(
     deletedAt?: Date | null;
   },
   existingStatus?: ProjectStatus,
+  executor: Pick<typeof db, "update"> = db,
 ) {
   const now = new Date();
-  const [updated] = await db
+  const [updated] = await executor
     .update(projects)
     .set({
       ...next,
@@ -464,7 +523,7 @@ export async function restoreProject(
   input: { projectId: string; version: number },
 ): Promise<
   | { ok: true; project: ProjectDetail }
-  | { ok: false; error: ServiceError; project?: ProjectDetail | null }
+  | { ok: false; error: ServiceError; message?: string; project?: ProjectDetail | null }
 > {
   if (!canMutateProjects(context)) {
     return { ok: false, error: "forbidden" };
@@ -474,12 +533,30 @@ export async function restoreProject(
   if (!existing) return { ok: false, error: "not_found" };
   if (existing.status === "active") return { ok: true, project: existing };
 
-  const updated = await mutateProject(
-    context,
-    input,
-    { status: "active", archivedAt: null },
-    "archived",
-  );
+  let updated: { id: string } | undefined;
+  try {
+    updated = await db.transaction(async (tx) => {
+      // Restoring a project brings its unfinished reviews back to life, so they count again.
+      const returning = await countProjectReviewWebsitesIgnoringProjectState(
+        tx,
+        context.workspaceId,
+        input.projectId,
+      );
+      if (returning > 0) await assertRoomForReviewWebsites(tx, context, returning);
+      return mutateProject(
+        context,
+        input,
+        { status: "active", archivedAt: null },
+        "archived",
+        tx,
+      );
+    });
+  } catch (error) {
+    if (error instanceof PlanLimitError) {
+      return { ok: false, error: "plan_limit", message: error.message, project: existing };
+    }
+    throw error;
+  }
   if (!updated) {
     return {
       ok: false,
@@ -541,6 +618,12 @@ export async function softDeleteProject(
     type: PROJECT_ACTIVITY.deleted,
     data: { name: existing.name },
   });
+
+  // Deleted projects can't be opened again, so their video copies at the video provider are
+  // removed too. A failure here is retried by the background clean-up, never shown as an error.
+  await requestVideoDeletionForProject(context.workspaceId, input.projectId).catch(
+    () => undefined,
+  );
 
   return { ok: true };
 }
@@ -698,6 +781,7 @@ export async function getReviewForWorkspace(
       websiteIsEnabled: projectEnvironments.isEnabled,
       websitePublicKey: projectEnvironments.publicKey,
       websiteAllowedOrigins: projectEnvironments.allowedOrigins,
+      verificationHookAllowlist: projectEnvironments.verificationHookAllowlist,
       openIssueCount: sql<number>`coalesce(count(distinct ${issues.id}) filter (where ${openIssueSql}), 0)`.mapWith(
         Number,
       ),
@@ -762,6 +846,7 @@ export async function getReviewForWorkspace(
       projectEnvironments.isEnabled,
       projectEnvironments.publicKey,
       projectEnvironments.allowedOrigins,
+      projectEnvironments.verificationHookAllowlist,
     )
     .limit(1);
 
@@ -806,6 +891,7 @@ export async function getReviewForWorkspace(
     websiteIsEnabled: row.websiteIsEnabled,
     websitePublicKey: row.websitePublicKey,
     websiteAllowedOrigins: row.websiteAllowedOrigins,
+    verificationHookAllowlist: row.verificationHookAllowlist ?? [],
   };
 }
 
@@ -826,6 +912,15 @@ export async function createWebsiteReview(
     return { ok: false, error: "archived_readonly" };
   }
 
+  // Say no early so nothing is created for a review the plan cannot hold. The same check
+  // runs again under a lock below, which is what actually keeps the limit.
+  const early = await checkCanAddReviewWebsites(db, context.workspaceId, {
+    isOwner: context.role === "owner",
+  });
+  if (!early.allowed) {
+    return { ok: false, error: "plan_limit", message: early.message };
+  }
+
   const environment = await createEnvironment(context, {
     projectId: input.projectId,
     name: input.name,
@@ -841,7 +936,8 @@ export async function createWebsiteReview(
   }
 
   try {
-    return await db.transaction(async (tx) => {
+    const created = await db.transaction(async (tx) => {
+      await assertRoomForReviewWebsites(tx, context, 1);
       const now = new Date();
       const [deployment] = await tx
         .insert(deployments)
@@ -908,7 +1004,23 @@ export async function createWebsiteReview(
 
       return { ok: true as const, review };
     });
-  } catch {
+    // Best effort: a failed notice must never fail a review that was saved.
+    await notifyUsageThresholds(context.workspaceId, ["review_websites"]).catch(() => undefined);
+    return created;
+  } catch (error) {
+    // The website entry was made first; take it back so it does not linger unused.
+    await db
+      .delete(projectEnvironments)
+      .where(
+        and(
+          eq(projectEnvironments.id, environment.environment.id),
+          eq(projectEnvironments.workspaceId, context.workspaceId),
+        ),
+      )
+      .catch(() => undefined);
+    if (error instanceof PlanLimitError) {
+      return { ok: false, error: "plan_limit", message: error.message };
+    }
     return {
       ok: false,
       error: "unavailable",
@@ -945,25 +1057,44 @@ export async function openReview(
   if (existing.status === "open") return { ok: true, review: existing };
 
   const now = new Date();
-  const [updated] = await db
-    .update(reviews)
-    .set({
-      status: "open",
-      openedAt: existing.openedAt ?? now,
-      openedByUserId: context.userId,
-      version: input.version + 1,
-      updatedAt: now,
-    })
-    .where(
-      and(
-        eq(reviews.id, input.reviewId),
-        eq(reviews.projectId, input.projectId),
-        eq(reviews.workspaceId, context.workspaceId),
-        eq(reviews.version, input.version),
-        isNull(reviews.archivedAt),
-      ),
-    )
-    .returning({ id: reviews.id });
+  let updated: { id: string } | undefined;
+  try {
+    updated = await db.transaction(async (tx) => {
+      // A closed review that opens again becomes active work, so it counts against the plan.
+      if (existing.status === "closed") {
+        await assertRoomForReviewWebsites(
+          tx,
+          context,
+          await websitesAddedByActivating(tx, context.workspaceId, existing),
+        );
+      }
+      const [row] = await tx
+        .update(reviews)
+        .set({
+          status: "open",
+          openedAt: existing.openedAt ?? now,
+          openedByUserId: context.userId,
+          version: input.version + 1,
+          updatedAt: now,
+        })
+        .where(
+          and(
+            eq(reviews.id, input.reviewId),
+            eq(reviews.projectId, input.projectId),
+            eq(reviews.workspaceId, context.workspaceId),
+            eq(reviews.version, input.version),
+            isNull(reviews.archivedAt),
+          ),
+        )
+        .returning({ id: reviews.id });
+      return row;
+    });
+  } catch (error) {
+    if (error instanceof PlanLimitError) {
+      return { ok: false, error: "plan_limit", message: error.message, review: existing };
+    }
+    throw error;
+  }
 
   if (!updated) {
     return {
@@ -1096,7 +1227,7 @@ export async function restoreReview(
   input: { projectId: string; reviewId: string; version: number },
 ): Promise<
   | { ok: true; review: ReviewDetail }
-  | { ok: false; error: ServiceError; review?: ReviewDetail | null }
+  | { ok: false; error: ServiceError; message?: string; review?: ReviewDetail | null }
 > {
   if (!canMutateProjects(context)) {
     return { ok: false, error: "forbidden" };
@@ -1110,23 +1241,42 @@ export async function restoreReview(
   if (!existing.archivedAt) return { ok: true, review: existing };
 
   const now = new Date();
-  const [updated] = await db
-    .update(reviews)
-    .set({
-      archivedAt: null,
-      version: input.version + 1,
-      updatedAt: now,
-    })
-    .where(
-      and(
-        eq(reviews.id, input.reviewId),
-        eq(reviews.projectId, input.projectId),
-        eq(reviews.workspaceId, context.workspaceId),
-        eq(reviews.version, input.version),
-        isNotNull(reviews.archivedAt),
-      ),
-    )
-    .returning({ id: reviews.id });
+  let updated: { id: string } | undefined;
+  try {
+    updated = await db.transaction(async (tx) => {
+      // Finished (closed) reviews do not use a website slot, so only unfinished ones need room.
+      if (existing.status !== "closed") {
+        await assertRoomForReviewWebsites(
+          tx,
+          context,
+          await websitesAddedByActivating(tx, context.workspaceId, existing),
+        );
+      }
+      const [row] = await tx
+        .update(reviews)
+        .set({
+          archivedAt: null,
+          version: input.version + 1,
+          updatedAt: now,
+        })
+        .where(
+          and(
+            eq(reviews.id, input.reviewId),
+            eq(reviews.projectId, input.projectId),
+            eq(reviews.workspaceId, context.workspaceId),
+            eq(reviews.version, input.version),
+            isNotNull(reviews.archivedAt),
+          ),
+        )
+        .returning({ id: reviews.id });
+      return row;
+    });
+  } catch (error) {
+    if (error instanceof PlanLimitError) {
+      return { ok: false, error: "plan_limit", message: error.message, review: existing };
+    }
+    throw error;
+  }
 
   if (!updated) {
     return {

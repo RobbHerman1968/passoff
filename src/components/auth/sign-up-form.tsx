@@ -14,7 +14,16 @@ import { PASSWORD_POLICY_HINT } from "@/lib/auth/password-policy";
 
 const initialState: ActionResult = { status: "idle" };
 
-export function SignUpForm({ oauthButtons }: { oauthButtons: React.ReactNode }) {
+export function SignUpForm({
+  oauthButtons,
+  callbackUrl,
+  signInHref = "/sign-in",
+}: {
+  oauthButtons: React.ReactNode;
+  /** Where to go after the account exists. Only invitation links are honored. */
+  callbackUrl?: string;
+  signInHref?: string;
+}) {
   const [state, formAction, pending] = useActionState(signUpAction, initialState);
   const alertRef = useRef<HTMLDivElement>(null);
   const firstErrorField = state.fieldErrors
@@ -50,6 +59,7 @@ export function SignUpForm({ oauthButtons }: { oauthButtons: React.ReactNode }) 
         ) : null}
 
         <form action={formAction} className="grid gap-4" noValidate>
+          {callbackUrl ? <input type="hidden" name="callbackUrl" value={callbackUrl} /> : null}
           <div className="grid gap-4 sm:grid-cols-2">
             <FormField
               id="firstName"
@@ -137,7 +147,7 @@ export function SignUpForm({ oauthButtons }: { oauthButtons: React.ReactNode }) 
         <p className="text-sm text-muted-foreground">
           Already have an account?{" "}
           <Link
-            href="/sign-in"
+            href={signInHref}
             className="font-medium text-primary underline-offset-4 hover:underline"
           >
             Sign in

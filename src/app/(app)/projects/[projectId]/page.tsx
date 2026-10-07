@@ -3,6 +3,10 @@ import { redirect } from "next/navigation";
 import { Archive, CircleDot, Clock, Globe } from "lucide-react";
 import { Suspense } from "react";
 
+import { db } from "@/db";
+import { listReviewApprovalSummaries } from "@/lib/approvals/requests";
+import { ReviewLimitNotice } from "@/components/billing/review-limit-notice";
+import { getReviewWebsiteCapacity } from "@/lib/billing/review-websites";
 import { ErrorState } from "@/components/error-state";
 import { LoadingState } from "@/components/loading-state";
 import { PageHeader } from "@/components/page-header";
@@ -95,6 +99,10 @@ export default async function ProjectDetailPage({
   const notice =
     typeof paramsRecord.notice === "string" ? paramsRecord.notice : undefined;
   const archived = project.status === "archived";
+  // A hiccup reading usage must never hide the reviews, so the notice is optional.
+  const capacity = archived
+    ? null
+    : await getReviewWebsiteCapacity(db, auth.context.workspaceId).catch(() => null);
 
   return (
     <>
@@ -137,6 +145,10 @@ export default async function ProjectDetailPage({
               change reviews.
             </AlertDescription>
           </Alert>
+        ) : null}
+
+        {capacity ? (
+          <ReviewLimitNotice capacity={capacity} isOwner={auth.context.role === "owner"} />
         ) : null}
 
         <SummaryStats
@@ -216,9 +228,15 @@ async function ProjectReviewResults({
   }
 
   const hasFilters = Boolean(filters.q.trim()) || filters.status !== "all";
+  // Approval pills are helpful, not essential: the list still works without them.
+  const approvalSummaries = await listReviewApprovalSummaries(
+    context.workspaceId,
+    reviews.map((review) => review.id),
+  ).catch(() => undefined);
 
   return (
     <ReviewList
+      approvalSummaries={approvalSummaries}
       projectId={projectId}
       reviews={reviews}
       hasFilters={hasFilters}

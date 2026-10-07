@@ -1,17 +1,25 @@
 import { exchangeSession } from "./api";
-import { REVIEW_CHUNK_FILE } from "./build-flags";
+import { REVIEW_CHUNK_FILE, ANALYTICS_CHUNK_FILE, VERIFICATION_CHUNK_FILE } from "./build-flags";
 import { setPrivateSelectors } from "./privacy";
 import { describeConfigureBlock, describeInitBlock, isKillSwitchOn } from "./session";
 import {
   clearStoredSession,
+  clearStoredVerificationSession,
   consumeExchangeCodeFromLocation,
+  consumeVerificationExchangeFromLocation,
   readStoredSession,
+  readStoredVerificationSession,
   writeStoredSession,
+  writeStoredVerificationSession,
   type StoredSdkSession,
 } from "./session-store";
 import { reportInternalError, withHostSafety, withHostSafetyAsync } from "./safe";
 import { createNavigationTracker } from "./navigation";
 import { VERSION } from "./styles";
+import type { AnalyticsRuntime } from "./analytics/index";
+import type { AnalyticsBootstrap } from "./analytics/contract";
+import { exchangeVerificationSession } from "./verification/api";
+import { registerVerificationCheck as registerHostVerificationCheck } from "./verification/hooks";
 import type {
   NavigationEvent,
   PassoffApi,
@@ -31,11 +39,34 @@ import type { ReviewRuntime } from "./review";
 export { PROTOTYPE_SESSION_VALUE, KILL_SWITCH_STORAGE_KEY, NEARBY_TEXT_LIMIT } from "./types";
 
 type ReviewLoader = (baseUrl: string) => Promise<{ mountReview: typeof import("./review").mountReview }>;
+type VerificationLoader = (
+  baseUrl: string,
+) => Promise<{ mountVerification: typeof import("./verification/runner").mountVerification }>;
+
+function defaultAnalyticsLoader(baseUrl: string) {
+  const url = new URL(ANALYTICS_CHUNK_FILE, baseUrl);
+  url.searchParams.set("v", VERSION);
+  return import(/* @vite-ignore */ url.href) as Promise<{
+    startAnalytics: (options: {
+      config: AnalyticsBootstrap;
+      installationKey: string;
+      apiBaseUrl: string;
+      buildId?: string;
+      reviewActive: boolean;
+    }) => AnalyticsRuntime | null;
+  }>;
+}
 
 function defaultReviewLoader(baseUrl: string) {
   const url = new URL(REVIEW_CHUNK_FILE, baseUrl);
   url.searchParams.set("v", VERSION);
   return import(/* @vite-ignore */ url.href) as ReturnType<ReviewLoader>;
+}
+
+function defaultVerificationLoader(baseUrl: string) {
+  const url = new URL(VERIFICATION_CHUNK_FILE, baseUrl);
+  url.searchParams.set("v", VERSION);
+  return import(/* @vite-ignore */ url.href) as ReturnType<VerificationLoader>;
 }
 
 function resolveScriptElement(): HTMLScriptElement | null {
@@ -91,7 +122,10 @@ let authorizedSession: StoredSdkSession | null = null;
 let runtime: ReviewRuntime | null = null;
 let navigation = createNavigationTracker(() => undefined);
 let reviewLoader: ReviewLoader = defaultReviewLoader;
+let verificationLoader: VerificationLoader = defaultVerificationLoader;
 let bootstrapping = false;
+let analyticsRuntime: AnalyticsRuntime | null = null;
+let verificationRuntime: import("./verification/runner").VerificationRuntime | null = null;
 
 function emptyState(): PublicPassoffState {
   return {
@@ -154,6 +188,7 @@ async function verifyInstallation(
     const payload = (await response.json()) as {
       ok?: boolean;
       status?: string;
+      analytics?: AnalyticsBootstrap;
     };
 
     if (payload.status === "disabled") {
@@ -168,7 +203,12 @@ async function verifyInstallation(
 
     if (payload.ok && payload.status === "ready") {
       installationStatus = "ready";
-      return { ok: true, verified: true, status: "ready" };
+      return {
+        ok: true,
+        verified: true,
+        status: "ready",
+        analytics: payload.analytics,
+      };
     }
 
     installationStatus = "unknown";
@@ -242,6 +282,62 @@ async function tryAuthorizeFromLaunch(
   return { ok: true };
 }
 
+async function tryStartVerification(
+  config: PassoffConfigureConfig,
+): Promise<boolean> {
+  const installationKey =
+    config.installationKey?.trim() ||
+    storedConfig.installationKey ||
+    readInstallationKeyFromDom();
+  if (!installationKey) return false;
+
+  const existing = readStoredVerificationSession();
+  const exchangeCode = consumeVerificationExchangeFromLocation();
+  if (!exchangeCode && !existing) return false;
+
+  analyticsRuntime?.destroy();
+  analyticsRuntime = null;
+
+  let sessionToken = existing?.sessionToken ?? null;
+  let expiresAt = existing?.expiresAt ?? "";
+  let bootstrap: import("./verification/api").VerificationBootstrap | null =
+    existing?.bootstrap ?? null;
+
+  if (exchangeCode) {
+    const exchanged = await exchangeVerificationSession({
+      apiBaseUrl: resolveApiBaseUrl(config),
+      installationKey,
+      exchangeCode,
+    });
+    if (!exchanged.ok) return false;
+    sessionToken = exchanged.sessionToken;
+    expiresAt = exchanged.expiresAt;
+    bootstrap = exchanged.bootstrap;
+    writeStoredVerificationSession({
+      sessionToken,
+      expiresAt,
+      installationKey,
+      bootstrap,
+    });
+  }
+
+  if (!sessionToken || !bootstrap) {
+    return false;
+  }
+
+  const baseUrl = resolveBaseUrl(config);
+  const verificationModule = await verificationLoader(baseUrl);
+  verificationRuntime?.destroy();
+  verificationRuntime = verificationModule.mountVerification({
+    apiBaseUrl: resolveApiBaseUrl(config),
+    assetBaseUrl: baseUrl,
+    sessionToken,
+    bootstrap,
+    buildId: config.buildId ?? storedConfig.buildId,
+  });
+  return true;
+}
+
 const api: PassoffApi = {
   version: VERSION,
   async configure(config = {}): Promise<PassoffConfigureResult> {
@@ -266,15 +362,32 @@ const api: PassoffApi = {
 
       const verified = await verifyInstallation(storedConfig);
 
-      // Authorization never comes from the public installation key alone.
+      const verificationStarted = await tryStartVerification(storedConfig);
+      if (verificationStarted) {
+        return verified;
+      }
+
       const authorized = await tryAuthorizeFromLaunch(storedConfig);
       if (authorized.ok && !active) {
+        analyticsRuntime?.destroy();
+        analyticsRuntime = null;
         void api.init({
           sessionToken: authorizedSession?.sessionToken,
           assetBaseUrl: storedConfig.assetBaseUrl,
           apiBaseUrl: storedConfig.apiBaseUrl,
           buildId: storedConfig.buildId,
           theme: storedConfig.theme,
+        });
+      } else if (!authorized.ok && verified.analytics?.enabled) {
+        const baseUrl = resolveBaseUrl(storedConfig);
+        const analyticsModule = await defaultAnalyticsLoader(baseUrl);
+        analyticsRuntime?.destroy();
+        analyticsRuntime = analyticsModule.startAnalytics({
+          config: verified.analytics,
+          installationKey: storedConfig.installationKey ?? "",
+          apiBaseUrl: resolveApiBaseUrl(storedConfig),
+          buildId: storedConfig.buildId,
+          reviewActive: false,
         });
       }
 
@@ -365,6 +478,10 @@ const api: PassoffApi = {
   },
   destroy() {
     withHostSafety(() => {
+      analyticsRuntime?.destroy();
+      analyticsRuntime = null;
+      verificationRuntime?.destroy();
+      verificationRuntime = null;
       runtime?.destroy();
       runtime = null;
       navigation.stop();
@@ -413,6 +530,18 @@ const api: PassoffApi = {
   async attemptScreenshot(): Promise<ScreenshotResult | null> {
     return withHostSafetyAsync(async () => runtime?.attemptScreenshot() ?? null, null);
   },
+  openPrivacyChoices() {
+    withHostSafety(() => analyticsRuntime?.openPrivacyChoices(), undefined);
+  },
+  excludeSession() {
+    withHostSafety(() => analyticsRuntime?.excludeSession(), undefined);
+  },
+  setRouteTemplate(template: string) {
+    withHostSafety(() => analyticsRuntime?.setRouteTemplate(template), undefined);
+  },
+  registerVerificationCheck(name, fn) {
+    withHostSafety(() => registerHostVerificationCheck(name, fn), undefined);
+  },
 };
 
 function asGlobal(): PassoffGlobal {
@@ -450,6 +579,10 @@ export function installPassoff(target: Window & { Passoff?: PassoffGlobal }): Pa
   return globalApi;
 }
 
+export function __setVerificationLoader(loader: VerificationLoader) {
+  verificationLoader = loader;
+}
+
 export function __setReviewLoader(loader: ReviewLoader) {
   reviewLoader = loader;
 }
@@ -467,7 +600,13 @@ export function __resetSdkStateForTests() {
   runtime = null;
   navigation = createNavigationTracker(() => undefined);
   reviewLoader = defaultReviewLoader;
+  verificationLoader = defaultVerificationLoader;
   bootstrapping = false;
+  analyticsRuntime?.destroy();
+  analyticsRuntime = null;
+  verificationRuntime?.destroy();
+  verificationRuntime = null;
   clearStoredSession();
+  clearStoredVerificationSession();
   setPrivateSelectors([]);
 }

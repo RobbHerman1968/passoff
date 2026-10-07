@@ -19,6 +19,9 @@ export default defineConfig({
     setupFiles: ["./src/test/setup.ts"],
     css: true,
     exclude: ["**/node_modules/**", "**/dist/**", "e2e/**"],
+    // Remote Neon test DB needs headroom beyond the 5s default.
+    testTimeout: 60_000,
+    hookTimeout: 60_000,
     fileParallelism: false,
   },
 });

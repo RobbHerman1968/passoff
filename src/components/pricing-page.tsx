@@ -32,35 +32,41 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import {
+  billingCadenceLabel,
+  describeMembers,
+  describeReviewWebsites,
+  describeVideoAllowance,
+  monthlyPriceLabel,
+} from "@/lib/billing/format";
+import {
   PLAN_ENTITLEMENTS,
+  ANNUAL_SAVINGS_PERCENT,
   ANNUAL_SAVINGS_USD,
   AGENCY_TRIAL_DAYS,
-  formatDurationMinutes,
   formatUsd,
+  type PlanId,
 } from "@/lib/billing/plans";
 import { authRoutes } from "@/lib/site";
 import { cn } from "@/lib/utils";
 
-function videoEvidenceCopy(plan: keyof typeof PLAN_ENTITLEMENTS) {
-  const policy = PLAN_ENTITLEMENTS[plan].videoEvidence;
-  if (policy.status !== "approved") {
-    return "Video evidence limits are not published yet";
-  }
-
-  return `${formatDurationMinutes(policy.limits.newUploadMinutesPerCalendarMonth)} new video / month · ${formatDurationMinutes(policy.limits.retainedMinutes)} retained`;
+/** Everything a plan card shows about price and limits is read from the plan catalog. */
+function catalogFacts(id: PlanId) {
+  return {
+    annualPrice: monthlyPriceLabel(id, "year"),
+    monthlyPrice: monthlyPriceLabel(id, "month"),
+    annualCadence: billingCadenceLabel(id, "year"),
+    monthlyCadence: billingCadenceLabel(id, "month"),
+    members: describeMembers(id),
+    projects: describeReviewWebsites(id),
+    storage: describeVideoAllowance(id),
+  };
 }
 
 const plans = [
   {
-    name: "Free",
+    name: PLAN_ENTITLEMENTS.free.name,
     description: "For trying the full review rhythm on real work.",
-    annualPrice: "$0",
-    monthlyPrice: "$0",
-    annualCadence: "Free for as long as you need it",
-    monthlyCadence: "Free for as long as you need it",
-    members: `${PLAN_ENTITLEMENTS.free.workspaceMembers} workspace member`,
-    projects: "1 active review website",
-    storage: videoEvidenceCopy("free"),
+    ...catalogFacts("free"),
     action: "Start free",
     featured: false,
     features: [
@@ -71,16 +77,10 @@ const plans = [
     ],
   },
   {
-    name: "Studio",
+    name: PLAN_ENTITLEMENTS.studio.name,
     description: "For independent studios and small client teams.",
-    annualPrice: "$29",
-    monthlyPrice: "$35",
-    annualCadence: "per month, billed $348 yearly",
-    monthlyCadence: "per month, billed monthly",
-    members: `${PLAN_ENTITLEMENTS.studio.workspaceMembers} workspace members`,
-    projects: `${PLAN_ENTITLEMENTS.studio.activeReviewWebsites} active review websites`,
-    storage: videoEvidenceCopy("studio"),
-    action: "Try Studio free",
+    ...catalogFacts("studio"),
+    action: `Choose ${PLAN_ENTITLEMENTS.studio.name}`,
     featured: false,
     features: [
       "Everything in Free",
@@ -90,16 +90,10 @@ const plans = [
     ],
   },
   {
-    name: "Agency",
+    name: PLAN_ENTITLEMENTS.agency.name,
     description: "For agencies running several client reviews at once.",
-    annualPrice: "$89",
-    monthlyPrice: "$109",
-    annualCadence: "per month, billed $1,068 yearly",
-    monthlyCadence: "per month, billed monthly",
-    members: `${PLAN_ENTITLEMENTS.agency.workspaceMembers} workspace members`,
-    projects: "Unlimited active review websites",
-    storage: videoEvidenceCopy("agency"),
-    action: "Try Agency free",
+    ...catalogFacts("agency"),
+    action: `Try ${PLAN_ENTITLEMENTS.agency.name} free`,
     featured: true,
     features: [
       "Everything in Studio",
@@ -142,7 +136,7 @@ const faqs = [
   {
     question: "What is an active review website?",
     answer:
-      "An active review website is a live website environment that can receive review. Archive completed work whenever you like; comments, decisions, and version-specific approvals stay available.",
+      "An active review website is a website you are collecting review on right now: its review is not archived or closed. Archive finished work whenever you like and it stops counting; comments, decisions, and version-specific approvals stay available.",
   },
   {
     question: "Does unlimited active review websites mean unlimited usage?",
@@ -152,7 +146,7 @@ const faqs = [
   {
     question: "What happens after the free trial?",
     answer:
-      `Your ${AGENCY_TRIAL_DAYS}-day Agency trial does not require a card. If you do not choose a paid plan, your workspace moves to Free and your work stays safe. We will show you what to archive if you are over a Free limit.`,
+      `Your ${AGENCY_TRIAL_DAYS}-day Agency trial does not require a card, and each workspace gets one trial. If you do not choose a paid plan, your workspace moves to Free and your work stays safe. Nothing is deleted. If you are over a Free limit, you keep working and only new additions pause until you archive finished work or choose a plan.`,
   },
   {
     question: "How does video evidence work?",
@@ -254,7 +248,7 @@ export function PricingPage() {
               </fieldset>
               <p className="max-w-md text-sm leading-6 text-muted-foreground sm:text-right">
                 {billingCycle === "annual"
-                  ? `Annual pricing saves up to 18%—that is ${formatUsd(ANNUAL_SAVINGS_USD)} a year.`
+                  ? `Annual pricing saves up to ${ANNUAL_SAVINGS_PERCENT}%—that is ${formatUsd(ANNUAL_SAVINGS_USD)} a year.`
                   : "Month-to-month plans can be changed or canceled before the next renewal."}
               </p>
             </div>
@@ -294,7 +288,7 @@ export function PricingPage() {
                       <span className="text-5xl font-semibold tracking-[-0.04em] tabular-nums">
                         {billingCycle === "annual" ? plan.annualPrice : plan.monthlyPrice}
                       </span>
-                      {plan.annualPrice !== "$0" ? (
+                      {PLAN_ENTITLEMENTS[plan.name.toLowerCase() as PlanId].monthlyPriceUsd > 0 ? (
                         <span className={plan.featured ? "pb-1 text-brand-dark-muted" : "pb-1 text-muted-foreground"}>
                           /mo
                         </span>
@@ -470,8 +464,8 @@ export function PricingPage() {
               <div>
                 <p className="font-medium">Unlimited reviewer playback</p>
                 <p className="mt-1 text-sm leading-6 text-brand-dark-muted">
-                  Clients can replay evidence when they need it without using a visible playback
-                  allowance.
+                  Watching a clip never uses up your plan. Only new uploads and kept video
+                  count toward your video allowance.
                 </p>
               </div>
             </div>

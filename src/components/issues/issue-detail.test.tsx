@@ -37,6 +37,49 @@ vi.mock("@/app/(app)/projects/issue-triage-actions", () => ({
   listIssueHistoryAction: (...args: unknown[]) => listIssueHistoryAction(...args),
 }));
 
+vi.mock("@/app/(app)/projects/label-actions", () => ({
+  addIssueLabelAction: vi.fn(),
+  removeIssueLabelAction: vi.fn(),
+  createAndAddIssueLabelAction: vi.fn(),
+}));
+
+vi.mock("@/app/(app)/projects/attachment-actions", () => ({
+  attachFileToIssueAction: vi.fn(),
+  removeIssueAttachmentAction: vi.fn(),
+  setAttachmentVisibilityAction: vi.fn(),
+}));
+
+vi.mock("@/app/(app)/usability/actions", () => ({
+  requestComparisonAction: vi.fn(),
+}));
+
+vi.mock("@/app/(app)/projects/verification-actions", () => ({
+  startVerificationChecksAction: vi.fn(),
+  recordHumanVerificationAction: vi.fn(),
+}));
+
+vi.mock("@/app/(app)/projects/video-actions", () => ({
+  removeIssueVideoAction: vi.fn(),
+  refreshIssueVideoAction: vi.fn(),
+}));
+
+vi.mock("@/app/(app)/projects/video-note-actions", () => ({
+  createVideoNoteAction: vi.fn(),
+  refreshVideoNotesAction: vi.fn().mockResolvedValue({ ok: true, notes: [] }),
+}));
+
+vi.mock("@/components/video/video-evidence-player", () => ({
+  VideoEvidencePlayer: () => <div data-testid="video-player" />,
+}));
+
+vi.mock("@/app/(app)/projects/comment-actions", () => ({
+  createIssueCommentAction: vi.fn(),
+}));
+
+vi.mock("@/components/issues/use-online-status", () => ({
+  useOnlineStatus: () => true,
+}));
+
 beforeAll(() => {
   class ResizeObserverStub {
     observe() {}
@@ -82,6 +125,57 @@ describe("IssueDetailView", () => {
     updateIssuePriorityAction.mockReset();
     updateIssueAssigneeAction.mockReset();
     listIssueHistoryAction.mockReset();
+  });
+
+  it("shows video evidence with the player when a clip is ready", () => {
+    render(
+      <IssueDetailView
+        issue={makeDetail({ hasVideoEvidence: true })}
+        projectId="p1"
+        reviewId="r1"
+        projectName="Acme"
+        reviewName="Launch"
+        backHref="/projects/p1/reviews/r1"
+        videoView={{
+          issueId: "i1",
+          current: {
+            videoAssetId: "v1",
+            role: "current",
+            state: "ready",
+            durationSeconds: 30,
+            message: null,
+            createdAt: "2026-10-02T12:00:00.000Z",
+            uploadedByName: "Ada",
+          },
+          replacement: null,
+          tombstone: null,
+          action: { canUpload: true, mode: "replace", blockedReason: null },
+          usage: null,
+          canManage: true,
+          archived: false,
+          retention: null,
+          needsPolling: false,
+        }}
+      />,
+    );
+    expect(screen.getByRole("heading", { level: 2, name: "Video evidence" })).toBeVisible();
+    expect(screen.getByTestId("video-player")).toBeInTheDocument();
+  });
+
+  it("explains when video evidence could not be loaded, without hiding the issue", () => {
+    render(
+      <IssueDetailView
+        issue={makeDetail()}
+        projectId="p1"
+        reviewId="r1"
+        projectName="Acme"
+        reviewName="Launch"
+        backHref="/projects/p1/reviews/r1"
+        videoView={null}
+      />,
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent(/couldn’t load this issue’s video/);
+    expect(screen.getByRole("heading", { level: 1 })).toBeVisible();
   });
 
   it("renders feedback, metadata, and a large screenshot", () => {
@@ -535,5 +629,96 @@ describe("IssueDetailView", () => {
     );
 
     expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("keeps browser checks separate from human verification and explains they do not close the issue", async () => {
+    const user = userEvent.setup();
+    render(
+      <IssueDetailView
+        issue={makeDetail({ status: "ready_for_verification" })}
+        projectId="p1"
+        reviewId="r1"
+        projectName="Acme"
+        reviewName="Launch"
+        backHref="/projects/p1/reviews/r1"
+        verificationLaunch={{
+          eligible: true,
+          blocker: null,
+          issueNumber: 3,
+          issueTitle: "Header overlaps navigation",
+          environmentName: "Production",
+          versionLabel: "v19",
+          pageRoute: "/pricing",
+          pageUrl: "https://example.com/pricing",
+          viewportWidth: 1440,
+          viewportHeight: 900,
+          matchConfidence: "exact",
+          availableChecks: [
+            { kind: "element_visibility", label: "Element visibility" },
+            { kind: "bounding_box_overlap", label: "Overlap" },
+          ],
+          namedHooks: [],
+        }}
+        verificationRuns={[
+          {
+            id: "run-1",
+            state: "complete",
+            overall: "failed",
+            summary: "Overlap check failed: approximately 48% of the target was covered by a sticky page region.",
+            environmentName: "Production",
+            versionLabel: "v19",
+            route: "/pricing",
+            viewportWidth: 1440,
+            viewportHeight: 900,
+            viewportGroup: "desktop",
+            startedAt: new Date("2026-10-05T12:00:00.000Z"),
+            completedAt: new Date("2026-10-05T12:01:00.000Z"),
+            initiatorName: "Rob",
+            limitations: [],
+            failureCode: null,
+            evidenceStatus: "ready",
+            hasEvidence: true,
+            selectedChecks: ["element_visibility", "bounding_box_overlap"],
+            actualUrl: "https://example.com/pricing",
+            checks: [
+              {
+                kind: "element_visibility",
+                outcome: "passed",
+                summary: "The expected element is on the page and visible.",
+                measurements: {},
+                limitations: [],
+              },
+              {
+                kind: "bounding_box_overlap",
+                outcome: "failed",
+                summary: "Covered by a sticky page region.",
+                measurements: { occlusionPercent: 48 },
+                limitations: [],
+              },
+            ],
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.getByRole("heading", { name: "Verification checks" })).toBeVisible();
+    expect(
+      screen.getByText(
+        "Browser checks are evidence. A person still records whether the issue is fixed.",
+      ),
+    ).toBeVisible();
+    expect(screen.getByText("Failed")).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "Run again" }),
+    ).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Run again" }));
+    expect(
+      screen.getByText("Automated checks provide evidence. They do not verify or close the issue."),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "Open website and run checks" }),
+    ).toBeVisible();
+    await user.keyboard("{Escape}");
+    expect(screen.getByRole("button", { name: "Record human verification" })).toBeVisible();
   });
 });

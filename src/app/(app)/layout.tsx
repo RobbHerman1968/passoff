@@ -2,6 +2,7 @@ import { AppShell, type AppShellProject } from "@/components/app-shell";
 import { isPlatformAdmin } from "@/lib/auth/platform-admin";
 import { countUnreadNotifications } from "@/lib/notifications/service";
 import { listProjects } from "@/lib/projects/service";
+import { listUserWorkspaces } from "@/lib/auth/membership";
 import { requireWorkspaceContext } from "@/lib/workspaces/context";
 
 const RECENT_PROJECT_LIMIT = 5;
@@ -21,6 +22,16 @@ export default async function AppLayout({ children }: LayoutProps<"/">) {
   const showAdministration = await isPlatformAdmin();
   let recentProjects: AppShellProject[] = [];
   let unreadCount = 0;
+  let workspaces: { id: string; name: string; role: "owner" | "member" }[] = [];
+  try {
+    workspaces = (await listUserWorkspaces(context.userId)).map((workspace) => ({
+      id: workspace.workspaceId,
+      name: workspace.workspaceName,
+      role: workspace.role,
+    }));
+  } catch {
+    workspaces = [];
+  }
   try {
     const [projects, unread] = await Promise.all([
       listProjects(context, { status: "active" }),
@@ -38,6 +49,8 @@ export default async function AppLayout({ children }: LayoutProps<"/">) {
     <AppShell
       workspaceName={context.workspaceName}
       workspaceRole={context.role}
+      workspaceId={context.workspaceId}
+      workspaces={workspaces}
       accountName={context.userName?.trim() || context.userEmail || "Account"}
       accountEmail={context.userEmail}
       showAdministration={showAdministration}

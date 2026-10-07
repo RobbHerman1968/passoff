@@ -5,17 +5,14 @@ import { db } from "@/db";
 import { workspaceMemberships, workspaces, users } from "@/db/schema";
 import { normalizeEmail } from "@/lib/auth/email";
 import { createCredentialsUser } from "@/lib/auth/users";
-
-function testHelpersEnabled() {
-  return process.env.EMAIL_TRANSPORT === "test";
-}
+import { testRoutesEnabled } from "@/lib/security/production-guards";
 
 /**
  * Test helper: create a credentials member on the owner's active team.
  * Requires EMAIL_TRANSPORT=test.
  */
 export async function POST(request: Request) {
-  if (!testHelpersEnabled()) {
+  if (!testRoutesEnabled()) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 

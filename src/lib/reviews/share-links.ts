@@ -25,6 +25,7 @@ export const EXCHANGE_CODE_TTL_MS = 2 * 60 * 1000;
 export type ShareLinkSummary = {
   id: string;
   canComment: boolean;
+  canApprove: boolean;
   expiresAt: Date | null;
   revokedAt: Date | null;
   createdAt: Date;
@@ -50,6 +51,7 @@ export async function createShareLink(
     projectId: string;
     reviewId: string;
     canComment?: boolean;
+    canApprove?: boolean;
     expiresAt?: Date | null;
   },
 ): Promise<
@@ -132,6 +134,7 @@ export async function createShareLink(
           reviewId: review.id,
           tokenHash: hash,
           canComment: input.canComment ?? true,
+          canApprove: input.canApprove ?? false,
           createdByUserId: context.userId,
           expiresAt: input.expiresAt ?? null,
           createdAt: now,
@@ -140,6 +143,7 @@ export async function createShareLink(
         .returning({
           id: shareLinks.id,
           canComment: shareLinks.canComment,
+          canApprove: shareLinks.canApprove,
           expiresAt: shareLinks.expiresAt,
           revokedAt: shareLinks.revokedAt,
           createdAt: shareLinks.createdAt,
@@ -201,6 +205,7 @@ export async function listShareLinksForReview(
     .select({
       id: shareLinks.id,
       canComment: shareLinks.canComment,
+      canApprove: shareLinks.canApprove,
       expiresAt: shareLinks.expiresAt,
       revokedAt: shareLinks.revokedAt,
       createdAt: shareLinks.createdAt,
@@ -224,6 +229,7 @@ export type ResolvedShareLink =
       environmentId: string;
       projectId: string;
       canComment: boolean;
+      canApprove: boolean;
       reviewStatus: "draft" | "open" | "closed";
       reviewArchivedAt: Date | null;
       projectStatus: "active" | "archived";
@@ -250,6 +256,7 @@ export async function resolveShareLinkToken(
       workspaceId: shareLinks.workspaceId,
       reviewId: shareLinks.reviewId,
       canComment: shareLinks.canComment,
+      canApprove: shareLinks.canApprove,
       expiresAt: shareLinks.expiresAt,
       revokedAt: shareLinks.revokedAt,
       reviewStatus: reviews.status,
@@ -300,6 +307,7 @@ export async function resolveShareLinkToken(
     environmentId: row.environmentId,
     projectId: row.projectId,
     canComment: row.canComment,
+    canApprove: row.canApprove,
     reviewStatus: row.reviewStatus,
     reviewArchivedAt: row.reviewArchivedAt,
     projectStatus: row.projectStatus,

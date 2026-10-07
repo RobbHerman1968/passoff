@@ -3,12 +3,16 @@ import { NextResponse } from "next/server";
 
 import { db } from "@/db";
 import {
+  assets,
   issueAnchors,
+  issueComments,
   issueEvidence,
   issues,
   reviewIssueCounters,
   reviews,
   users,
+  videoAnnotations,
+  videoAssets,
   workspaceMemberships,
   workspaces,
 } from "@/db/schema";
@@ -17,10 +21,7 @@ import { allocateIssueNumber } from "@/lib/issues/service";
 import type { IssuePriority, IssueStatus } from "@/lib/issues/statuses";
 import { createProject, createWebsiteReview } from "@/lib/projects/service";
 import type { WorkspaceContext } from "@/lib/workspaces/context";
-
-function testHelpersEnabled() {
-  return process.env.EMAIL_TRANSPORT === "test";
-}
+import { testRoutesEnabled } from "@/lib/security/production-guards";
 
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
@@ -76,7 +77,7 @@ async function resolveOwnerContext(ownerEmail: string): Promise<WorkspaceContext
  * Requires EMAIL_TRANSPORT=test.
  */
 export async function POST(request: Request) {
-  if (!testHelpersEnabled()) {
+  if (!testRoutesEnabled()) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
@@ -93,6 +94,8 @@ export async function POST(request: Request) {
     pageRoute?: string;
     pageTitle?: string;
     screenshotStatus?: "ready" | "pending" | "unavailable" | "failed" | "none";
+    /** Adds an earlier, replaced video with one note on it. Nothing is ever played. */
+    earlierVideoNote?: { timestampMs: number; body: string };
   } | null;
 
   const ownerEmail =
@@ -241,6 +244,69 @@ export async function POST(request: Request) {
               : { reason: "seeded unavailable screenshot" },
           capturedAt: now,
           createdByUserId: context.userId,
+        });
+      }
+
+      if (body?.earlierVideoNote) {
+        const note = body.earlierVideoNote;
+        const [original] = await tx
+          .insert(assets)
+          .values({
+            workspaceId: review.workspaceId,
+            reviewId: review.id,
+            kind: "video_original",
+            status: "ready",
+            storageProvider: "mux",
+            storageKey: `seeded-earlier:${issue.id}`,
+            durationMs: 30_000,
+            uploadedByUserId: context.userId,
+          })
+          .returning({ id: assets.id });
+        const [evidence] = await tx
+          .insert(issueEvidence)
+          .values({
+            workspaceId: review.workspaceId,
+            issueId: issue.id,
+            assetId: original.id,
+            kind: "video",
+            captureMethod: "manual_attachment",
+            captureStatus: "ready",
+            createdByUserId: context.userId,
+          })
+          .returning({ id: issueEvidence.id });
+        const [clip] = await tx
+          .insert(videoAssets)
+          .values({
+            workspaceId: review.workspaceId,
+            issueId: issue.id,
+            evidenceId: evidence.id,
+            originalAssetId: original.id,
+            lifecycle: "retired",
+            removalReason: "replaced",
+            removedAt: now,
+            durationMs: 30_000,
+            declaredDurationMs: 30_000,
+            processingStatus: "ready",
+          })
+          .returning({ id: videoAssets.id });
+        const [comment] = await tx
+          .insert(issueComments)
+          .values({
+            workspaceId: review.workspaceId,
+            issueId: issue.id,
+            body: note.body,
+            isPrivate: false,
+            authorUserId: context.userId,
+            authorDisplayName: context.userName ?? "Owner",
+          })
+          .returning({ id: issueComments.id });
+        await tx.insert(videoAnnotations).values({
+          workspaceId: review.workspaceId,
+          issueId: issue.id,
+          commentId: comment.id,
+          videoAssetId: clip.id,
+          timestampMs: note.timestampMs,
+          durationAtCreationMs: 30_000,
         });
       }
 

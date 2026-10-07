@@ -169,6 +169,7 @@ export async function getUserSessionVersion(userId: string): Promise<number | nu
 export async function getUserAuthState(userId: string): Promise<{
   sessionVersion: number;
   platformRole: "user" | "admin";
+  name: string | null;
 } | null> {
   const user = await findActiveUserById(userId);
   if (!user) {
@@ -178,5 +179,6 @@ export async function getUserAuthState(userId: string): Promise<{
   return {
     sessionVersion: user.sessionVersion,
     platformRole: user.platformRole,
+    name: user.name,
   };
 }

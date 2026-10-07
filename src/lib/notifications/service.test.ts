@@ -25,6 +25,7 @@ import {
 } from "@/lib/notifications/service";
 import { createProject, createWebsiteReview } from "@/lib/projects/service";
 import type { WorkspaceContext } from "@/lib/workspaces/context";
+import { seedWorkspacePlan } from "@/test/workspace-fixtures";
 
 const uniqueEmail = (label: string) =>
   `${label}.${Date.now()}.${Math.random().toString(16).slice(2)}@example.com`;
@@ -103,6 +104,8 @@ async function addMember(owner: WorkspaceContext, label: string): Promise<Worksp
 
 async function seedReview(label: string) {
   const context = await ownerContext(label);
+  // Agency has room for the review plus every other fixture, so plan notices stay out of the way.
+  await seedWorkspacePlan(context.workspaceId, "agency");
   const project = await createProject(context, `${label} Project`);
   if (!project.ok) throw new Error("project failed");
   const review = await createWebsiteReview(context, {

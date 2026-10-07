@@ -5,6 +5,7 @@ import {
   escapeHtmlAttribute,
   snippetContainsForbiddenSecrets,
 } from "@/lib/installations/snippet";
+import { PASSOFF_SDK_VERSION } from "../../../packages/website-sdk/version";
 
 const KEY = "pk_0123456789abcdef0123456789abcdef";
 
@@ -18,7 +19,7 @@ describe("install snippet", () => {
     expect(snippet).toContain('window.Passoff("configure"');
     expect(snippet).toContain(KEY);
     expect(snippet).toContain(
-      'src="https://app.example.com/sdk/v1/passoff.js?v=1.0.13"',
+      `src="https://app.example.com/sdk/v1/passoff.js?v=${PASSOFF_SDK_VERSION}"`,
     );
     expect(snippet).toContain(`data-passoff-key="${KEY}"`);
     expect(snippet).toMatch(/async/);

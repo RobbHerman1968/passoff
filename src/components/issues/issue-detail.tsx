@@ -3,7 +3,10 @@ import { ArrowLeft } from "lucide-react";
 import type { ReactNode } from "react";
 
 import { IssueAssigneeField } from "@/components/issues/issue-assignee-field";
+import { IssueDiscussion } from "@/components/issues/issue-discussion";
 import { IssueHistorySection } from "@/components/issues/issue-history";
+import { IssueBehavioralEvidence } from "@/components/issues/issue-behavioral-evidence";
+import { IssueVerificationChecks } from "@/components/issues/issue-verification-checks";
 import { IssueLiveStatusBadge } from "@/components/issues/issue-live-status";
 import { IssuePriorityField } from "@/components/issues/issue-priority-field";
 import { IssueScreenshot } from "@/components/issues/issue-screenshot";
@@ -11,14 +14,25 @@ import { IssueStatusAction } from "@/components/issues/issue-status-action";
 import { IssueTriageProvider } from "@/components/issues/issue-triage-context";
 import { IssueUpdatedTime } from "@/components/issues/issue-updated-time";
 import { PageHeader } from "@/components/page-header";
+import { IssueAttachmentsSection } from "@/components/attachments/issue-attachments-section";
+import { IssueLabelsSection } from "@/components/labels/issue-labels-section";
+import { IssueVideoSection } from "@/components/video/issue-video-section";
+import type { VideoNoteView } from "@/lib/video/annotations/types";
+import type { IssueVideoView } from "@/lib/video/states";
 import { Button } from "@/components/ui/button";
+import type { AttachableAssetView, AttachmentView } from "@/lib/attachments/types";
+import type { LabelView } from "@/lib/labels/types";
+import type { IssueCommentView } from "@/lib/comments/types";
 import type { IssueHistoryEvent } from "@/lib/issues/history";
 import type { IssueDetail as IssueDetailData } from "@/lib/issues/list";
+import type { VerificationLaunchContext } from "@/lib/verification/launch";
+import type { VerificationRunView } from "@/lib/verification/query";
 import {
   ISSUE_PRIORITY_LABELS,
   ISSUE_STATUS_LABELS,
 } from "@/lib/issues/statuses";
 import type { AssignableMember } from "@/lib/issues/triage-types";
+import { issueDetailPath } from "@/lib/issues/url";
 import { formatRelativeActivity } from "@/lib/projects/format";
 
 function screenshotStateLabel(
@@ -40,6 +54,19 @@ export function IssueDetailView({
   members = [],
   history = [],
   historyError = null,
+  comments = [],
+  commentsError = null,
+  behavioralSnapshots = [],
+  behavioralComparisons = [],
+  verificationLaunch = null,
+  verificationRuns = [],
+  labels = [],
+  workspaceLabels = [],
+  attachments = [],
+  attachableFiles = [],
+  videoView = null,
+  videoNotes = [],
+  canEditOrganization = false,
 }: {
   issue: IssueDetailData;
   projectId: string;
@@ -50,7 +77,31 @@ export function IssueDetailView({
   members?: AssignableMember[];
   history?: IssueHistoryEvent[];
   historyError?: string | null;
+  comments?: IssueCommentView[];
+  commentsError?: string | null;
+  behavioralSnapshots?: Array<{ id: string; payload: Record<string, unknown> }>;
+  behavioralComparisons?: Array<{
+    id: string;
+    summary: string;
+    baselineVersion: string;
+    comparisonVersion: string;
+    baselineSample: number;
+    comparisonSample: number;
+    outcome: string;
+  }>;
+  verificationLaunch?: VerificationLaunchContext | null;
+  verificationRuns?: VerificationRunView[];
+  labels?: LabelView[];
+  workspaceLabels?: LabelView[];
+  attachments?: AttachmentView[];
+  attachableFiles?: AttachableAssetView[];
+  /** Video evidence state for this issue. Null when it could not be loaded. */
+  videoView?: IssueVideoView | null;
+  videoNotes?: VideoNoteView[];
+  /** Members can add labels and attachments; read-only views cannot. */
+  canEditOrganization?: boolean;
 }) {
+  const issueDetailHref = issueDetailPath(projectId, reviewId, issue.number);
   const pageLocation =
     issue.pageRoute || issue.pageUrl
       ? (
@@ -126,6 +177,31 @@ export function IssueDetailView({
             annotation={issue.screenshotAnnotation}
           />
 
+          <IssueVideoSection
+            projectId={projectId}
+            reviewId={reviewId}
+            issueNumber={issue.number}
+            initialView={videoView}
+            initialNotes={videoNotes}
+          />
+
+          <IssueBehavioralEvidence
+            snapshots={behavioralSnapshots}
+            comparisons={behavioralComparisons}
+            issueId={issue.id}
+            canRequestComparison={
+              issue.status === "ready_for_verification" || issue.status === "verified"
+            }
+          />
+
+          <IssueVerificationChecks
+            projectId={projectId}
+            reviewId={reviewId}
+            issueNumber={issue.number}
+            launch={verificationLaunch}
+            runs={verificationRuns}
+          />
+
           <section
             aria-labelledby="issue-feedback-heading"
             className="rounded-xl border border-border bg-card p-4 text-card-foreground sm:p-5"
@@ -137,6 +213,40 @@ export function IssueDetailView({
               {issue.body}
             </p>
           </section>
+
+          {commentsError ? (
+            <section
+              aria-labelledby="issue-discussion-heading"
+              className="rounded-xl border border-border bg-card p-4 text-card-foreground sm:p-5"
+            >
+              <h2 id="issue-discussion-heading" className="type-section-title">
+                Discussion
+              </h2>
+              <p role="alert" className="mt-3 text-sm text-destructive">
+                {commentsError}
+              </p>
+              <Button asChild variant="outline" className="mt-3">
+                <Link href={issueDetailHref}>Reload discussion</Link>
+              </Button>
+            </section>
+          ) : (
+            <IssueDiscussion
+              projectId={projectId}
+              reviewId={reviewId}
+              issueNumber={issue.number}
+              initialComments={comments}
+              members={members}
+            />
+          )}
+
+          <IssueAttachmentsSection
+            projectId={projectId}
+            reviewId={reviewId}
+            issueNumber={issue.number}
+            initialAttachments={attachments}
+            attachable={attachableFiles}
+            canEdit={canEditOrganization}
+          />
 
           <IssueHistorySection />
         </div>
@@ -152,6 +262,11 @@ export function IssueDetailView({
             <div className="mt-3 grid gap-4">
               <IssueAssigneeField />
               <IssuePriorityField />
+              <IssueLabelsSection
+                initialLabels={labels}
+                workspaceLabels={workspaceLabels}
+                canEdit={canEditOrganization}
+              />
             </div>
             <dl className="mt-4 grid gap-3 text-sm">
               <DetailRow label="Reporter" value={issue.reporterDisplayName} />

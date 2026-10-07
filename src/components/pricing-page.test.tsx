@@ -1,9 +1,20 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
+
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { describe, expect, it } from "vitest";
 
 import { PricingPage } from "@/components/pricing-page";
+import { describeMembers, describeReviewWebsites, describeVideoAllowance } from "@/lib/billing/format";
+import {
+  AGENCY_TRIAL_DAYS,
+  ANNUAL_SAVINGS_PERCENT,
+  PLAN_ENTITLEMENTS,
+  formatUsd,
+  type PlanId,
+} from "@/lib/billing/plans";
 
 describe("PricingPage", () => {
   it("presents the recommended plans and keeps client reviewers unlimited", () => {
@@ -89,5 +100,63 @@ describe("PricingPage", () => {
   it("has no detectable accessibility violations", async () => {
     const { container } = render(<PricingPage />);
     expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("shows exactly what the plan catalog says, in both schedules", async () => {
+    const user = userEvent.setup();
+    render(<PricingPage />);
+    const cards = screen.getByRole("region", { name: "Start small. Move up when the client work does." });
+
+    for (const id of ["free", "studio", "agency"] as PlanId[]) {
+      const plan = PLAN_ENTITLEMENTS[id];
+      expect(within(cards).getByText(describeMembers(id))).toBeVisible();
+      expect(within(cards).getByText(describeReviewWebsites(id))).toBeVisible();
+      expect(within(cards).getByText(describeVideoAllowance(id))).toBeVisible();
+      if (plan.monthlyPriceUsd > 0) {
+        expect(within(cards).getByText(formatUsd(plan.annualMonthlyPriceUsd))).toBeVisible();
+        expect(within(cards).getByText(`billed ${formatUsd(plan.annualTotalUsd)} yearly`)).toBeVisible();
+      }
+    }
+
+    await user.click(screen.getByRole("button", { name: "Monthly" }));
+    for (const id of ["studio", "agency"] as PlanId[]) {
+      expect(within(cards).getByText(formatUsd(PLAN_ENTITLEMENTS[id].monthlyPriceUsd))).toBeVisible();
+    }
+  });
+
+  it("advertises the trial length and savings from the catalog, and the trial only on Agency", () => {
+    render(<PricingPage />);
+    expect(screen.getByText(`${AGENCY_TRIAL_DAYS} days on Agency, free`)).toBeVisible();
+    expect(
+      screen.getByText(new RegExp(`Annual pricing saves up to ${ANNUAL_SAVINGS_PERCENT}%`)),
+    ).toBeVisible();
+    expect(screen.getByRole("link", { name: /Try Agency free/ })).toBeVisible();
+    expect(screen.getByRole("link", { name: /Choose Studio/ })).toBeVisible();
+    expect(screen.queryByRole("link", { name: /Try Studio free/ })).not.toBeInTheDocument();
+  });
+
+  it("explains active review websites and what happens over a limit", () => {
+    render(<PricingPage />);
+    expect(screen.getByText(/not archived or closed/)).toBeInTheDocument();
+    expect(screen.getByText(/only new additions pause/)).toBeInTheDocument();
+    expect(screen.getByText(/Nothing is deleted/)).toBeInTheDocument();
+  });
+
+  it("keeps dollar amounts and plan limits out of component source", () => {
+    const root = path.resolve(__dirname, "../..");
+    const files = [
+      "src/components/pricing-page.tsx",
+      "src/components/billing/plan-picker.tsx",
+      "src/components/billing/plan-summary.tsx",
+      "src/components/billing/usage-section.tsx",
+      "src/components/billing/billing-notices.tsx",
+    ];
+    for (const file of files) {
+      const source = readFileSync(path.join(root, file), "utf8")
+        .split("\n")
+        .filter((line) => !line.trim().startsWith("//") && !line.trim().startsWith("*"))
+        .join("\n");
+      expect(source, file).not.toMatch(/\$\d/);
+    }
   });
 });

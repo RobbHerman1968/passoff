@@ -15,9 +15,10 @@ import {
 } from "@/lib/webhooks/types";
 import { resolveWebhookDestination } from "@/lib/webhooks/url";
 import type { WorkspaceContext } from "@/lib/workspaces/context";
+import { canManageWebhooks } from "@/lib/workspaces/permissions";
 
 function requireOwner(context: WorkspaceContext) {
-  return context.role === "owner";
+  return canManageWebhooks(context);
 }
 
 export async function listWebhookEndpoints(context: WorkspaceContext) {

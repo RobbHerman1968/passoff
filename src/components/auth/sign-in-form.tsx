@@ -21,10 +21,15 @@ export function SignInForm({
   callbackUrl,
   oauthError,
   oauthButtons,
+  notice,
+  signUpHref = "/sign-up",
 }: {
   callbackUrl: string;
   oauthError?: boolean;
   oauthButtons: React.ReactNode;
+  /** A plain-language confirmation shown above the form, such as after deleting an account. */
+  notice?: string;
+  signUpHref?: string;
 }) {
   const [state, formAction, pending] = useActionState(
     signInWithCredentialsAction,
@@ -45,6 +50,7 @@ export function SignInForm({
   return (
     <NetworkGate>
       <div className="grid gap-6">
+        {notice ? <FormAlert tone="success" title={notice} /> : null}
         {oauthError ? (
           <FormAlert
             title="We couldn’t finish signing you in"
@@ -120,7 +126,7 @@ export function SignInForm({
         <p className="text-sm text-muted-foreground">
           New to Passoff?{" "}
           <Link
-            href="/sign-up"
+            href={signUpHref}
             className="font-medium text-primary underline-offset-4 hover:underline"
           >
             Create an account

@@ -7,6 +7,8 @@ import {
   revokeShareLinkAction,
 } from "@/app/(app)/projects/actions";
 import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import {
   Dialog,
   DialogContent,
@@ -19,6 +21,7 @@ import {
 export type ShareLinkView = {
   id: string;
   canComment: boolean;
+  canApprove: boolean;
   expiresAt: string | null;
   revokedAt: string | null;
   createdAt: string;
@@ -47,6 +50,15 @@ async function copyText(value: string): Promise<boolean> {
   }
 }
 
+export function describeLinkAccess(link: {
+  canComment: boolean;
+  canApprove?: boolean;
+}): string {
+  const parts = [link.canComment ? "Can comment" : "View only"];
+  if (link.canApprove) parts.push("can approve");
+  return parts.join(", ");
+}
+
 export function ShareReviewPanel({
   projectId,
   reviewId,
@@ -59,6 +71,10 @@ export function ShareReviewPanel({
   disabled?: boolean;
 }) {
   const liveId = useId();
+  const commentId = useId();
+  const approveId = useId();
+  const [allowComments, setAllowComments] = useState(true);
+  const [allowApprove, setAllowApprove] = useState(false);
   const [open, setOpen] = useState(false);
   const [pending, startTransition] = useTransition();
   const [message, setMessage] = useState<string | null>(null);
@@ -107,6 +123,31 @@ export function ShareReviewPanel({
             </div>
           ) : null}
 
+          <fieldset className="grid gap-1" disabled={disabled || pending}>
+            <legend className="mb-1 text-sm font-semibold">What can this guest do?</legend>
+            <div className="flex min-h-11 items-center justify-between gap-3">
+              <Label htmlFor={commentId}>Leave comments</Label>
+              <Switch
+                id={commentId}
+                checked={allowComments}
+                onCheckedChange={setAllowComments}
+              />
+            </div>
+            <div className="flex min-h-11 items-center justify-between gap-3">
+              <Label htmlFor={approveId}>Approve or request changes</Label>
+              <Switch
+                id={approveId}
+                checked={allowApprove}
+                onCheckedChange={setAllowApprove}
+                aria-describedby={`${approveId}-hint`}
+              />
+            </div>
+            <p id={`${approveId}-hint`} className="text-sm text-muted-foreground">
+              Guests can only decide after you ask for approval, and a decision covers one
+              version of the site.
+            </p>
+          </fieldset>
+
           <Button
             type="button"
             disabled={disabled || pending}
@@ -116,6 +157,8 @@ export function ShareReviewPanel({
                 const result = await createShareLinkAction({
                   projectId,
                   reviewId,
+                  canApprove: allowApprove,
+                  canComment: allowComments,
                 });
                 if (result.status !== "success" || !result.url) {
                   setMessage(result.message ?? "Couldn’t create a share link.");
@@ -139,7 +182,7 @@ export function ShareReviewPanel({
                     className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-card px-3 py-2 text-sm ring-1 ring-foreground/10"
                   >
                     <span>
-                      {link.canComment ? "Can comment" : "View only"} · created{" "}
+                      {describeLinkAccess(link)} · created{" "}
                       {new Date(link.createdAt).toLocaleDateString()}
                     </span>
                     <Button

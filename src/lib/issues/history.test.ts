@@ -59,4 +59,56 @@ describe("formatIssueHistorySummary", () => {
       }),
     ).toBe("Rob reassigned this issue from Maya to Sam.");
   });
+
+  it("mentions attached production behavior", () => {
+    expect(
+      formatIssueHistorySummary({
+        type: "behavioral_finding.attached",
+        actorDisplayName: "Rob",
+        data: {},
+      }),
+    ).toBe("Rob attached production behavior evidence to this issue.");
+  });
+
+  it("describes public replies and private notes plainly", () => {
+    expect(
+      formatIssueHistorySummary({
+        type: "issue.comment_added",
+        actorDisplayName: "Rob",
+        data: {},
+      }),
+    ).toBe("Rob added a public reply.");
+
+    expect(
+      formatIssueHistorySummary({
+        type: "issue.private_note_added",
+        actorDisplayName: "Rob",
+        data: {},
+      }),
+    ).toBe("Rob added a private note.");
+  });
+
+  it("describes label changes in plain language", () => {
+    expect(
+      formatIssueHistorySummary({
+        type: "issue.label_added",
+        actorDisplayName: "Rob",
+        data: { labelName: "Copy" },
+      }),
+    ).toBe("Rob added the label “Copy”.");
+    expect(
+      formatIssueHistorySummary({
+        type: "issue.label_removed",
+        actorDisplayName: "Rob",
+        data: { labelName: "Copy" },
+      }),
+    ).toBe("Rob removed the label “Copy”.");
+    expect(
+      formatIssueHistorySummary({
+        type: "issue.label_added",
+        actorDisplayName: null,
+        data: {},
+      }),
+    ).toBe("Someone added a label.");
+  });
 });

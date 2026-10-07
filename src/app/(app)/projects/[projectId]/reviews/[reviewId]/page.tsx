@@ -3,12 +3,15 @@ import { redirect } from "next/navigation";
 import { Archive } from "lucide-react";
 import type { ReactNode } from "react";
 
+import { ApprovalPanel } from "@/components/approvals/approval-panel";
+import { ApprovalStatusPill } from "@/components/approvals/approval-status-pill";
 import { ErrorState } from "@/components/error-state";
 import { IssueHeatmapSummary } from "@/components/reviews/issue-heatmap-summary";
 import { IssueTriage } from "@/components/issues/issue-triage";
 import { PageHeader } from "@/components/page-header";
 import { PermissionDeniedState } from "@/components/permission-denied-state";
 import { ReviewActionsMenu } from "@/components/reviews/review-actions-menu";
+import { ReviewDeadlineField } from "@/components/reviews/review-deadline-field";
 import { ShareReviewPanel } from "@/components/reviews/share-review-panel";
 import { WebsiteSetupPanel } from "@/components/reviews/website-setup-panel";
 import { SetupChecklist, type SetupStep } from "@/components/setup-checklist";
@@ -18,6 +21,10 @@ import {
   ProjectStatusBadge,
   ReviewStatusBadge,
 } from "@/components/workflow-status-badge";
+import {
+  getReviewApprovalStatus,
+  listApprovalReviewerOptions,
+} from "@/lib/approvals/requests";
 import { getPassoffEmbedBaseUrl } from "@/lib/installations/embed-config";
 import { buildInstallSnippet } from "@/lib/installations/snippet";
 import {
@@ -33,7 +40,9 @@ import {
   formatRelativeActivity,
   formatVersionLabel,
 } from "@/lib/projects/format";
+import { canMutateProjects } from "@/lib/projects/permissions";
 import { getReviewForWorkspace } from "@/lib/projects/service";
+import { getReviewFeedbackDeadline } from "@/lib/reviews/deadline";
 
 type RouteParams = Promise<{ projectId: string; reviewId: string }>;
 type SearchParams = Promise<Record<string, string | string[] | undefined>>;
@@ -53,6 +62,24 @@ export async function generateMetadata({
     title: review ? `${review.name} · ${review.projectName}` : "Review unavailable",
     description: "Review setup, issues, and current status.",
   };
+}
+
+/** Active guest links that may approve, described in plain words for the request dialog. */
+function listApprovalLinkOptions(
+  links: Awaited<ReturnType<typeof listShareLinksForReview>>,
+) {
+  const now = Date.now();
+  return links
+    .filter(
+      (link) =>
+        link.canApprove &&
+        !link.revokedAt &&
+        (!link.expiresAt || link.expiresAt.getTime() > now),
+    )
+    .map((link) => ({
+      id: link.id,
+      label: `Approval link · created ${link.createdAt.toLocaleDateString("en-US")}`,
+    }));
 }
 
 const INSTALL_STEP_COPY: Record<InstallationStatus, string> = {
@@ -108,6 +135,11 @@ export default async function ReviewDetailPage({
   const archived = Boolean(review.archivedAt);
   const projectArchived = review.projectStatus === "archived";
   const readOnly = archived || projectArchived;
+  const feedbackDeadline = await getReviewFeedbackDeadline(
+    auth.context,
+    review.projectId,
+    review.id,
+  ).catch(() => null);
 
   const embed = getPassoffEmbedBaseUrl();
   let installSnippet: string | null = null;
@@ -133,6 +165,24 @@ export default async function ReviewDetailPage({
   const installed = installStatus === "installed";
   const shareLinks = await listShareLinksForReview(auth.context, review.id);
   const hasActiveShareLink = shareLinks.some((link) => !link.revokedAt);
+  const approvalStatus = await getReviewApprovalStatus(
+    auth.context.workspaceId,
+    review.id,
+  ).catch(() => null);
+  const approvalReviewers = await listApprovalReviewerOptions(auth.context).catch(
+    () => [],
+  );
+  const approvalLinks = listApprovalLinkOptions(shareLinks);
+  const approvalPanel = approvalStatus ? (
+    <ApprovalPanel
+      projectId={review.projectId}
+      reviewId={review.id}
+      status={approvalStatus}
+      reviewers={approvalReviewers.filter((item) => item.userId !== auth.context.userId)}
+      approvalLinks={approvalLinks}
+      canManage={canMutateProjects(auth.context) && !readOnly}
+    />
+  ) : null;
 
   let issueListError = false;
   let issueList = null as Awaited<ReturnType<typeof listIssuesForReview>>;
@@ -192,6 +242,16 @@ export default async function ReviewDetailPage({
           <span className="flex flex-wrap items-center gap-2">
             <ReviewStatusBadge status={review.status} archived={archived} />
             {projectArchived ? <ProjectStatusBadge status="archived" /> : null}
+            {approvalStatus && approvalStatus.visibleState !== "not_requested" ? (
+              <ApprovalStatusPill
+                state={approvalStatus.visibleState}
+                currentVersionLabel={approvalStatus.currentVersionLabel}
+                approvedVersionLabel={
+                  approvalStatus.history.find((row) => row.state === "approved")
+                    ?.versionLabel
+                }
+              />
+            ) : null}
           </span>
         }
         description={
@@ -208,6 +268,7 @@ export default async function ReviewDetailPage({
               links={shareLinks.map((link) => ({
                 id: link.id,
                 canComment: link.canComment,
+                canApprove: link.canApprove,
                 expiresAt: link.expiresAt?.toISOString() ?? null,
                 revokedAt: link.revokedAt?.toISOString() ?? null,
                 createdAt: link.createdAt.toISOString(),
@@ -259,6 +320,8 @@ export default async function ReviewDetailPage({
                 installSnippet={installSnippet}
                 embedConfigured={embed.ok}
                 readOnly={readOnly}
+                feedbackDeadline={feedbackDeadline?.toISOString() ?? null}
+                approvalPanel={approvalPanel}
               />
             </aside>
           </div>
@@ -272,6 +335,8 @@ export default async function ReviewDetailPage({
               installSnippet={installSnippet}
               embedConfigured={embed.ok}
               readOnly={readOnly}
+              feedbackDeadline={feedbackDeadline?.toISOString() ?? null}
+              approvalPanel={approvalPanel}
             />
           </aside>
         )}
@@ -320,11 +385,15 @@ function ReviewDetailsAside({
   installSnippet,
   embedConfigured,
   readOnly,
+  feedbackDeadline,
+  approvalPanel,
 }: {
   review: NonNullable<Awaited<ReturnType<typeof getReviewForWorkspace>>>;
   installSnippet: string | null;
   embedConfigured: boolean;
   readOnly: boolean;
+  feedbackDeadline: string | null;
+  approvalPanel: ReactNode;
 }) {
   return (
     <>
@@ -340,6 +409,7 @@ function ReviewDetailsAside({
           lastSeenAt={review.websiteLastSeenAt?.toISOString() ?? null}
           installSnippet={installSnippet}
           embedConfigured={embedConfigured}
+          verificationHookAllowlist={review.verificationHookAllowlist}
           disabled={readOnly}
         />
       ) : (
@@ -384,7 +454,17 @@ function ReviewDetailsAside({
             }
           />
         </dl>
+        <div className="mt-4 border-t border-border pt-4">
+          <ReviewDeadlineField
+            projectId={review.projectId}
+            reviewId={review.id}
+            initialDeadline={feedbackDeadline}
+            canEdit={!readOnly}
+          />
+        </div>
       </section>
+
+      {approvalPanel}
     </>
   );
 }

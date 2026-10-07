@@ -15,6 +15,10 @@ const toastSuccess = vi.fn();
 const toastError = vi.fn();
 const toastMessage = vi.fn();
 
+vi.mock("@/app/(app)/projects/verification-actions", () => ({
+  saveVerificationHooksAction: vi.fn(async () => ({ ok: true, names: [] })),
+}));
+
 vi.mock("@/app/(app)/projects/actions", () => ({
   checkWebsiteInstallationAction: (...args: unknown[]) =>
     checkWebsiteInstallationAction(...args),

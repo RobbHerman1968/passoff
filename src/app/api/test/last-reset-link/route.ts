@@ -3,13 +3,14 @@ import { NextResponse } from "next/server";
 import { normalizeEmail } from "@/lib/auth/email";
 import { setEmailTransportForTests } from "@/lib/email";
 import { getTestEmailTransport } from "@/lib/email/test-transport";
+import { testRoutesEnabled } from "@/lib/security/production-guards";
 
 /**
  * Test-only helper for retrieving password-reset paths from the in-memory
  * email transport. Requires EMAIL_TRANSPORT=test.
  */
 export async function GET(request: Request) {
-  if (process.env.EMAIL_TRANSPORT !== "test") {
+  if (!testRoutesEnabled()) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 

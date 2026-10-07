@@ -145,7 +145,7 @@ async function signBody(body: string, secret = WEBHOOK_SECRET, timestamp = Math.
   return { header: `t=${timestamp},v1=${signature}`, timestamp };
 }
 
-describe("Mux webhook verification and reconciliation", () => {
+describe("Mux webhook verification and reconciliation", { timeout: 90_000 }, () => {
   afterEach(() => {
     vi.unstubAllEnvs();
     vi.resetModules();

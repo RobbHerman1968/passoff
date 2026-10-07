@@ -108,6 +108,8 @@ export const { auth, handlers, signIn, signOut } = NextAuth({
       // Refresh display-only platformRole on every JWT check so role changes
       // are not stuck behind an indefinitely cached session claim.
       token.platformRole = authState.platformRole;
+      // A name changed in account settings shows up on the next request.
+      if (authState.name) token.name = authState.name;
       return token;
     },
     async session({ session, token }) {

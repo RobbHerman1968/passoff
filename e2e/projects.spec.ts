@@ -25,6 +25,18 @@ async function signUpAndOnboard(page: Page, options: {
   await expect(page).toHaveURL(/\/dashboard/);
 }
 
+// The menu can close again if the page finishes loading just after it opens, so open it until the
+// item is really there, then choose it.
+async function chooseFromActions(page: Page, buttonName: string, itemName: string) {
+  const item = page.getByRole("menuitem", { name: itemName });
+  await expect(async () => {
+    if (!(await item.isVisible())) {
+      await page.getByRole("button", { name: buttonName }).click();
+    }
+    await item.click({ timeout: 3_000 });
+  }).toPass({ timeout: 30_000 });
+}
+
 test.describe("project and review management", () => {
   test("owner can manage projects and reviews end to end", async ({
     page,
@@ -70,7 +82,6 @@ test.describe("project and review management", () => {
     await page.getByRole("button", { name: "Add review" }).first().click();
     const addReview = page.getByRole("dialog", { name: "Add review" });
     await addReview.getByLabel("Review name").fill(websiteReview);
-    await addReview.getByRole("radio", { name: /Website/i }).check();
     await addReview.getByLabel("Website address").fill("https://example.com/start");
     await addReview.getByRole("button", { name: "Add review" }).click();
 
@@ -96,26 +107,22 @@ test.describe("project and review management", () => {
     await breadcrumb(page).getByRole("link", { name: projectName }).click();
 
     // Rename project.
-    await page
-      .getByRole("button", { name: `Actions for ${projectName}` })
-      .click();
-    await page.getByRole("menuitem", { name: "Rename project" }).click();
+    await chooseFromActions(page, `Actions for ${projectName}`, "Rename project");
     const renameProject = page.getByRole("dialog", { name: "Rename project" });
     await renameProject.getByLabel("Project name").fill(renamedProject);
     await renameProject.getByRole("button", { name: "Save project name" }).click();
     await expect(
       page.getByRole("heading", { name: renamedProject }),
     ).toBeVisible();
+    // Let the dialog finish closing (it hands focus back) before opening the next menu.
+    await expect(renameProject).toBeHidden();
 
     // Rename website review.
     await openFromList(page, websiteReview);
     await expect(
       page.getByRole("heading", { name: websiteReview }),
     ).toBeVisible();
-    await page
-      .getByRole("button", { name: `Actions for ${websiteReview}` })
-      .click();
-    await page.getByRole("menuitem", { name: "Rename review" }).click();
+    await chooseFromActions(page, `Actions for ${websiteReview}`, "Rename review");
     const renameReviewDialog = page.getByRole("dialog", {
       name: "Rename review",
     });
@@ -134,10 +141,7 @@ test.describe("project and review management", () => {
     ).toBeVisible();
 
     // Archive a review.
-    await page
-      .getByRole("button", { name: `Actions for ${renamedReview}` })
-      .click();
-    await page.getByRole("menuitem", { name: "Archive review" }).click();
+    await chooseFromActions(page, `Actions for ${renamedReview}`, "Archive review");
     await page
       .getByRole("dialog")
       .getByRole("button", { name: "Archive review" })
@@ -145,10 +149,7 @@ test.describe("project and review management", () => {
     await expect(page.getByText("Review archived.")).toBeVisible();
 
     // Archive project.
-    await page
-      .getByRole("button", { name: `Actions for ${renamedProject}` })
-      .click();
-    await page.getByRole("menuitem", { name: "Archive project" }).click();
+    await chooseFromActions(page, `Actions for ${renamedProject}`, "Archive project");
     await page
       .getByRole("dialog")
       .getByRole("button", { name: "Archive project" })
@@ -168,10 +169,7 @@ test.describe("project and review management", () => {
 
     // Restore project.
     await openFromList(page, renamedProject);
-    await page
-      .getByRole("button", { name: `Actions for ${renamedProject}` })
-      .click();
-    await page.getByRole("menuitem", { name: "Restore project" }).click();
+    await chooseFromActions(page, `Actions for ${renamedProject}`, "Restore project");
     await page
       .getByRole("dialog")
       .getByRole("button", { name: "Restore project" })
@@ -210,10 +208,16 @@ test.describe("project and review management", () => {
     await page.getByLabel("Email").fill(ownerEmail);
     await page.locator("#password").fill(password);
     await page.getByRole("button", { name: "Sign in" }).click();
+    await expect(page).toHaveURL(/\/dashboard/);
     await openFromList(page, renamedProject);
-    await page
-      .getByRole("button", { name: `Actions for ${renamedProject}` })
-      .click();
+    // The menu only opens once the page has hydrated, so retry the click.
+    await expect(async () => {
+      const item = page.getByRole("menuitem", { name: "Delete project" });
+      if (!(await item.isVisible())) {
+        await page.getByRole("button", { name: `Actions for ${renamedProject}` }).click();
+      }
+      await expect(item).toBeVisible({ timeout: 1_000 });
+    }).toPass({ timeout: 15_000 });
     await page.getByRole("menuitem", { name: "Delete project" }).click();
     const deleteDialog = page.getByRole("dialog", {
       name: `Delete ${renamedProject}?`,

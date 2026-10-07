@@ -6,6 +6,9 @@ const ALLOWED = new Map([
   ["passoff-sdk.js", "text/javascript; charset=utf-8"],
   ["passoff-sdk-review.js", "text/javascript; charset=utf-8"],
   ["passoff-sdk-screenshot.js", "text/javascript; charset=utf-8"],
+  ["passoff-sdk-heatmap.js", "text/javascript; charset=utf-8"],
+  ["passoff-sdk-analytics.js", "text/javascript; charset=utf-8"],
+  ["passoff-sdk-verification.js", "text/javascript; charset=utf-8"],
 ]);
 
 export async function GET(

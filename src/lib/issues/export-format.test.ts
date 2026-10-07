@@ -17,6 +17,7 @@ function row(overrides: Partial<IssueExportRow> = {}): IssueExportRow {
     status: "open",
     closureReason: null,
     priority: "high",
+    labels: [],
     assigneeDisplayName: "Maya",
     reporterDisplayName: "Jamie",
     pageTitle: "Pricing",
@@ -32,6 +33,9 @@ function row(overrides: Partial<IssueExportRow> = {}): IssueExportRow {
     ],
     latestVerificationOutcome: null,
     latestVerificationAt: null,
+    latestBrowserCheckSummary: "",
+    behavioralEvidenceSummary: "",
+    videoEvidenceSummary: "",
     issueHref: "https://app.example.com/projects/p/reviews/r/issues/24",
     ...overrides,
   };
@@ -59,6 +63,26 @@ describe("issue export format", () => {
     expect(csv).not.toContain("storage");
   });
 
+  it("includes label names in csv and markdown, protecting spreadsheet formulas", () => {
+    const csv = toCsv([row({ labels: ["Copy", "Layout"] })]);
+    expect(csv).toContain("Labels");
+    expect(csv).toContain("Copy; Layout");
+    expect(toCsv([row({ labels: ["=SUM(A1)"] })])).toContain("'=SUM(A1)");
+
+    const meta = {
+      reviewName: "Homepage review",
+      environmentName: "Production",
+      versionLabel: "October 4",
+      exportedAt: new Date("2026-10-04T14:00:00.000Z"),
+      filters: { q: "", show: "active" as const, p: 1 },
+      includeReplies: false,
+    };
+    expect(toMarkdown(meta, [row({ labels: ["Copy", "Layout"] })])).toContain(
+      "- Labels: Copy, Layout",
+    );
+    expect(toMarkdown(meta, [row()])).not.toContain("- Labels:");
+  });
+
   it("builds markdown with public replies only when requested", () => {
     const meta = {
       reviewName: "Homepage review",
@@ -68,13 +92,57 @@ describe("issue export format", () => {
       filters: { q: "", show: "active" as const, p: 1 },
       includeReplies: true,
     };
-    const markdown = toMarkdown(meta, [row()]);
+    const markdown = toMarkdown(meta, [
+      row({ latestBrowserCheckSummary: "Browser check failed on /pricing at 1440 × 900." }),
+    ]);
     expect(markdown).toContain("# Homepage review");
     expect(markdown).toContain("## Issue #24");
     expect(markdown).toContain("Working on it.");
+    expect(markdown).toContain("Latest browser check: Browser check failed on /pricing at 1440 × 900.");
+    expect(markdown).not.toContain("cssSelector");
     expect(toMarkdown({ ...meta, includeReplies: false }, [row()])).not.toContain(
       "Working on it.",
     );
+  });
+
+  it("adds the review approval status to csv rows and the markdown header", () => {
+    const csv = toCsv([row({ approvalStatus: "Approved for October 4" })]);
+    expect(csv).toContain("Review approval");
+    expect(csv).toContain("Approved for October 4");
+
+    const meta = {
+      reviewName: "Homepage review",
+      environmentName: "Production",
+      versionLabel: "October 5",
+      exportedAt: new Date("2026-10-05T14:00:00.000Z"),
+      filters: { q: "", show: "active" as const, p: 1 },
+      includeReplies: false,
+      approval: {
+        statusLabel: "Approved for October 4",
+        decidedBy: "Jamie Client",
+        decidedAt: new Date("2026-10-04T15:00:00.000Z"),
+        note: "Ship it",
+        historical: true,
+      },
+    };
+    const markdown = toMarkdown(meta, [row()]);
+    expect(markdown).toContain("- Approval: Approved for October 4");
+    expect(markdown).toContain("- Decided by: Jamie Client (2026-10-04T15:00:00.000Z)");
+    expect(markdown).toContain("- Approval note: Ship it");
+    expect(markdown).toContain("covers an earlier version, not October 5");
+  });
+
+  it("keeps exports working when no approval information exists", () => {
+    const meta = {
+      reviewName: "Homepage review",
+      environmentName: "Production",
+      versionLabel: "October 4",
+      exportedAt: new Date("2026-10-04T14:00:00.000Z"),
+      filters: { q: "", show: "active" as const, p: 1 },
+      includeReplies: false,
+    };
+    expect(toMarkdown(meta, [row()])).not.toContain("- Approval:");
+    expect(toMarkdown({ ...meta, approval: null }, [row()])).not.toContain("- Approval:");
   });
 
   it("creates a safe filename from the review name and date", () => {
